@@ -21,11 +21,53 @@ local MAX_URL_BYTES = 256 * 1024
 local MAX_HTML_BYTES = 12 * 1024 * 1024
 local DEFAULT_TIMEOUT = 5 * 60
 local HTTP_TIMEOUT = 3
+local BROWSER_WINDOW_NAME =
+    "L:A_N:application_AKB:true_ASR:true_ID:com.lab126.browser_A:browser_WS:true_WT:true_PC:T"
+
+-- A Kindle's Awesome window manager only puts clients whose WM_NAME follows
+-- Amazon's L:... convention into the foreground.  The Chromium content shell
+-- does not set that name, so an otherwise healthy browser is left underneath
+-- KOReader/KPP.  Keep this bridge optional so the non-Kindle test environment
+-- can still load the module.
+local x11
+local x11_ffi
+do
+    local ffi_ok, ffi = pcall(require, "ffi")
+    if ffi_ok then
+        pcall(ffi.cdef, [[
+            typedef unsigned long legado_XID;
+            typedef legado_XID legado_Window;
+            typedef struct _XDisplay legado_Display;
+            typedef unsigned long legado_Atom;
+            legado_Display *XOpenDisplay(const char *display_name);
+            int XCloseDisplay(legado_Display *display);
+            int XStoreName(legado_Display *display, legado_Window window,
+                const char *window_name);
+            legado_Atom XInternAtom(legado_Display *display, const char *atom_name,
+                int only_if_exists);
+            int XChangeProperty(legado_Display *display, legado_Window window,
+                legado_Atom property, legado_Atom type, int format, int mode,
+                const unsigned char *data, int nelements);
+            int XMapRaised(legado_Display *display, legado_Window window);
+            int XRaiseWindow(legado_Display *display, legado_Window window);
+            int XSync(legado_Display *display, int discard);
+        ]])
+        local library_ok, library = pcall(ffi.load, "X11")
+        if library_ok then
+            x11 = library
+            x11_ffi = ffi
+        end
+    end
+end
 
 local base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 local function trim(value)
     return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function shell_quote(value)
+    return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
 end
 
 local function now()
@@ -35,10 +77,6 @@ local function now()
     return os.time()
 end
 
-local function shell_quote(value)
-    return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
-end
-
 local function browser_process_alive(pid)
     pid = tonumber(pid)
     if not pid then return false end
@@ -46,6 +84,55 @@ local function browser_process_alive(pid)
     if not status_file then return false end
     status_file:close()
     return true
+end
+
+local function find_browser_window()
+    local handle = io.popen(
+        "DISPLAY=:0 /usr/bin/xwininfo -root -tree 2>/dev/null", "r"
+    )
+    if not handle then return nil end
+    local window
+    for line in handle:lines() do
+        if line:find("chromium%-kindle_browser", 1, false) then
+            local value = line:match("^%s+(0x[%da-fA-F]+)")
+            if value then
+                window = tonumber(value:sub(3), 16)
+                break
+            end
+        end
+    end
+    handle:close()
+    return window
+end
+
+local function promote_browser_window(deadline)
+    if not x11 or not x11_ffi then return false end
+    while now() < deadline do
+        local window = find_browser_window()
+        if window then
+            local display = x11.XOpenDisplay(":0")
+            if display == nil then return false end
+            local name = BROWSER_WINDOW_NAME
+            local utf8 = x11.XInternAtom(display, "UTF8_STRING", 0)
+            local net_name = x11.XInternAtom(display, "_NET_WM_NAME", 0)
+            local buffer = x11_ffi.new("unsigned char[?]", #name)
+            x11_ffi.copy(buffer, name, #name)
+            -- Set both legacy WM_NAME and EWMH _NET_WM_NAME: Kindle builds
+            -- differ in which one Awesome exposes as client.name.
+            x11.XStoreName(display, window, name)
+            if utf8 ~= 0 and net_name ~= 0 then
+                x11.XChangeProperty(display, window, net_name, utf8, 8, 0,
+                    buffer, #name)
+            end
+            x11.XMapRaised(display, window)
+            x11.XRaiseWindow(display, window)
+            x11.XSync(display, 0)
+            x11.XCloseDisplay(display)
+            return true
+        end
+        socket.sleep(0.1)
+    end
+    return false
 end
 
 local function awesome_was_stopped()
@@ -627,6 +714,11 @@ function Browser.await(url, options)
         return result, err
     end
 
+    -- Promote the content shell before attaching DevTools.  Without a valid
+    -- Kindle window name, Awesome can leave the browser mapped but visually
+    -- underneath the current KOReader/KPP application.
+    promote_browser_window(now() + 5)
+
     local page, page_err = wait_for_page(port, now() + 20)
     if not page then return finish(nil, page_err) end
     client, page_err = connect_devtools(page, port)
@@ -666,6 +758,7 @@ function Browser.await(url, options)
     end
     local _, navigation_err = client:call("Page.navigate", { url = navigation_url })
     if navigation_err then return finish(nil, navigation_err) end
+    promote_browser_window(now() + 2)
     if type(options.html) == "string" and options.html ~= "" then
         if #options.html > MAX_HTML_BYTES then
             return finish(nil, "browser HTML is too large")
@@ -693,6 +786,7 @@ function Browser.await(url, options)
         if current_url ~= last_url then
             last_url = current_url
             injected = false
+            promote_browser_window(now() + 1)
         end
         if not injected then
             injected = add_done_button(client) == true
