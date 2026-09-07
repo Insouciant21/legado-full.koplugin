@@ -21,6 +21,7 @@ local Backup = require("legado/backup")
 local Content = require("legado/content")
 local EmojiFont = require("legado/font")
 local SourceCatalog = require("legado/source")
+local BrowserInput = require("legado/browser_input")
 
 local Legado = WidgetContainer:extend{
     name = "legado",
@@ -299,7 +300,12 @@ function Legado:runWorker(message, task, on_success, options)
         trap_widget = TrapWidget:new{
             text = message,
         }
-        trap_widget._dismissAndResend = function()
+        trap_widget._dismissAndResend = function(_, event_type, event)
+            -- The Kindle browser is a separate X client.  KOReader's input
+            -- trap still receives the raw touch while the browser is raised,
+            -- so pass the completed gesture to the browser worker instead of
+            -- dismissing the worker as a normal background task would do.
+            BrowserInput.send(event_type, event)
             return true
         end
         UIManager:show(trap_widget)

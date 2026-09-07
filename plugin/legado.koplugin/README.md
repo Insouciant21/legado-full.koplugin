@@ -13,6 +13,7 @@ koreader/
         │   └── Symbola-LICENSE.txt
         ├── legado/
         │   ├── backup.lua
+        │   ├── browser_input.lua
         │   ├── font.lua
         │   ├── javascript.lua
         │   ├── network.lua
