@@ -20,6 +20,7 @@ local BROWSER_LIBRARY_PATH = "/usr/bin/chromium/lib:/usr/bin/chromium/usr/lib:/u
 local MAX_URL_BYTES = 256 * 1024
 local MAX_HTML_BYTES = 12 * 1024 * 1024
 local DEFAULT_TIMEOUT = 5 * 60
+local HTTP_TIMEOUT = 3
 
 local base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
@@ -36,6 +37,40 @@ end
 
 local function shell_quote(value)
     return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
+end
+
+local function browser_process_alive(pid)
+    pid = tonumber(pid)
+    if not pid then return false end
+    local status_file = io.open("/proc/" .. tostring(pid) .. "/stat", "r")
+    if not status_file then return false end
+    status_file:close()
+    return true
+end
+
+local function awesome_was_stopped()
+    local handle = io.popen("pidof awesome 2>/dev/null", "r")
+    if not handle then return false end
+    local pids = handle:read("*a") or ""
+    handle:close()
+    for pid in pids:gmatch("%d+") do
+        local status_file = io.open("/proc/" .. pid .. "/status", "r")
+        if status_file then
+            local status = status_file:read("*a") or ""
+            status_file:close()
+            local state = status:match("\nState:%s+([A-Z])")
+            if state == "T" then return true end
+        end
+    end
+    return false
+end
+
+local function continue_awesome()
+    os.execute("killall -CONT awesome >/dev/null 2>&1")
+end
+
+local function stop_awesome()
+    os.execute("killall -STOP awesome >/dev/null 2>&1")
 end
 
 local function random_bytes(count)
@@ -270,11 +305,14 @@ end
 
 local function browser_http_get(port, path)
     local chunks = {}
+    local previous_timeout = http.TIMEOUT
+    http.TIMEOUT = HTTP_TIMEOUT
     local request_ok, code, _, request_err = http.request{
         url = "http://127.0.0.1:" .. tostring(port) .. tostring(path),
         method = "GET",
         sink = ltn12.sink.table(chunks),
     }
+    http.TIMEOUT = previous_timeout
     if not request_ok then
         return nil, tostring(request_err or code or "browser DevTools request failed")
     end
@@ -551,18 +589,41 @@ function Browser.await(url, options)
     local token = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
     local user_dir = "/var/tmp/legado-browser-" .. token
     local log_path = user_dir .. ".log"
+    -- KOReader's Kindle launcher pauses Awesome while it owns the framebuffer.
+    -- Chromium's content shell is an ordinary X client, so it remains unmapped
+    -- until the window manager is allowed to process its application window.
+    -- Temporarily resume it for the browser session and put it back exactly as
+    -- we found it when the session ends.
+    local restore_awesome = awesome_was_stopped()
+    if restore_awesome then
+        continue_awesome()
+        -- Give Awesome one scheduling turn before Chromium creates its X
+        -- client; this avoids a race on KPW4 after a source action starts.
+        socket.sleep(0.25)
+    end
     -- Start on a blank document so the source's existing cookies are installed
     -- before the first request to its page. This matters for login/settings
     -- pages that redirect based on an existing session.
     local pid, launch_err = launch("about:blank", port, user_dir, log_path)
-    if not pid then return nil, launch_err end
+    if not pid then
+        if restore_awesome then stop_awesome() end
+        return nil, launch_err
+    end
 
     local client
+    local awesome_restored = false
+    local function restore_window_manager()
+        if restore_awesome and not awesome_restored then
+            stop_awesome()
+            awesome_restored = true
+        end
+    end
     local function finish(result, err)
         if client then client:close() end
         kill_process(pid)
         remove_profile(user_dir)
         os.remove(log_path)
+        restore_window_manager()
         return result, err
     end
 
@@ -625,6 +686,9 @@ function Browser.await(url, options)
     local last_url = ""
     local injected = false
     while now() < deadline do
+        if not browser_process_alive(pid) then
+            return finish(nil, "Kindle browser exited before the action completed")
+        end
         local current_url = tostring(client:evaluate("String(location.href || '')") or "")
         if current_url ~= last_url then
             last_url = current_url
