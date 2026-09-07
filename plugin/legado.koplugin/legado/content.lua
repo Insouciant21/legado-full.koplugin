@@ -2,7 +2,7 @@
 --
 -- Android Legado normally hands the reader an HTML fragment.  KOReader's
 -- plain-text document provider does not interpret that fragment, so writing it
--- directly to a .txt file makes tags and (in aggregate sources) very large
+-- directly to a .txt file makes tags and sometimes very large
 -- inline SVG attributes visible to the reader.  Keep this conversion small and
 -- dependency-free: it runs after source rules/replacements have completed.
 
@@ -123,8 +123,8 @@ function Content.to_text(value)
     text = text:gsub("<!%-%-.-%-%->", "")
     text = text:gsub("<!%[CDATA%[.-%]%]>", "")
 
-    -- Block boundaries must survive tag removal.  The aggregate source used
-    -- on KPW4 is mostly <p>...</p>, with occasional <br> and <div>.
+    -- Block boundaries must survive tag removal.  HTML-backed text sources
+    -- commonly use <p>...</p>, with occasional <br> and <div>.
     for _, tag in ipairs({ "br", "hr", "p", "div", "section", "article",
         "blockquote", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6" }) do
         text = add_line_breaks(text, tag)

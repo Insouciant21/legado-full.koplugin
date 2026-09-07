@@ -1,6 +1,6 @@
 -- Legado JavaScript compatibility layer.
 --
--- LuaJIT cannot execute the ES6 syntax used by modern aggregated sources, so
+-- LuaJIT cannot execute the ES6 syntax used by modern sources, so
 -- the actual evaluator lives in native/legado_js.c and is loaded through the
 -- small C ABI below.  Network and persistent-looking host objects stay in Lua
 -- so the bridge never gives source JavaScript direct filesystem access.
@@ -60,10 +60,10 @@ local function is_expected_fallback_log(operation, message)
     if operation ~= "log" then
         return false
     end
-    -- The aggregate source first tries Android's encrypted cache API and
-    -- deliberately falls back to source.putLoginInfo() when that API is not
-    -- present.  Its catch block logs the expected exception; showing it as a
-    -- user-facing error makes a successful Kindle fallback look broken.
+    -- Some sources probe Android's optional encrypted-storage API and then
+    -- deliberately fall back to source.putLoginInfo() when it is absent.
+    -- Hide only that explicit capability-probe message; real source errors
+    -- continue to be returned to the user.
     local lowered = tostring(message or ""):lower()
     return lowered:find(
         "legado javascript capability is unavailable on kindle: createsymmetriccrypto",
@@ -801,12 +801,40 @@ function Javascript:host_call(operation, args, source, context)
         end
         current[tostring(first or "")] = second
         return second
-    elseif operation == "startBrowserAwait" then
-        local body, err = Network.get(tostring(first or ""), source)
-        if not body then
-            return nil, err or "browser fallback request failed"
+    elseif operation == "startBrowserAwait"
+            or operation == "startBrowser"
+            or operation == "startBrowserDp"
+            or operation == "showBrowser"
+            or operation == "showReadingBrowser" then
+        -- Legado's Android implementation opens a WebView, waits for the
+        -- user to finish the page, then returns the resulting document and
+        -- cookies.  Keep this host operation source-independent: the Kindle
+        -- browser bridge supplies the UI while the source's own JavaScript
+        -- remains responsible for interpreting the returned page.
+        local Browser = require("legado/browser")
+        local browser_headers, headers_err = Network.browser_headers(source)
+        if not browser_headers then
+            return nil, headers_err or "cannot prepare browser request headers"
         end
-        return { body = body }
+        local waits_for_result = operation == "startBrowserAwait"
+        local browser_result, browser_err = Browser.await(tostring(first or ""), {
+            title = second,
+            refetch_after_success = waits_for_result and args[3] ~= false or false,
+            html = waits_for_result and args[4] or args[3],
+            source = source,
+            headers = browser_headers,
+            cookies = Network.export_cookies(),
+        })
+        if not browser_result then
+            return nil, browser_err or "browser interaction failed"
+        end
+        if browser_result.cookies then
+            Network.merge_cookies(browser_result.cookies)
+        end
+        if not waits_for_result then
+            return ""
+        end
+        return browser_result
     elseif operation == "log" or operation == "toast" then
         -- Source-side status is often communicated only through a toast or a
         -- log call.  Returning it to the UI is more useful than silently

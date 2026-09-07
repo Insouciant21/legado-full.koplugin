@@ -51,7 +51,7 @@ typedef struct {
 static size_t host_output_size(const char *operation) {
     /* Most bridge calls return a cookie, variable or scalar.  A fixed 16 MiB
      * allocation for those calls is particularly expensive on the 32-bit
-     * Kindle because aggregate TOCs can invoke java.get()/java.put() once per
+     * Kindle because large TOCs can invoke java.get()/java.put() once per
      * chapter.  Network-shaped calls retain a generous ceiling for a page of
      * HTML/JSON; the final JavaScript result has its own reusable buffer. */
     if (operation != NULL
@@ -59,9 +59,8 @@ static size_t host_output_size(const char *operation) {
                 || strcmp(operation, "post") == 0
                 || strcmp(operation, "importScript") == 0
                 || strcmp(operation, "startBrowserAwait") == 0)) {
-        /* Preserve the historical maximum for network results.  These calls
-         * are not made once per aggregate chapter while building a source-defined
-         * TOC, and keeping this ceiling avoids truncating large source pages. */
+        /* Preserve the historical maximum for network-shaped results and
+         * browser-returned documents, avoiding truncation of source pages. */
         return 16U * 1024U * 1024U;
     }
     if (operation != NULL
@@ -241,14 +240,43 @@ static const char *LEGADO_PRELUDE =
     "createSymmetricCrypto:function(){return __legado_host('unsupported',['createSymmetricCrypto']);},"
     "lang:__legado_proxy(),"
     "net:__legado_proxy(),"
-    "startBrowser:function(){return '';},"
-    "startBrowserDp:function(){return '';},"
-    "showBrowser:function(){return '';},"
-    "showReadingBrowser:function(){return '';},"
+    "startBrowser:function(u,t,h){return __legado_host('startBrowser',["
+        "String(u===undefined?'':u),t===undefined?'':String(t),h===undefined?null:String(h)]);},"
+    "startBrowserDp:function(u,t,h){return __legado_host('startBrowserDp',["
+        "String(u===undefined?'':u),t===undefined?'':String(t),h===undefined?null:String(h)]);},"
+    "showBrowser:function(u,t,h){return __legado_host('showBrowser',["
+        "String(u===undefined?'':u),t===undefined?'':String(t),h===undefined?null:String(h)]);},"
+    "showReadingBrowser:function(u,t,h){return __legado_host('showReadingBrowser',["
+        "String(u===undefined?'':u),t===undefined?'':String(t),h===undefined?null:String(h)]);},"
     "webView:function(){return __legado_host('unsupported',['webView']);},"
-    "startBrowserAwait:function(u){"
-        "var body=__legado_host('ajax',[String(u),null]);"
-        "return {body:function(){return body;}};"
+    "startBrowserAwait:function(u,t,r,h){"
+        "var response=__legado_host('startBrowserAwait',["
+            "String(u===undefined?'':u),"
+            "t===undefined?'':String(t),"
+            "r===undefined?true:!!r,"
+            "h===undefined?null:String(h)"
+        "]);"
+        "var value=response&&typeof response==='object'?response:{};"
+        "return {"
+            "body:function(){return value.body===undefined?String(response||''):value.body;},"
+            "url:function(){return value.url===undefined?String(u||''):value.url;},"
+            "code:function(){return value.code===undefined?200:value.code;},"
+            "headers:function(){"
+                "var headers=value.headers||{};"
+                "if(typeof headers.get!=='function')headers.get=function(n){"
+                    "var key=String(n===undefined?'':n).toLowerCase();"
+                    "for(var k in headers){if(String(k).toLowerCase()===key)return headers[k];}"
+                    "return '';"
+                "};"
+                "return headers;"
+            "},"
+            "header:function(n){"
+                "var headers=value.headers||{};"
+                "var key=String(n===undefined?'':n).toLowerCase();"
+                "for(var k in headers){if(String(k).toLowerCase()===key)return headers[k];}"
+                "return '';"
+            "}"
+        "};"
     "}"
     "};\n"
     "globalThis.cookie={"

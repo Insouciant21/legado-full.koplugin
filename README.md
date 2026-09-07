@@ -81,19 +81,22 @@ Kindle；因此使用 JavaScript、`data:` 中间载荷或带 JSON URL options �
 覆盖测试的参考。
 
 书源登录也已经接入：插件解析备份中的 `loginUi` 文本/密码/数字/多行输入框，
-显示书源定义的按钮动作，并执行书源的 `loginUrl` JavaScript。登录信息、服务端返回的
+显示书源定义的按钮动作，并执行书源的 `loginUrl` JavaScript；对纯 JavaScript
+书源也支持由 `mainJs + loginUi` 提供的动作。登录信息、服务端返回的
 Cookie 以及 `source.setVariable` 写入的源变量，会按书源保存到
 `<KOReader data dir>/legado/source-sessions.json`，后续每个独立的搜索、详情、
-目录和正文 worker 都会恢复它们。因此书源所需的登录会话可以跨操作和
+目录和正文 worker 都会恢复它们，因此书源所需的登录会话可以跨操作和
 KOReader 重启复用。这个文件不属于 Android ZIP，避免把密码和活动会话伪装成
 Android 备份成员；从 Android 备份首次迁移到 Kindle 时需要在 Kindle 上输入一次
-登录信息。只依赖 Android WebView/浏览器交互、验证码页面或 Android Java 加密类
-的登录动作会明确报不兼容，普通 HTTP/JavaScript 登录流程可以运行。
+登录信息。调用 Legado `java.startBrowserAwait` 或交互式 `startBrowser` 变体的
+设置、验证或登录动作会打开 Kindle 自带 Chromium；完成网页操作后点击页面右上角
+的“完成并返回 Kindle”，页面正文、最终 URL 和 Cookie 会按 Legado 语义回传或保存，
+再由书源自己的 JavaScript 继续处理。
 该会话文件按 KOReader 数据目录权限保存，但当前不是端到端加密格式；请勿把它
 公开分享，若迁移设备应把它视为包含账号凭据和会话令牌的私密文件。
 
-`@webjs`、真实 Android Java/Jsoup 类、需要浏览器登录或图片/音频/漫画的专属
-能力没有等价的 Kindle 实现，会被明确报错。无法等价转换的复杂 Java 正则也会在运行时返回错误，避免静默抓取错误
+`@webjs`、真实 Android Java/Jsoup 类、需要图片验证码或图片/音频/漫画的专属
+能力没有等价的 Kindle 实现，会被明确报错；`java.webView` 仍不支持。无法等价转换的复杂 Java 正则也会在运行时返回错误，避免静默抓取错误
 内容。目录 `preUpdateJs` 和 `formatJs` 已接入，后者兼容备份中常见的
 `formatChapter(index, title)` 形式。
 

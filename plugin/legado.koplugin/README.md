@@ -99,8 +99,8 @@ Java-regex replacement rules.
 Legado content rules may return HTML fragments. After rule processing, the
 plugin converts block tags such as `p`, `div`, and `br` to paragraph breaks,
 decodes common HTML entities, and removes scripts, styles, images, SVG payloads,
-and remaining tags. This is deliberately a text-novel policy: it keeps the
-aggregate source's prose readable on KPW4 rather than exposing web markup in a
+and remaining tags. This is deliberately a text-novel policy: it keeps
+HTML-backed source prose readable on KPW4 rather than exposing web markup in a
 TXT document. The same normalized text is used when building EPUB paragraphs.
 
 Emoji are kept in book names, chapter names, backup data and chapter text. On
@@ -114,13 +114,14 @@ normal font scan can load it.
 JavaScript rules run in the bundled QuickJS bridge. The bridge maps the common
 Legado host surface (`java.ajax`, URL options, Cookie, source/book variables,
 memory/cache, Base64 and Hex) to Lua, including typed `data:` responses used by
-aggregated sources. JSON-mapped remote `jsLib` helpers are downloaded and
+some aggregate sources. JSON-mapped remote `jsLib` helpers are downloaded and
 cached per source. `ruleToc.preUpdateJs` and `formatJs` are also executed;
 function-style `formatChapter(index, title)` hooks are supported. Source login is
 available from `Legado → Source settings → Source list`, by opening a source's
 actions: the plugin reads the source's
 `loginUi`, supports text/password/number/textarea controls, offers its declared
-button actions, and runs `loginUrl` in the same QuickJS host. `source.getLoginInfo`,
+button actions, and runs `loginUrl` (or a pure JavaScript source's `mainJs`) in the
+same QuickJS host. `source.getLoginInfo`,
 `getLoginInfoMap`, `putLoginInfo`, source variables, and HTTP Cookie/Set-Cookie state
 are persisted per source in
 `<KOReader data dir>/legado/source-sessions.json`, then restored for later workers.
@@ -129,8 +130,16 @@ contain live authentication state; credentials must be entered once on Kindle.
 After an action finishes, its result can be dismissed to return directly to the
 same Actions list, allowing `login()`, `checkStatus()` and `logout()` to be run
 one after another without returning to the KOReader home screen.
-WebView-only JavaScript (`@webjs`), Android Java/Jsoup objects, browser/captcha-only
-login, and image/audio features remain explicit unsupported capabilities.
+If a source action calls Legado's `java.startBrowserAwait` (or the interactive
+`startBrowser` variants), the plugin opens the Kindle's Chromium content shell,
+returns the current document, final URL, and Cookies for the await variant, and
+persists its source variables and cookies.
+Tap the generic `完成并返回 Kindle` button on the page when the source-defined
+settings or verification flow is complete. No source name, endpoint, field name,
+or private aggregate protocol is embedded in this path; the imported source
+remains the authority for the UI and response parsing.
+WebView-only JavaScript (`@webjs`), Android Java/Jsoup objects, image/captcha/audio
+features, and `java.webView` remain explicit unsupported capabilities.
 The session JSON is permission-restricted where the KOReader filesystem supports it,
 but it is not end-to-end encrypted; treat it as private credential/token data.
 

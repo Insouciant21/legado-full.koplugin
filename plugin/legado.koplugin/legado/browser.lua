@@ -1,0 +1,658 @@
+-- Generic bridge for Legado's java.startBrowserAwait().
+--
+-- Android Legado uses a WebView and returns the current document after the
+-- user finishes a verification/configuration page.  KOReader has no embedded
+-- WebView, but a jailbroken Kindle ships the same Chromium content shell used
+-- by the Kindle browser.  Run that browser as a short-lived child, attach to
+-- its DevTools protocol, and add a small source-independent "done" button.
+-- The returned document/cookies then follow the normal Legado source action
+-- path.  No source fields or endpoint names are known here.
+
+local http = require("socket.http")
+local ltn12 = require("ltn12")
+local rapidjson = require("rapidjson")
+local socket = require("socket")
+
+local Browser = {}
+
+local BROWSER_BINARY = "/usr/bin/chromium/bin/kindle_browser"
+local BROWSER_LIBRARY_PATH = "/usr/bin/chromium/lib:/usr/bin/chromium/usr/lib:/usr/lib"
+local MAX_URL_BYTES = 256 * 1024
+local MAX_HTML_BYTES = 12 * 1024 * 1024
+local DEFAULT_TIMEOUT = 5 * 60
+
+local base64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function trim(value)
+    return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function now()
+    if type(socket.gettime) == "function" then
+        return socket.gettime()
+    end
+    return os.time()
+end
+
+local function shell_quote(value)
+    return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
+end
+
+local function random_bytes(count)
+    local output = {}
+    for index = 1, count do
+        output[index] = string.char(math.random(0, 255))
+    end
+    return table.concat(output)
+end
+
+local function encode_base64(value)
+    local output = {}
+    for index = 1, #value, 3 do
+        local first = value:byte(index) or 0
+        local second = value:byte(index + 1)
+        local third = value:byte(index + 2)
+        local number = first * 65536 + (second or 0) * 256 + (third or 0)
+        output[#output + 1] = base64_alphabet:sub(math.floor(number / 262144) % 64 + 1,
+            math.floor(number / 262144) % 64 + 1)
+        output[#output + 1] = base64_alphabet:sub(math.floor(number / 4096) % 64 + 1,
+            math.floor(number / 4096) % 64 + 1)
+        output[#output + 1] = second
+            and base64_alphabet:sub(math.floor(number / 64) % 64 + 1,
+                math.floor(number / 64) % 64 + 1) or "="
+        output[#output + 1] = third
+            and base64_alphabet:sub(number % 64 + 1, number % 64 + 1) or "="
+    end
+    return table.concat(output)
+end
+
+local function pack_u16(value)
+    local high = math.floor(value / 256) % 256
+    local low = value % 256
+    return string.char(high, low)
+end
+
+local function pack_u64(value)
+    local bytes = {}
+    for index = 8, 1, -1 do
+        bytes[index] = string.char(value % 256)
+        value = math.floor(value / 256)
+    end
+    return table.concat(bytes)
+end
+
+local function receive_exact(client, length)
+    local chunks = {}
+    local received = 0
+    while received < length do
+        local chunk, receive_err, partial = client:receive(length - received)
+        chunk = chunk or partial
+        if not chunk or #chunk == 0 then
+            return nil, receive_err or "browser connection closed"
+        end
+        chunks[#chunks + 1] = chunk
+        received = received + #chunk
+    end
+    return table.concat(chunks)
+end
+
+local function websocket_send(client, opcode, payload)
+    payload = tostring(payload or "")
+    local length = #payload
+    local header
+    if length < 126 then
+        header = string.char(0x80 + opcode, 0x80 + length)
+    elseif length < 65536 then
+        header = string.char(0x80 + opcode, 0x80 + 126) .. pack_u16(length)
+    else
+        header = string.char(0x80 + opcode, 0x80 + 127) .. pack_u64(length)
+    end
+    local mask = random_bytes(4)
+    local masked = {}
+    for index = 1, length do
+        local mask_byte = mask:byte((index - 1) % 4 + 1)
+        -- XOR without depending on LuaJIT bit libraries.
+        local left = payload:byte(index)
+        local right = mask_byte
+        local xor_value = 0
+        local bit_value = 1
+        for _ = 1, 8 do
+            if (left % 2) ~= (right % 2) then xor_value = xor_value + bit_value end
+            left = math.floor(left / 2)
+            right = math.floor(right / 2)
+            bit_value = bit_value * 2
+        end
+        masked[index] = string.char(xor_value)
+    end
+    local sent, send_err = client:send(header .. mask .. table.concat(masked))
+    if not sent then
+        return nil, send_err or "cannot send browser command"
+    end
+    return true
+end
+
+local function websocket_receive(client)
+    local header, header_err = receive_exact(client, 2)
+    if not header then return nil, header_err end
+    local first = header:byte(1)
+    local second = header:byte(2)
+    local opcode = first % 16
+    local length = second % 128
+    if length == 126 then
+        local extended, extended_err = receive_exact(client, 2)
+        if not extended then return nil, extended_err end
+        length = extended:byte(1) * 256 + extended:byte(2)
+    elseif length == 127 then
+        local extended, extended_err = receive_exact(client, 8)
+        if not extended then return nil, extended_err end
+        length = 0
+        for index = 1, 8 do
+            length = length * 256 + extended:byte(index)
+            if length > MAX_HTML_BYTES * 2 then
+                return nil, "browser message is too large"
+            end
+        end
+    end
+    local mask
+    if second >= 128 then
+        mask, header_err = receive_exact(client, 4)
+        if not mask then return nil, header_err end
+    end
+    local payload, payload_err = receive_exact(client, length)
+    if not payload then return nil, payload_err end
+    if mask then
+        local unmasked = {}
+        for index = 1, #payload do
+            local left = payload:byte(index)
+            local right = mask:byte((index - 1) % 4 + 1)
+            local xor_value = 0
+            local bit_value = 1
+            for _ = 1, 8 do
+                if (left % 2) ~= (right % 2) then xor_value = xor_value + bit_value end
+                left = math.floor(left / 2)
+                right = math.floor(right / 2)
+                bit_value = bit_value * 2
+            end
+            unmasked[index] = string.char(xor_value)
+        end
+        payload = table.concat(unmasked)
+    end
+    return opcode, payload, first >= 128
+end
+
+local Client = {}
+Client.__index = Client
+
+function Client:new(client)
+    return setmetatable({
+        socket = client,
+        next_id = 0,
+        fragments = nil,
+    }, self)
+end
+
+function Client:close()
+    if not self.socket then return end
+    pcall(websocket_send, self.socket, 8, "")
+    pcall(self.socket.close, self.socket)
+    self.socket = nil
+end
+
+function Client:receive_message()
+    while true do
+        local opcode, payload, final = websocket_receive(self.socket)
+        if not opcode then return nil, payload end
+        if opcode == 8 then return nil, "browser websocket closed" end
+        if opcode == 9 then
+            local ok, err = websocket_send(self.socket, 10, payload)
+            if not ok then return nil, err end
+        elseif opcode == 1 and final then
+            return payload
+        elseif opcode == 1 then
+            self.fragments = { payload }
+        elseif opcode == 0 and self.fragments then
+            self.fragments[#self.fragments + 1] = payload
+            if final then
+                local result = table.concat(self.fragments)
+                self.fragments = nil
+                return result
+            end
+        elseif opcode == 10 then
+            -- Pong frames do not carry a CDP message.
+        elseif opcode == 2 then
+            return payload
+        end
+    end
+end
+
+function Client:call(method, params)
+    self.next_id = self.next_id + 1
+    local id = self.next_id
+    local encoded_ok, encoded = pcall(rapidjson.encode, {
+        id = id,
+        method = method,
+        params = params or {},
+    })
+    if not encoded_ok then
+        return nil, "cannot encode browser command: " .. tostring(encoded)
+    end
+    local sent, send_err = websocket_send(self.socket, 1, encoded)
+    if not sent then return nil, send_err end
+    while true do
+        local message, receive_err = self:receive_message()
+        if not message then return nil, receive_err end
+        local decoded_ok, decoded = pcall(rapidjson.decode, message)
+        if decoded_ok and type(decoded) == "table" and tonumber(decoded.id) == id then
+            if decoded.error then
+                local detail = type(decoded.error) == "table"
+                    and (decoded.error.message or decoded.error.code) or decoded.error
+                return nil, "browser command " .. tostring(method) .. ": " .. tostring(detail)
+            end
+            return decoded.result or {}
+        end
+    end
+end
+
+function Client:evaluate(expression)
+    local result, err = self:call("Runtime.evaluate", {
+        expression = expression,
+        returnByValue = true,
+        awaitPromise = false,
+    })
+    if not result then return nil, err end
+    local remote = result.result
+    if type(remote) ~= "table" then return nil, "browser evaluation returned no value" end
+    if remote.exceptionDetails then
+        return nil, "browser page evaluation failed"
+    end
+    return remote.value
+end
+
+local function browser_http_get(port, path)
+    local chunks = {}
+    local request_ok, code, _, request_err = http.request{
+        url = "http://127.0.0.1:" .. tostring(port) .. tostring(path),
+        method = "GET",
+        sink = ltn12.sink.table(chunks),
+    }
+    if not request_ok then
+        return nil, tostring(request_err or code or "browser DevTools request failed")
+    end
+    if tonumber(code) ~= 200 then
+        return nil, "browser DevTools returned HTTP " .. tostring(code)
+    end
+    return table.concat(chunks)
+end
+
+local function choose_port()
+    for _ = 1, 24 do
+        local candidate = math.random(19000, 29000)
+        local listener = socket.bind("127.0.0.1", candidate)
+        if listener then
+            listener:close()
+            return candidate
+        end
+    end
+    return nil, "no free local browser port"
+end
+
+local function wait_for_page(port, deadline)
+    while now() < deadline do
+        local body = browser_http_get(port, "/json")
+        if body then
+            local decoded_ok, pages = pcall(rapidjson.decode, body)
+            if decoded_ok and type(pages) == "table" then
+                for _, page in ipairs(pages) do
+                    if type(page) == "table"
+                            and page.type == "page"
+                            and type(page.webSocketDebuggerUrl) == "string" then
+                        return page
+                    end
+                end
+            end
+        end
+        socket.sleep(0.25)
+    end
+    return nil, "Kindle browser did not expose a page"
+end
+
+local function connect_devtools(page, port)
+    local path = tostring(page.webSocketDebuggerUrl):match("^ws://[^/]+(/.*)$")
+    if not path then return nil, "invalid Kindle browser DevTools URL" end
+    local client, connect_err = socket.tcp()
+    if not client then return nil, connect_err end
+    client:settimeout(8)
+    local connected, err = client:connect("127.0.0.1", port)
+    if not connected then
+        client:close()
+        return nil, err or "cannot connect to Kindle browser DevTools"
+    end
+    local key = encode_base64(random_bytes(16))
+    local request = table.concat({
+        "GET ", path, " HTTP/1.1\r\n",
+        "Host: 127.0.0.1:", tostring(port), "\r\n",
+        "Upgrade: websocket\r\n",
+        "Connection: Upgrade\r\n",
+        "Sec-WebSocket-Key: ", key, "\r\n",
+        "Sec-WebSocket-Version: 13\r\n",
+        "\r\n",
+    })
+    local sent, send_err = client:send(request)
+    if not sent then
+        client:close()
+        return nil, send_err or "cannot start browser DevTools session"
+    end
+    local response = ""
+    while not response:find("\r\n\r\n", 1, true) do
+        local line, line_err, partial = client:receive("*l")
+        line = line or partial
+        if not line then
+            client:close()
+            return nil, line_err or "browser DevTools handshake failed"
+        end
+        response = response .. line .. "\r\n"
+        if #response > 8192 then
+            client:close()
+            return nil, "browser DevTools handshake is too large"
+        end
+    end
+    if not response:find(" 101 ", 1, true) then
+        client:close()
+        return nil, "browser DevTools rejected the WebSocket connection"
+    end
+    client:settimeout(8)
+    return Client:new(client)
+end
+
+local function launch(url, port, user_dir, log_path)
+    local command = table.concat({
+        "DISPLAY=:0",
+        "LD_LIBRARY_PATH=" .. shell_quote(BROWSER_LIBRARY_PATH),
+        shell_quote(BROWSER_BINARY),
+        "--no-zygote",
+        "--no-sandbox",
+        "--single-process",
+        "--disable-gpu",
+        "--in-process-gpu",
+        "--disable-gpu-sandbox",
+        "--disable-gpu-compositing",
+        "--no-first-run",
+        "--disable-background-networking",
+        "--remote-debugging-address=127.0.0.1",
+        "--remote-debugging-port=" .. tostring(port),
+        "--user-data-dir=" .. shell_quote(user_dir),
+        "--content-shell-hide-toolbar",
+        "--content-shell-host-window-cord=0,215",
+        "--force-device-scale-factor=2",
+        "--force-gpu-mem-available-mb=40",
+        "--enable-low-end-device-mode",
+        "--enable-low-res-tiling",
+        "--disable-site-isolation-trials",
+        "--enable-grayscale-mode",
+        "--js-flags=jitless",
+        "--user-agent=" .. shell_quote(
+            "Mozilla/5.0 (X11; U; Linux armv7l like Android; en-us) "
+            .. "AppleWebKit/531.2+ (KHTML, like Gecko) Version/5.0 "
+            .. "Safari/533.2+ Kindle/3.0+"
+        ),
+        shell_quote(url),
+        ">", shell_quote(log_path),
+        "2>&1 & echo $!",
+    }, " ")
+    local handle, open_err = io.popen(command, "r")
+    if not handle then return nil, open_err or "cannot launch Kindle browser" end
+    local pid = tonumber(trim(handle:read("*l") or ""))
+    handle:close()
+    if not pid then return nil, "Kindle browser did not start" end
+    return pid
+end
+
+local function kill_process(pid)
+    if not tonumber(pid) then return end
+    os.execute("kill -TERM " .. tostring(tonumber(pid)) .. " >/dev/null 2>&1")
+    socket.sleep(0.35)
+    os.execute("kill -KILL " .. tostring(tonumber(pid)) .. " >/dev/null 2>&1")
+end
+
+local function remove_profile(path)
+    -- The path is generated by this module under /var/tmp and is never
+    -- accepted from a source or user. Keep the Kindle's browser storage
+    -- bounded after a settings/verification session.
+    if tostring(path):match("^/var/tmp/legado%-browser%-%d+%-%d+$") then
+        os.execute("rm -rf " .. shell_quote(path) .. " >/dev/null 2>&1")
+    end
+end
+
+local function set_browser_cookies(client, snapshot, url)
+    if type(snapshot) ~= "table" then return end
+    local scheme = tostring(url or ""):match("^(https?)://")
+    local schemes = scheme and { scheme } or { "https", "http" }
+    for host, cookies in pairs(snapshot) do
+        if type(host) == "string" and type(cookies) == "table" then
+            local clean_host = host:gsub("^%.", "")
+            if clean_host ~= "" then
+                for name, value in pairs(cookies) do
+                    if type(name) == "string"
+                            and (type(value) == "string" or type(value) == "number") then
+                        for _, cookie_scheme in ipairs(schemes) do
+                            client:call("Network.setCookie", {
+                                name = name,
+                                value = tostring(value),
+                                url = cookie_scheme .. "://" .. clean_host .. "/",
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function browser_cookie_snapshot(client)
+    local result, err = client:call("Network.getAllCookies", {})
+    if not result then return nil, err end
+    local snapshot = {}
+    for _, cookie in ipairs(result.cookies or {}) do
+        if type(cookie) == "table" then
+            local host = tostring(cookie.domain or ""):gsub("^%.", "")
+            local name = tostring(cookie.name or "")
+            if host ~= "" and name ~= "" then
+                snapshot[host] = snapshot[host] or {}
+                snapshot[host][name] = tostring(cookie.value or "")
+            end
+        end
+    end
+    return snapshot
+end
+
+local function add_done_button(client)
+    return client:evaluate([[
+(function() {
+  try {
+    if (!document || !document.documentElement) return false;
+    window.__legado_browser_done = false;
+    if (document.getElementById("__legado_kindle_done")) return true;
+    var button = document.createElement("button");
+    button.id = "__legado_kindle_done";
+    button.type = "button";
+    button.textContent = "完成并返回 Kindle";
+    button.setAttribute("aria-label", "完成并返回 Kindle");
+    button.style.cssText =
+      "position:fixed;z-index:2147483647;top:8px;right:8px;" +
+      "min-width:170px;height:48px;padding:4px 10px;" +
+      "background:#fff;color:#000;border:2px solid #000;border-radius:4px;" +
+      "font: bold 16px sans-serif;opacity:.94;";
+    button.addEventListener("click", function(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.__legado_browser_done = true;
+    }, true);
+    // A number of source-provided settings pages use window.close() as their
+    // own completion signal. Chromium may refuse to close a top-level page
+    // that it did not open, so translate that ordinary browser action into
+    // the same result signal used by the generic Kindle button.
+    window.close = function() {
+      window.__legado_browser_done = true;
+    };
+    (document.body || document.documentElement).appendChild(button);
+    return true;
+  } catch (error) {
+    return false;
+  }
+})()
+]])
+end
+
+local function document_result(client)
+    -- The completion affordance is host UI, not source content. Remove it
+    -- before returning outerHTML so source JavaScript sees the same document
+    -- shape it would receive from Legado's WebView.
+    client:evaluate([[
+(function() {
+  var button = document.getElementById("__legado_kindle_done");
+  if (button && button.parentNode) button.parentNode.removeChild(button);
+  return true;
+})()
+]])
+    local body, body_err = client:evaluate(
+        "document.documentElement ? document.documentElement.outerHTML : ''"
+    )
+    if type(body) ~= "string" then
+        return nil, body_err or "browser returned no document"
+    end
+    if #body == 0 then return nil, "browser returned an empty document" end
+    if #body > MAX_HTML_BYTES then return nil, "browser document is too large" end
+    local url = client:evaluate("String(location.href || '')") or ""
+    local cookies, cookie_err = browser_cookie_snapshot(client)
+    if not cookies then return nil, cookie_err end
+    return {
+        body = body,
+        url = tostring(url),
+        cookies = cookies,
+        code = 200,
+        headers = {},
+    }
+end
+
+function Browser.await(url, options)
+    options = options or {}
+    url = tostring(url or "")
+    if url == "" then return nil, "browser URL is empty" end
+    if #url > MAX_URL_BYTES then return nil, "browser URL is too large" end
+    local binary_file = io.open(BROWSER_BINARY, "rb")
+    if not binary_file then
+        return nil, "Kindle browser is unavailable at " .. BROWSER_BINARY
+    end
+    binary_file:close()
+
+    math.randomseed(os.time() + math.floor(now() * 1000) % 100000 + #url)
+    local port, port_err = choose_port()
+    if not port then return nil, port_err end
+    local token = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
+    local user_dir = "/var/tmp/legado-browser-" .. token
+    local log_path = user_dir .. ".log"
+    -- Start on a blank document so the source's existing cookies are installed
+    -- before the first request to its page. This matters for login/settings
+    -- pages that redirect based on an existing session.
+    local pid, launch_err = launch("about:blank", port, user_dir, log_path)
+    if not pid then return nil, launch_err end
+
+    local client
+    local function finish(result, err)
+        if client then client:close() end
+        kill_process(pid)
+        remove_profile(user_dir)
+        os.remove(log_path)
+        return result, err
+    end
+
+    local page, page_err = wait_for_page(port, now() + 20)
+    if not page then return finish(nil, page_err) end
+    client, page_err = connect_devtools(page, port)
+    if not client then return finish(nil, page_err) end
+    client:call("Runtime.enable", {})
+    client:call("Network.enable", {})
+    client:call("Page.enable", {})
+
+    local browser_headers = options.headers
+    if browser_headers ~= nil and type(browser_headers) ~= "table" then
+        return finish(nil, "browser headers must be an object")
+    end
+    if type(browser_headers) == "table" and next(browser_headers) ~= nil then
+        local _, browser_headers_err = client:call("Network.setExtraHTTPHeaders", {
+            headers = browser_headers,
+        })
+        if browser_headers_err then
+            return finish(nil, browser_headers_err)
+        end
+    end
+    set_browser_cookies(client, options.cookies, url)
+    local navigation_url = url
+    if url:find(",", 1, true) then
+        -- Legado URL options append a JSON object after a comma. Chromium
+        -- must receive only the actual URL; the HTTP runtime still handles
+        -- those options when it performs a post-browser refetch.
+        local comma = url:find(",", 1, true)
+        while comma do
+            local tail = url:sub(comma + 1)
+            local decoded_ok, decoded = pcall(rapidjson.decode, tail)
+            if decoded_ok and type(decoded) == "table" then
+                navigation_url = trim(url:sub(1, comma - 1))
+                break
+            end
+            comma = url:find(",", comma + 1, true)
+        end
+    end
+    local _, navigation_err = client:call("Page.navigate", { url = navigation_url })
+    if navigation_err then return finish(nil, navigation_err) end
+    if type(options.html) == "string" and options.html ~= "" then
+        if #options.html > MAX_HTML_BYTES then
+            return finish(nil, "browser HTML is too large")
+        end
+        local frame_tree = client:call("Page.getFrameTree", {})
+        local frame = frame_tree and frame_tree.frameTree and frame_tree.frameTree.frame
+        if not frame or not frame.id then
+            return finish(nil, "browser did not expose a document frame")
+        end
+        local _, content_err = client:call("Page.setDocumentContent", {
+            frameId = frame.id,
+            html = options.html,
+        })
+        if content_err then return finish(nil, content_err) end
+    end
+
+    local deadline = now() + (tonumber(options.timeout) or DEFAULT_TIMEOUT)
+    local last_url = ""
+    local injected = false
+    while now() < deadline do
+        local current_url = tostring(client:evaluate("String(location.href || '')") or "")
+        if current_url ~= last_url then
+            last_url = current_url
+            injected = false
+        end
+        if not injected then
+            injected = add_done_button(client) == true
+        end
+        local done = client:evaluate("window.__legado_browser_done === true")
+        if done == true then
+            local result, result_err = document_result(client)
+            if not result then return finish(nil, result_err) end
+            if options.refetch_after_success == true
+                    and not url:lower():match("^data:") then
+                local Network = require("legado/network")
+                local refreshed, refresh_err = Network.get(url, options.source)
+                if refreshed then
+                    result.body = refreshed
+                    result.url = url
+                elseif refresh_err then
+                    result.refresh_error = refresh_err
+                end
+            end
+            return finish(result)
+        end
+        socket.sleep(0.5)
+    end
+    return finish(nil, "browser interaction timed out; tap 完成并返回 Kindle")
+end
+
+return Browser

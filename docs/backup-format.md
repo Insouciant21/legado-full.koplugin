@@ -67,16 +67,16 @@ supports the common rule forms and runs ordinary Legado JavaScript through the
 bundled QuickJS bridge, while it reports the first Android/WebView-only
 capability it actually reaches.
 
-The sampled aggregate source uses JavaScript URL rules which return typed
-`data:` URIs and source-defined URL options.
-The Kindle network adapter decodes those URIs and converts typed HTTP bodies to
-hex before the JS rule, matching the source's `java.hexDecodeToString` flow.
+The sampled aggregate source was used only as a protocol fixture: it exercises
+JavaScript URL rules, typed `data:` URIs, JSON URL options, and
+`java.hexDecodeToString`. The Kindle network adapter handles those generic
+Legado forms without recognizing the source name, endpoint, or private fields.
 Its search, detail, catalog, and content stages have been exercised with a
 sanitized end-to-end fixture.
 
-The sampled aggregate source also contains a `loginUi` with text/password fields
-and button actions such as `login(true)` and `checkStatus()`. The Kindle plugin
-executes those actions through `loginUrl`; its resulting login JSON, source
+The sampled source also contains a `loginUi` with text/password fields and
+source-defined button actions. The Kindle plugin executes those actions through
+`loginUrl` or a pure JavaScript source's `mainJs`; its resulting login JSON, source
 variables, and HTTP cookies are stored in the separate Kindle-side
 `legado/source-sessions.json` file. Live authentication is not part of the
 Android ZIP baseline, so the first Kindle login is an intentional post-restore

@@ -597,7 +597,7 @@ function Legado:showReaderChapterList()
     end
     -- The current reading session already contains the complete TOC that was
     -- used to open this chapter. Rendering it locally avoids repeating the
-    -- aggregate source's book-info and chapter-list requests just to open the
+    -- source's book-info and chapter-list requests just to open the
     -- reader's directory. Resolve the source only when an action needs it.
     self:showChapterMenu(nil, session.book, session.chapters, {
         current_index = session.current_index,
@@ -756,9 +756,25 @@ local function source_type_label(source)
 end
 
 local function source_has_login(source)
-    return type(source) == "table"
-        and type(source.loginUrl) == "string"
-        and source.loginUrl ~= ""
+    if type(source) ~= "table" then
+        return false
+    end
+    if type(source.loginUrl) == "string" and source.loginUrl:gsub("%s+", "") ~= "" then
+        return true
+    end
+    -- Legado also treats a pure JavaScript source with mainJs + loginUi as
+    -- exposing login/actions, even when loginUrl is absent.
+    local has_main_js = type(source.mainJs) == "string"
+        and source.mainJs:gsub("%s+", "") ~= ""
+    local login_ui = source.loginUi
+    local has_login_ui
+    if type(login_ui) == "table" then
+        has_login_ui = next(login_ui) ~= nil
+    elseif type(login_ui) == "string" then
+        local compact = login_ui:gsub("%s+", "")
+        has_login_ui = compact ~= "" and compact ~= "[]"
+    end
+    return has_main_js and has_login_ui
 end
 
 local function copy_source(source)
@@ -1176,8 +1192,7 @@ function Legado:chooseLoginSource()
     for _, source in ipairs(sources) do
         if source.enabled ~= false
                 and tonumber(source.bookSourceType or 0) == 0
-                and type(source.loginUrl) == "string"
-                and source.loginUrl ~= "" then
+                and source_has_login(source) then
             items[#items + 1] = {
                 text = display_text(source.bookSourceName or _("Unnamed source")),
                 mandatory = display_text(source.bookSourceGroup),
@@ -1186,7 +1201,7 @@ function Legado:chooseLoginSource()
         end
     end
     if #items == 0 then
-        self:showOperationResult(_("No enabled text source with a login URL."))
+        self:showOperationResult(_("No enabled text source with login or source actions."))
         return
     end
     local source_menu
@@ -1404,6 +1419,11 @@ function Legado:showSourceLoginActions(source, buttons, values)
         item_table = items,
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
+            -- This is not a special source-family API. It is an ordinary
+            -- Legado loginUi action; the source decides
+            -- whether it opens a browser, updates source variables, or
+            -- returns a status value. Keep every action on that same generic
+            -- path so imported sources remain interchangeable.
             self:runSourceLogin(source, values, item.action, item.text, {
                 keep_actions = true,
                 buttons = buttons,

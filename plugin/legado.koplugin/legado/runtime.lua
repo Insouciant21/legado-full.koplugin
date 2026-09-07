@@ -14,7 +14,7 @@ local active_session_key
 
 local function memory_checkpoint(counter)
     -- LuaJIT's allocator can otherwise postpone collecting short-lived HTML,
-    -- JSON and FFI objects until a large aggregate TOC has already been
+    -- JSON and FFI objects until a large TOC has already been
     -- materialized.  A full collection every 64 records keeps KPW4's peak
     -- resident memory bounded without turning every chapter into a GC pause.
     if counter and counter % 64 == 0 then
@@ -449,8 +449,12 @@ function Runtime.chapter_list(source, book)
             item_context.rule_variables = copy_variables(rule_variable_state)
             local name, name_err = text_value(element, rule(toc_rule, "chapterName"), item_context)
             if name_err then return nil, name_err end
+            -- Always let the source's own chapterUrl rule produce the URL.
+            -- URL options, data URIs and JavaScript host calls are handled by
+            -- the generic rule/network layers; no source family gets a
+            -- special URL reconstruction path here.
             local chapter_url, url_err = text_value(element, chapter_url_rule, item_context)
-                if url_err then return nil, url_err end
+            if url_err then return nil, url_err end
             if name and name ~= "" and chapter_url and chapter_url ~= "" then
                 local vip, vip_err = text_value(element, rule(toc_rule, "isVip"), item_context)
                 if vip_err then return nil, vip_err end
@@ -612,8 +616,8 @@ function Runtime.chapter_content(source, chapter, book)
     end
     -- Legado's Android reader renders the selected fragment as HTML.  A
     -- downloaded KOReader TXT does not, so normalize only after all source
-    -- rules/replacements have run.  This keeps aggregate-source rules intact
-    -- while making the result readable on the Kindle.
+    -- rules/replacements have run while keeping the source's extracted text
+    -- intact.
     content = Content.to_text(content)
     if trim(content) == "" then
         return nil, "chapter content is empty after HTML cleanup"
@@ -718,8 +722,10 @@ function Runtime.login_source(source, values, action)
     if tonumber(source and source.bookSourceType or 0) ~= 0 then
         return nil, "only text book sources are supported"
     end
-    if trim(source and source.loginUrl or "") == "" then
-        return nil, "this source has no loginUrl"
+    local login_url = trim(source and source.loginUrl or "")
+    local main_js = trim(source and source.mainJs or "")
+    if login_url == "" and main_js == "" then
+        return nil, "this source has no loginUrl or mainJs login implementation"
     end
     if type(values) ~= "table" then
         values = {}
@@ -734,12 +740,22 @@ function Runtime.login_source(source, values, action)
             sourceVariable = source_variable,
             loginInfo = values,
         })
+        local login_script = source.loginUrl
+        local login_action = login_invocation(action)
+        if login_url == "" then
+            -- Pure JavaScript sources put login()/logout()/settings actions
+            -- in mainJs. evaluate_rule loads that library automatically, so
+            -- evaluate only the requested invocation here and avoid running
+            -- the source implementation twice.
+            login_script = "<js>" .. login_action .. "</js>"
+            login_action = nil
+        end
         local login_result, login_err = evaluate_script(
             source,
-            source.loginUrl,
+            login_script,
             context,
             values,
-            login_invocation(action)
+            login_action
         )
         if login_err then
             return nil, "source login failed: " .. tostring(login_err)

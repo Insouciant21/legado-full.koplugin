@@ -303,6 +303,31 @@ local function headers_from_source(source)
     return headers
 end
 
+-- Return the static portion of a source header for an interactive Chromium
+-- page. Dynamic `@js` headers still belong to the source's JS/HTTP path and
+-- cannot be evaluated recursively while that same JS call is waiting for the
+-- browser. Cookie state is installed through the browser cookie store.
+function Network.browser_headers(source)
+    local raw = source and source.header
+    if type(raw) == "string"
+            and (raw:lower():match("^@js:") or raw:lower():match("^<js>")) then
+        return {}
+    end
+    local headers, err = headers_from_source(source)
+    if not headers then
+        return nil, err
+    end
+    local result = {}
+    for key, value in pairs(headers) do
+        local lowered = tostring(key):lower()
+        if lowered ~= "host" and lowered ~= "content-length"
+                and lowered ~= "connection" then
+            result[tostring(key)] = tostring(value)
+        end
+    end
+    return result
+end
+
 local function decode_options(value)
     if type(value) == "table" then
         return value
@@ -460,6 +485,31 @@ function Network.import_cookies(snapshot)
             end
             if next(copied) ~= nil then
                 cookie_jar[host:lower()] = copied
+            end
+        end
+    end
+end
+
+-- Merge cookies produced by an interactive browser into the current source
+-- session without discarding cookies that were already set by the source's
+-- HTTP requests. The browser helper intentionally reduces cookies to the same
+-- host -> name -> value shape used by the lightweight HTTP jar.
+function Network.merge_cookies(snapshot)
+    if type(snapshot) ~= "table" then
+        return
+    end
+    for host, cookies in pairs(snapshot) do
+        if type(host) == "string" and type(cookies) == "table" then
+            local lowered_host = host:lower():gsub("^%.", "")
+            local current = cookie_jar[lowered_host] or {}
+            for name, value in pairs(cookies) do
+                if type(name) == "string"
+                        and (type(value) == "string" or type(value) == "number") then
+                    current[name] = tostring(value)
+                end
+            end
+            if next(current) ~= nil then
+                cookie_jar[lowered_host] = current
             end
         end
     end
