@@ -54,6 +54,15 @@ intentionally conservative: choose one imported text source, search it, choose
 a book, then continue from the last selected chapter, jump to a chapter number,
 or open one chapter.
 
+The Android-style source workflow is under `Legado → Source settings`. `Source
+list` includes every imported book-source type so aggregate sources are not
+silently hidden. Selecting a source opens its actions: login/actions when a
+`loginUrl` exists, search, full JSON edit, enable/disable, and delete. `Add
+source` accepts one source object or an array from pasted JSON, or a standalone
+JSON file; matching `bookSourceUrl` entries are replaced. `Backup & restore`
+contains the Android ZIP import/export actions, while `Diagnostics` contains
+status and compatibility reports.
+
 Opening a chapter creates a lightweight reading session containing the book,
 source and chapter list. At the end of a cached or newly downloaded chapter,
 the plugin switches directly to the next chapter without returning to the
@@ -72,7 +81,7 @@ an explicit `Refresh chapter list` action for checking a serial source for new
 chapters.
 
 The reader prefetches the next five uncached chapters in the background after a
-Legado chapter is ready. `Legado → Prefetch next N chapters` changes this to
+Legado chapter is ready. `Legado → Reading → Prefetch next N chapters` changes this to
 any value from 5 through 10. Prefetch is sequential and is cancelled by normal
 chapter navigation, so it does not put a progress dialog over the page and an
 incomplete request can be retried in the foreground.
@@ -108,7 +117,8 @@ memory/cache, Base64 and Hex) to Lua, including typed `data:` responses used by
 aggregated sources. JSON-mapped remote `jsLib` helpers are downloaded and
 cached per source. `ruleToc.preUpdateJs` and `formatJs` are also executed;
 function-style `formatChapter(index, title)` hooks are supported. Source login is
-available from `Legado → Log in to a text source`: the plugin reads the source's
+available from `Legado → Source settings → Source list`, by opening a source's
+actions: the plugin reads the source's
 `loginUi`, supports text/password/number/textarea controls, offers its declared
 button actions, and runs `loginUrl` in the same QuickJS host. `source.getLoginInfo`,
 `getLoginInfoMap`, `putLoginInfo`, source variables, and HTTP Cookie/Set-Cookie state
@@ -116,6 +126,9 @@ are persisted per source in
 `<KOReader data dir>/legado/source-sessions.json`, then restored for later workers.
 This is deliberately outside the Android ZIP because the Android backup does not
 contain live authentication state; credentials must be entered once on Kindle.
+After an action finishes, its result can be dismissed to return directly to the
+same Actions list, allowing `login()`, `checkStatus()` and `logout()` to be run
+one after another without returning to the KOReader home screen.
 WebView-only JavaScript (`@webjs`), Android Java/Jsoup objects, browser/captcha-only
 login, and image/audio features remain explicit unsupported capabilities.
 The session JSON is permission-restricted where the KOReader filesystem supports it,

@@ -44,27 +44,30 @@ Kindle 运行时实现，但仍可用报告提前识别耗时或依赖 Android �
 将 `plugin/legado.koplugin` 复制到 KOReader 的 `plugins/` 目录后重启
 KOReader。书架现在位于 KOReader 主菜单页：打开菜单图标后选择 `Legado bookshelf`
 即可进入；在 `Legado → Open bookshelf` 也保留了同一个入口。还可以在 KOReader
-的手势/快捷键设置中绑定 `Legado: open bookshelf`。Android 备份导入、导出当前
-状态、书源搜索和登录仍位于 `Legado` 子菜单中。再次导入时旧状态会被移动到
-`.previous` 目录保留。
+的手势/快捷键设置中绑定 `Legado: open bookshelf`。`Legado → Source settings →
+Source list` 会列出备份中的全部书源；点选书源后可执行登录/Actions、搜索、完整
+JSON 修改、启用/禁用和删除。`Source settings → Add source` 支持粘贴单个书源或
+书源数组，也支持从 JSON 文件导入；相同 `bookSourceUrl` 会更新原书源。备份入口
+已集中到 `Legado → Backup & restore`，诊断信息位于 `Diagnostics`。再次导入或
+编辑书源时旧状态会被移动到 `.previous` 目录保留。
 
 在 KPW4 上的最小使用流程：先安装能在该设备固件上运行的 KOReader，把
 整个 `plugin/legado.koplugin/` 目录复制到
 `/mnt/us/koreader/plugins/`，重启 KOReader；再通过 USB 把 Android 导出的
-备份 ZIP 放到 Kindle，进入 `Legado → Import Android backup`。搜索书源时
+备份 ZIP 放到 Kindle，进入 `Legado → Backup & restore → Import Android backup`。搜索书源时
 Kindle 需要自己的 Wi-Fi；HTTPS 会使用 KOReader 自带的 LuaSec（若该构建
 没有 HTTPS 模块，插件会明确提示）。
 
 当前已经接入文本书源的搜索、书籍信息、目录分页、正文分页和阅读闭环；单章会
 生成干净的 UTF-8 TXT，整本书会同时生成带原生目录的 EPUB 和 TXT。选择章节后会
 建立 Legado 阅读会话：翻到章节末尾会直接切换到下一章，不必退回书架；阅读器菜单
-中也提供目录、上一章、下一章。连载读到已知目录末尾时会刷新目录，若源已发布新章
+中也提供目录、上一章、下一章。阅读相关操作位于 `Legado → Reading`。连载读到已知目录末尾时会刷新目录，若源已发布新章
 则继续打开新章。正常阅读只按需下载当前章，不要求先下载全本。目录页支持
 继续阅读、按章节号跳转，并会自动刷新旧版本留下的 HTML TXT 缓存。整本下载改为
 逐章执行，显示可取消的章节进度；已经缓存的章节会跳过，取消后再次下载可以续传。
 阅读会话会把 KOReader 的标准“目录”入口重定向到 Legado 章节列表（仅对当前
 Legado 章节生效，普通书籍仍使用 KOReader 原生目录），并在打开章节后后台预载
-后续未缓存的章节。默认预载 5 章，可在阅读器的 `Legado → Prefetch next N chapters`
+后续未缓存的章节。默认预载 5 章，可在阅读器的 `Legado → Reading → Prefetch next N chapters`
 中调整为 5–10 章；预载请求按章顺序执行，不会用进度弹窗遮挡当前阅读。
 阅读中的目录直接使用已保存的本地章节列表，不再为打开目录重复请求网络书源；
 目录菜单中的“Refresh chapter list”才会联网检查连载更新。

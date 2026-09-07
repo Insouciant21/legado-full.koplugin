@@ -765,12 +765,23 @@ function Runtime.login_source(source, values, action)
             verified = checked ~= nil
         end
         local state = js_engine:export_source_state(source)
+        local login_info = {}
+        local login_info_ok, decoded_login_info = pcall(
+            rapidjson.decode,
+            tostring(state.loginInfo or "{}")
+        )
+        if login_info_ok and type(decoded_login_info) == "table" then
+            login_info = decoded_login_info
+        end
         return {
             action = login_invocation(action),
             verified = verified,
             cookieCount = cookie_count(Network.export_cookies()),
             loginInfoSaved = state.loginInfo ~= nil and state.loginInfo ~= "",
             sourceVariableSaved = state.sourceVariable ~= nil,
+            -- Feed values changed by login()/logout() into the next action
+            -- instead of overwriting them with the previous form contents.
+            loginInfo = login_info,
         }
     end)
 end

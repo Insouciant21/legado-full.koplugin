@@ -1,6 +1,7 @@
 -- Source catalog and capability reporting for Android bookSource.json data.
 
 local Backup = require("legado/backup")
+local rapidjson = require("rapidjson")
 
 local SourceCatalog = {}
 SourceCatalog.__index = SourceCatalog
@@ -97,6 +98,66 @@ function SourceCatalog:find_for_book(book)
         end
     end
     return nil, "book source for bookshelf entry not found"
+end
+
+function SourceCatalog:replace_sources(sources)
+    if type(sources) ~= "table" then
+        return nil, "book sources must be an array"
+    end
+    -- rapidjson treats a plain empty Lua table as an object. Preserve the
+    -- Android bookSource.json array shape when the last source is removed.
+    local encoded_sources = sources
+    if #sources == 0 then
+        encoded_sources = rapidjson.array()
+    end
+    local result, err = Backup.update_json_member(
+        self.state_root,
+        "bookSource.json",
+        encoded_sources
+    )
+    if not result then
+        return nil, err
+    end
+    -- The old bundle contains the old member bytes and manifest. Force a
+    -- reload so a source action immediately sees the edited list.
+    self.bundle = nil
+    return true
+end
+
+function SourceCatalog:update_source(index, source)
+    local sources, err = self:list()
+    if not sources then
+        return nil, err
+    end
+    if type(index) ~= "number" or index < 1 or index > #sources then
+        return nil, "book source index is out of range"
+    end
+    if type(source) ~= "table" then
+        return nil, "book source must be an object"
+    end
+    local updated = {}
+    for position, value in ipairs(sources) do
+        updated[position] = value
+    end
+    updated[index] = source
+    return self:replace_sources(updated)
+end
+
+function SourceCatalog:remove_source(index)
+    local sources, err = self:list()
+    if not sources then
+        return nil, err
+    end
+    if type(index) ~= "number" or index < 1 or index > #sources then
+        return nil, "book source index is out of range"
+    end
+    local updated = {}
+    for position, value in ipairs(sources) do
+        if position ~= index then
+            updated[#updated + 1] = value
+        end
+    end
+    return self:replace_sources(updated)
 end
 
 function SourceCatalog:compatibility()

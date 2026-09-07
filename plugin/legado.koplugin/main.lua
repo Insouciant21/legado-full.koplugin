@@ -1,4 +1,5 @@
 local _ = require("gettext")
+local ConfirmBox = require("ui/widget/confirmbox")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
@@ -10,6 +11,7 @@ local Trapper = require("ui/trapper")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local T = require("ffi/util").template
+local rapidjson = require("rapidjson")
 
 -- Keep plugin modules under a namespaced directory. KOReader temporarily adds
 -- the plugin directory to package.path while loading the entry point.
@@ -82,8 +84,8 @@ end
 function Legado:addToMainMenu(menu_items)
     -- The bookshelf is the reader-facing home screen. Keep it as a first
     -- level entry so users do not have to remember that it lives under the
-    -- source/backup tools submenu. The nested Legado entry remains the place
-    -- for search, login, backup and diagnostics.
+    -- source/backup tools submenu. The nested Legado entry groups reading,
+    -- source settings, backup/restore and diagnostics.
     menu_items.legado_bookshelf = {
         text = _("Legado bookshelf"),
         sorting_hint = "main",
@@ -117,9 +119,9 @@ function Legado:addToMainMenu(menu_items)
     menu_items.legado = {
         text = self.fullname,
         sorting_hint = "main",
-        sub_item_table_func = function()
-            return self:getSubMenuItems()
-        end,
+        -- Menu:onMenuSelect only traverses a concrete sub_item_table. A
+        -- sub_item_table_func merely makes an item look expandable.
+        sub_item_table = self:getSubMenuItems(),
     }
 end
 
@@ -132,17 +134,97 @@ function Legado:getSubMenuItems()
             end,
         },
         {
+            text = _("Source settings"),
+            sub_item_table = self:getSourceSettingsMenuItems(),
+        },
+        {
+            text = _("Backup & restore"),
+            sub_item_table = self:getBackupMenuItems(),
+        },
+        {
+            text = _("Diagnostics"),
+            sub_item_table = self:getDiagnosticsMenuItems(),
+        },
+    }
+    local session = self:getActiveReaderSession()
+    if session then
+        table.insert(items, 2, {
+            text = _("Reading"),
+            sub_item_table = self:getReadingMenuItems(),
+        })
+    end
+    return items
+end
+
+function Legado:getReadingMenuItems()
+    return {
+        {
+            text = _("Open current chapter list"),
+            callback = function()
+                self:showReaderChapterList()
+            end,
+        },
+        {
+            text = _("Next chapter"),
+            callback = function()
+                self:advanceReaderChapter(1)
+            end,
+        },
+        {
+            text = _("Previous chapter"),
+            callback = function()
+                self:advanceReaderChapter(-1)
+            end,
+        },
+        {
+            text = T(_("Prefetch next %1 chapters"), self.storage:get_prefetch_count()),
+            callback = function()
+                self:choosePrefetchCount()
+            end,
+        },
+    }
+end
+
+function Legado:getSourceSettingsMenuItems()
+    return {
+        {
+            text = _("Source list"),
+            callback = function()
+                self:showSourceList()
+            end,
+        },
+        {
+            text = _("Add source"),
+            sub_item_table = self:getAddSourceMenuItems(),
+        },
+        {
             text = _("Search text sources"),
             callback = function()
                 self:chooseSearchSource()
             end,
         },
+    }
+end
+
+function Legado:getAddSourceMenuItems()
+    return {
         {
-            text = _("Log in to a text source"),
+            text = _("Enter source JSON"),
             callback = function()
-                self:chooseLoginSource()
+                self:showAddSourceDialog()
             end,
         },
+        {
+            text = _("Import source JSON file"),
+            callback = function()
+                self:chooseSourceJsonFile()
+            end,
+        },
+    }
+end
+
+function Legado:getBackupMenuItems()
+    return {
         {
             text = _("Import Android backup"),
             callback = function()
@@ -155,6 +237,11 @@ function Legado:getSubMenuItems()
                 self:chooseExportDirectory()
             end,
         },
+    }
+end
+
+function Legado:getDiagnosticsMenuItems()
+    return {
         {
             text = _("Show local status"),
             callback = function()
@@ -176,39 +263,12 @@ function Legado:getSubMenuItems()
             end,
         },
     }
-    local session = self:getActiveReaderSession()
-    if session then
-        table.insert(items, 1, {
-            text = _("Open current chapter list"),
-            callback = function()
-                self:showReaderChapterList()
-            end,
-        })
-        table.insert(items, 2, {
-            text = _("Next chapter"),
-            callback = function()
-                self:advanceReaderChapter(1)
-            end,
-        })
-        table.insert(items, 3, {
-            text = _("Previous chapter"),
-            callback = function()
-                self:advanceReaderChapter(-1)
-            end,
-        })
-        table.insert(items, 4, {
-            text = T(_("Prefetch next %1 chapters"), self.storage:get_prefetch_count()),
-            callback = function()
-                self:choosePrefetchCount()
-            end,
-        })
-    end
-    return items
 end
 
-function Legado:showOperationResult(message)
+function Legado:showOperationResult(message, on_dismiss)
     UIManager:show(InfoMessage:new{
         text = display_text(message),
+        dismiss_callback = on_dismiss,
     })
 end
 
@@ -680,6 +740,431 @@ function Legado:advanceReaderChapter(delta, supplied_session, seamless, already_
     return self:openReaderChapter(session, target_index, seamless ~= false)
 end
 
+local function source_display_name(source)
+    if type(source) ~= "table" then
+        return _("Unnamed source")
+    end
+    return source.bookSourceName or source.bookSourceUrl or _("Unnamed source")
+end
+
+local function source_type_label(source)
+    local source_type = tonumber(source and source.bookSourceType or 0) or 0
+    if source_type == 0 then
+        return _("Text")
+    end
+    return T(_("Type %1"), tostring(source_type))
+end
+
+local function source_has_login(source)
+    return type(source) == "table"
+        and type(source.loginUrl) == "string"
+        and source.loginUrl ~= ""
+end
+
+local function copy_source(source)
+    local copy = {}
+    for key, value in pairs(source or {}) do
+        copy[key] = value
+    end
+    return copy
+end
+
+local function validate_source(source)
+    if type(source) ~= "table" then
+        return nil, "source JSON must contain an object"
+    end
+    local name = tostring(source.bookSourceName or "")
+    local url = tostring(source.bookSourceUrl or "")
+    if name == "" then
+        return nil, "source is missing bookSourceName"
+    end
+    if url == "" then
+        return nil, "source is missing bookSourceUrl"
+    end
+    return true
+end
+
+local function decode_source_json(raw, allow_array)
+    local decoded_ok, decoded = pcall(rapidjson.decode, raw or "")
+    if not decoded_ok or type(decoded) ~= "table" then
+        return nil, "source JSON is invalid: " .. tostring(decoded)
+    end
+
+    local sources = {}
+    local looks_like_source = decoded.bookSourceName ~= nil
+        or decoded.bookSourceUrl ~= nil
+        or decoded.searchUrl ~= nil
+        or decoded.ruleSearch ~= nil
+    if looks_like_source then
+        sources[1] = decoded
+    elseif allow_array then
+        for index, source in ipairs(decoded) do
+            local valid, validation_err = validate_source(source)
+            if not valid then
+                return nil, "source " .. tostring(index) .. ": " .. validation_err
+            end
+            sources[#sources + 1] = source
+        end
+    else
+        return nil, "source JSON must contain one source object"
+    end
+    if #sources == 0 then
+        return nil, "source JSON contains no sources"
+    end
+    for index, source in ipairs(sources) do
+        local valid, validation_err = validate_source(source)
+        if not valid then
+            return nil, "source " .. tostring(index) .. ": " .. validation_err
+        end
+        if source.bookSourceType == nil then
+            source.bookSourceType = 0
+        end
+    end
+    return sources
+end
+
+function Legado:mergeSourceJson(raw)
+    local incoming, decode_err = decode_source_json(raw, true)
+    if not incoming then
+        return nil, decode_err
+    end
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local sources, source_err = catalog:list()
+    if not sources then
+        return nil, source_err
+    end
+
+    local added = 0
+    local replaced = 0
+    for _, source in ipairs(incoming) do
+        local source_url = tostring(source.bookSourceUrl or "")
+        local existing_index
+        for index, existing in ipairs(sources) do
+            if type(existing) == "table"
+                    and tostring(existing.bookSourceUrl or "") == source_url then
+                existing_index = index
+                break
+            end
+        end
+        if existing_index then
+            sources[existing_index] = source
+            replaced = replaced + 1
+        else
+            sources[#sources + 1] = source
+            added = added + 1
+        end
+    end
+
+    local _, save_err = catalog:replace_sources(sources)
+    if save_err then
+        return nil, save_err
+    end
+    return {
+        added = added,
+        replaced = replaced,
+        total = #sources,
+    }
+end
+
+function Legado:importSourceJson(raw, retry_input)
+    self:runWorker(_("Saving source list…"), function()
+        return self:mergeSourceJson(raw)
+    end, function(result)
+        self:showOperationResult(string.format(
+            _("Source list saved.\nAdded: %s\nReplaced: %s\nTotal: %s"),
+            tostring(result and result.added or 0),
+            tostring(result and result.replaced or 0),
+            tostring(result and result.total or 0)
+        ), function()
+            self:showSourceList()
+        end)
+    end, {
+        on_failure = function(error_message)
+            self:showOperationResult(
+                _("Cannot save source list:\n") .. tostring(error_message),
+                function()
+                    if retry_input then
+                        self:showAddSourceDialog(retry_input)
+                    else
+                        self:showSourceList()
+                    end
+                end
+            )
+        end,
+    })
+end
+
+function Legado:showAddSourceDialog(initial_input)
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Add source"),
+        description = _("Paste one source object or an array of source objects in JSON."),
+        input = initial_input or '{\n  "bookSourceName": "Example",\n  "bookSourceUrl": "https://example.invalid",\n  "bookSourceType": 0\n}',
+        allow_newline = true,
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local raw = dialog:getInputValue() or ""
+                        UIManager:close(dialog)
+                        self:importSourceJson(raw, raw)
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function Legado:chooseSourceJsonFile()
+    local chooser = PathChooser:new{
+        title = _("Choose a source JSON file"),
+        select_directory = false,
+        select_file = true,
+        path = self.storage:get_default_path(),
+        file_filter = function(filename)
+            return tostring(filename or ""):lower():match("%.json$") ~= nil
+        end,
+        onConfirm = function(filename)
+            local file, open_err = io.open(filename, "rb")
+            if not file then
+                self:showOperationResult(_("Cannot open source file:\n") .. tostring(open_err))
+                return
+            end
+            local raw = file:read("*a") or ""
+            file:close()
+            self:importSourceJson(raw)
+        end,
+    }
+    UIManager:show(chooser)
+end
+
+function Legado:showSourceList()
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local sources, err = catalog:list()
+    if not sources then
+        self:showOperationResult(_("Cannot load source list:\n") .. tostring(err))
+        return
+    end
+    local items = {}
+    for index, source in ipairs(sources) do
+        if type(source) == "table" then
+            local enabled = source.enabled == false and _("Disabled") or _("Enabled")
+            items[#items + 1] = {
+                text = display_text(source_display_name(source)),
+                mandatory = enabled .. " | " .. source_type_label(source),
+                source = source,
+                source_index = index,
+            }
+        end
+    end
+    if #items == 0 then
+        self:showOperationResult(_("The source list is empty. Add a source or import an Android backup."))
+        return
+    end
+    local source_menu
+    source_menu = Menu:new{
+        title = _("Source list"),
+        item_table = items,
+        items_per_page = 12,
+        onMenuSelect = function(menu, item)
+            -- Keep the list as the parent menu. The selected source's action
+            -- menu is shown above it, so the hardware Back gesture returns to
+            -- this list instead of the KOReader home screen.
+            self:showSourceActions(item.source, item.source_index, menu)
+        end,
+    }
+    self._source_list_menu = source_menu
+    UIManager:show(source_menu)
+end
+
+function Legado:showSourceActions(source, source_index, source_list_menu)
+    local items = {}
+    if source_has_login(source) then
+        items[#items + 1] = {
+            text = _("Login / actions"),
+            keep_menu = true,
+            callback = function()
+                self:showSourceLogin(source)
+            end,
+        }
+    end
+    if type(source.searchUrl) == "string" and source.searchUrl ~= "" then
+        items[#items + 1] = {
+            text = _("Search with this source"),
+            keep_menu = true,
+            callback = function()
+                self:showSearchDialog(source)
+            end,
+        }
+    end
+    items[#items + 1] = {
+        text = _("Edit source"),
+        callback = function()
+            self:showEditSourceDialog(source, source_index)
+        end,
+    }
+    items[#items + 1] = {
+        text = source.enabled == false and _("Enable source") or _("Disable source"),
+        callback = function()
+            local updated = copy_source(source)
+            updated.enabled = source.enabled == false
+            self:runSourceMutation(source_index, updated, _("Updating source…"), function()
+                return updated.enabled and _("Source enabled.") or _("Source disabled.")
+            end)
+        end,
+    }
+    items[#items + 1] = {
+        text = _("Delete source"),
+        callback = function()
+            self:confirmDeleteSource(source_index, source)
+        end,
+    }
+
+    local action_menu
+    action_menu = Menu:new{
+        title = T(_("Source actions: %1"), display_text(source_display_name(source))),
+        item_table = items,
+        items_per_page = 12,
+        onMenuSelect = function(menu, item)
+            -- Keep the source actions menu underneath login/search dialogs so
+            -- backing out of those flows returns to the selected source.
+            if not item.keep_menu then
+                UIManager:close(menu)
+                if source_list_menu then
+                    UIManager:close(source_list_menu)
+                end
+            end
+            if item.callback then
+                item.callback()
+            end
+        end,
+    }
+    UIManager:show(action_menu)
+end
+
+function Legado:runSourceMutation(source_index, updated_source, message, success_message)
+    self:runWorker(message, function()
+        local catalog = SourceCatalog:new(self.storage:get_state_root())
+        local _, err = catalog:update_source(source_index, updated_source)
+        if err then return nil, err end
+        return true
+    end, function()
+        self:showOperationResult(success_message(), function()
+            self:showSourceList()
+        end)
+    end, {
+        on_failure = function(error_message)
+            self:showOperationResult(
+                _("Source operation failed:\n") .. tostring(error_message),
+                function()
+                    self:showSourceList()
+                end
+            )
+        end,
+    })
+end
+
+function Legado:confirmDeleteSource(source_index, source)
+    UIManager:show(ConfirmBox:new{
+        text = T(_("Delete source %1?"), display_text(source_display_name(source))),
+        ok_text = _("Delete"),
+        ok_callback = function()
+            self:runWorker(_("Deleting source…"), function()
+                local catalog = SourceCatalog:new(self.storage:get_state_root())
+                local _, err = catalog:remove_source(source_index)
+                if err then return nil, err end
+                return true
+            end, function()
+                self:showOperationResult(_("Source deleted."), function()
+                    self:showSourceList()
+                end)
+            end, {
+                on_failure = function(error_message)
+                    self:showOperationResult(
+                        _("Cannot delete source:\n") .. tostring(error_message),
+                        function()
+                            self:showSourceList()
+                        end
+                    )
+                end,
+            })
+        end,
+    })
+end
+
+function Legado:showEditSourceDialog(source, source_index)
+    local encoded_ok, encoded = pcall(rapidjson.encode, source)
+    if not encoded_ok then
+        self:showOperationResult(_("Cannot encode source JSON:\n") .. tostring(encoded))
+        return
+    end
+    local dialog
+    dialog = InputDialog:new{
+        title = T(_("Edit source: %1"), display_text(source_display_name(source))),
+        description = _("Edit the complete source object as JSON."),
+        input = encoded,
+        allow_newline = true,
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local raw = dialog:getInputValue() or ""
+                        local _, validation_err = decode_source_json(raw, false)
+                        if validation_err then
+                            self:showOperationResult(_("Invalid source JSON:\n") .. validation_err)
+                            return
+                        end
+                        UIManager:close(dialog)
+                        self:runWorker(_("Updating source…"), function()
+                            local updated, decode_err = decode_source_json(raw, false)
+                            if not updated then return nil, decode_err end
+                            local catalog = SourceCatalog:new(self.storage:get_state_root())
+                            local _, update_err = catalog:update_source(source_index, updated[1])
+                            if update_err then return nil, update_err end
+                            return true
+                        end, function()
+                            self:showOperationResult(_("Source updated."), function()
+                                self:showSourceList()
+                            end)
+                        end, {
+                            on_failure = function(error_message)
+                                self:showOperationResult(
+                                    _("Cannot update source:\n") .. tostring(error_message),
+                                    function()
+                                        self:showSourceList()
+                                    end
+                                )
+                            end,
+                        })
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
 function Legado:chooseLoginSource()
     local catalog = SourceCatalog:new(self.storage:get_state_root())
     local sources, err = catalog:list()
@@ -919,26 +1404,95 @@ function Legado:showSourceLoginActions(source, buttons, values)
         item_table = items,
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
-            self:runSourceLogin(source, values, item.action, item.text)
+            self:runSourceLogin(source, values, item.action, item.text, {
+                keep_actions = true,
+                buttons = buttons,
+            })
         end,
     }
     UIManager:show(action_menu)
 end
 
-function Legado:runSourceLogin(source, values, action, label)
+function Legado:showSourceActionResult(source, buttons, values, message)
+    self:showOperationResult(message, function()
+        -- Keep the login form's action loop alive. Dismissing the result must
+        -- not send the user back to KOReader's home screen after every click.
+        self:showSourceLoginActions(source, buttons, values)
+    end)
+end
+
+local function login_values_from_result(result, fallback)
+    local value = result and result.loginInfo
+    if type(value) == "table" then
+        return value
+    end
+    if type(value) == "string" and value ~= "" then
+        local decoded_ok, decoded = pcall(rapidjson.decode, value)
+        if decoded_ok and type(decoded) == "table" then
+            return decoded
+        end
+    end
+    return fallback
+end
+
+function Legado:runSourceLogin(source, values, action, label, context)
+    context = context or {}
+    local function show_result(message, next_values)
+        if context.keep_actions then
+            self:showSourceActionResult(
+                source,
+                context.buttons,
+                next_values or values,
+                message
+            )
+        else
+            self:showOperationResult(message)
+        end
+    end
+
     self:runWorker(T(_("Running source action: %1"), label or action or _("login")), function()
         local Runtime = require("legado/runtime")
         local result, err = Runtime.login_source(source, values, action)
         if not result then error(err or "source login failed") end
         return result
     end, function(result)
-        local verified = result and result.verified and ("\n" .. _("Login check passed.")) or ""
-        self:showOperationResult(string.format(
-            _("Source action completed.%s\nCookies saved: %s"),
-            verified,
-            tostring(result and result.cookieCount or 0)
-        ))
-    end)
+        local lines = {
+            string.format(
+                _("Source action completed: %s"),
+                display_text(label or (result and result.action) or action or _("login"))
+            ),
+            string.format(
+                _("Cookies saved: %s"),
+                tostring(result and result.cookieCount or 0)
+            ),
+        }
+        if result and result.verified then
+            lines[#lines + 1] = _("Login check passed.")
+        end
+        if result and result.loginInfoSaved then
+            lines[#lines + 1] = _("Login data saved.")
+        end
+        if result and result.sourceVariableSaved then
+            lines[#lines + 1] = _("Source variables saved.")
+        end
+        if context.keep_actions then
+            lines[#lines + 1] = _("Tap to continue with Actions.")
+        end
+        show_result(table.concat(lines, "\n"), login_values_from_result(result, values))
+    end, {
+        on_failure = function(error_message)
+            show_result(string.format(
+                _("Source action failed: %s\n\n%s"),
+                display_text(label or action or _("login")),
+                tostring(error_message or "unknown error")
+            ))
+        end,
+        on_cancel = function()
+            if context.keep_actions then
+                self:showSourceLoginActions(source, context.buttons, values)
+            end
+        end,
+    })
 end
 
 function Legado:chooseSearchSource()

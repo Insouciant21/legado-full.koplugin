@@ -338,6 +338,31 @@ function Backup.materialize(bundle, state_root)
     }
 end
 
+-- Replace one JSON member while preserving every other Android backup member.
+-- Source editing uses the same staged-directory activation as import, so a
+-- power loss cannot leave bookSource.json and manifest.json out of sync.
+function Backup.update_json_member(state_root, filename, value)
+    if not json_files[filename] then
+        return fail("member is not an editable JSON file: " .. tostring(filename))
+    end
+    local bundle, err = Backup.read_state(state_root)
+    if not bundle then
+        return fail(err)
+    end
+    local encoded_ok, encoded = pcall(rapidjson.encode, value)
+    if not encoded_ok or type(encoded) ~= "string" then
+        return fail("cannot encode JSON member: " .. tostring(filename))
+    end
+    bundle.members[filename] = encoded
+    bundle.parsed_json[filename] = value
+    local result, materialize_err = Backup.materialize(bundle, state_root)
+    if not result then
+        return fail(materialize_err)
+    end
+    result.member = filename
+    return result
+end
+
 local function read_manifest(state_root)
     local data, err = read_file(state_root .. "/manifest.json")
     if not data then
