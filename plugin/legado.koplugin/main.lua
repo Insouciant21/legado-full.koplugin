@@ -1435,6 +1435,46 @@ local function login_values_from_result(result, fallback)
     return fallback
 end
 
+local function append_source_result(lines, title, value)
+    if value == nil then
+        return
+    end
+    local text = tostring(value)
+    if text == "" then
+        return
+    end
+    -- A malformed source should not be able to fill an InfoMessage with a
+    -- complete HTTP response.  Normal status messages are much shorter.
+    local maximum = 4096
+    if #text > maximum then
+        text = text:sub(1, maximum) .. "\n[...]"
+    end
+    lines[#lines + 1] = title .. "\n" .. text
+end
+
+local function append_source_notifications(lines, notifications)
+    if type(notifications) ~= "table" or #notifications == 0 then
+        return
+    end
+    local messages = {}
+    for _, notification in ipairs(notifications) do
+        local operation = ""
+        local message = notification
+        if type(notification) == "table" then
+            operation = tostring(notification.operation or "")
+            message = notification.message
+        end
+        message = tostring(message or "")
+        if message ~= "" then
+            local prefix = operation == "toast" and "Toast" or "Log"
+            messages[#messages + 1] = prefix .. ": " .. message
+        end
+    end
+    if #messages > 0 then
+        append_source_result(lines, _("Source messages:"), table.concat(messages, "\n"))
+    end
+end
+
 function Legado:runSourceLogin(source, values, action, label, context)
     context = context or {}
     local function show_result(message, next_values)
@@ -1466,6 +1506,9 @@ function Legado:runSourceLogin(source, values, action, label, context)
                 tostring(result and result.cookieCount or 0)
             ),
         }
+        append_source_result(lines, _("Action return value:"), result and result.actionResult)
+        append_source_result(lines, _("Login check return value:"), result and result.loginCheckResult)
+        append_source_notifications(lines, result and result.notifications)
         if result and result.verified then
             lines[#lines + 1] = _("Login check passed.")
         end

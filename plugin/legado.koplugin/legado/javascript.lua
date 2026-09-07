@@ -387,7 +387,21 @@ function Javascript:new()
     object.callback = nil
     object.output_buffer = nil
     object.output_size = 0
+    object.notifications = {}
     return object
+end
+
+-- Android sources commonly report the outcome of a login action through
+-- java.toast()/java.log() instead of returning a value.  Keep those messages
+-- in the worker until Runtime.login_source can pass them back to the UI.
+function Javascript:clear_notifications()
+    self.notifications = {}
+end
+
+function Javascript:take_notifications()
+    local messages = self.notifications or {}
+    self.notifications = {}
+    return messages
 end
 
 function Javascript:ensure_output_buffer(size)
@@ -774,8 +788,20 @@ function Javascript:host_call(operation, args, source, context)
         end
         return { body = body }
     elseif operation == "log" or operation == "toast" then
-        -- Source logs and toasts are deliberately quiet in the worker.  A
-        -- broken source must not corrupt the JSON result returned to KOReader.
+        -- Source-side status is often communicated only through a toast or a
+        -- log call.  Returning it to the UI is more useful than silently
+        -- discarding it, and the bounded list prevents a noisy source from
+        -- consuming the Kindle's limited memory.
+        local message = trim(first == nil and "" or first)
+        if message ~= "" then
+            self.notifications = self.notifications or {}
+            if #self.notifications < 32 then
+                self.notifications[#self.notifications + 1] = {
+                    operation = operation,
+                    message = message,
+                }
+            end
+        end
         return ""
     elseif operation == "unsupported" then
         return nil, "Legado JavaScript capability is unavailable on Kindle: " .. tostring(first or "unknown")

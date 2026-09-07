@@ -725,6 +725,7 @@ function Runtime.login_source(source, values, action)
         values = {}
     end
     return with_session(source, function()
+        js_engine:clear_notifications()
         js_engine:set_login_info(source, values)
         local source_variable = js_engine:source_variable(source, {})
         local context = context_for(source, {
@@ -748,8 +749,10 @@ function Runtime.login_source(source, values, action)
         end
 
         local verified = false
+        local check_result
+        local check_err
         if trim(source.loginCheckJs or "") ~= "" then
-            local checked, check_err = evaluate_script(
+            check_result, check_err = evaluate_script(
                 source,
                 source.loginCheckJs,
                 context,
@@ -758,11 +761,11 @@ function Runtime.login_source(source, values, action)
             if check_err then
                 return nil, "source login check failed: " .. tostring(check_err)
             end
-            local checked_text = tostring(checked or ""):lower()
-            if checked == false or checked_text == "false" or checked_text == "0" then
+            local checked_text = tostring(check_result or ""):lower()
+            if check_result == false or checked_text == "false" or checked_text == "0" then
                 return nil, "source login check returned false"
             end
-            verified = checked ~= nil
+            verified = check_result ~= nil
         end
         local state = js_engine:export_source_state(source)
         local login_info = {}
@@ -773,8 +776,15 @@ function Runtime.login_source(source, values, action)
         if login_info_ok and type(decoded_login_info) == "table" then
             login_info = decoded_login_info
         end
+        local notifications = js_engine:take_notifications()
         return {
             action = login_invocation(action),
+            -- A source action can return a useful status string/object (for
+            -- example checkStatus()).  Preserve it instead of reducing every
+            -- successful action to a generic boolean.
+            actionResult = stringify(login_result),
+            loginCheckResult = stringify(check_result),
+            notifications = notifications,
             verified = verified,
             cookieCount = cookie_count(Network.export_cookies()),
             loginInfoSaved = state.loginInfo ~= nil and state.loginInfo ~= "",
