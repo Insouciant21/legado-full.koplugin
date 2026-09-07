@@ -56,6 +56,26 @@ local function trim(value)
     return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function is_expected_fallback_log(operation, message)
+    if operation ~= "log" then
+        return false
+    end
+    -- The aggregate source first tries Android's encrypted cache API and
+    -- deliberately falls back to source.putLoginInfo() when that API is not
+    -- present.  Its catch block logs the expected exception; showing it as a
+    -- user-facing error makes a successful Kindle fallback look broken.
+    local lowered = tostring(message or ""):lower()
+    return lowered:find(
+        "legado javascript capability is unavailable on kindle: createsymmetriccrypto",
+        1,
+        true
+    ) ~= nil or lowered:find(
+        "legado javascript capability is unavaible on kindle: createsymmetriccrypto",
+        1,
+        true
+    ) ~= nil
+end
+
 local function source_directory()
     local source = debug.getinfo(1, "S").source or ""
     source = source:gsub("^@", "")
@@ -793,7 +813,7 @@ function Javascript:host_call(operation, args, source, context)
         -- discarding it, and the bounded list prevents a noisy source from
         -- consuming the Kindle's limited memory.
         local message = trim(first == nil and "" or first)
-        if message ~= "" then
+        if message ~= "" and not is_expected_fallback_log(operation, message) then
             self.notifications = self.notifications or {}
             if #self.notifications < 32 then
                 self.notifications[#self.notifications + 1] = {
