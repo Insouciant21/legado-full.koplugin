@@ -1,0 +1,21 @@
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+artifacts/
+testdata/
+*.zip
+*.sqlite
+*.sqlite3
+
+# Native libraries are rebuilt by make plugin-zip for the target ABI.
+*.so
+
+# Local KPW4 rendering captures are development artifacts.
+/legado-emoji-*.png
