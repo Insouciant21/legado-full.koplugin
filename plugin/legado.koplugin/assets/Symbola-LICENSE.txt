@@ -1,0 +1,9 @@
+Symbola_hint.ttf is the Symbola font by George Douros.
+
+Copyright (C) 2007-2015 George Douros.
+
+The font is free for any use; it may be opened, edited, modified, regenerated,
+packaged and redistributed.
+
+This copy is used as a monochrome emoji/symbol fallback for KOReader on
+Kindle. Its outline glyphs are intentionally suitable for an e-ink display.
