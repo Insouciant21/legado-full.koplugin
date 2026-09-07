@@ -750,6 +750,30 @@ local function dispatch_mouse_click(client, event)
     })
 end
 
+local function dispatch_mouse_wheel(client, x, y, delta_x, delta_y)
+    if not x or not y then return end
+    if math.abs(delta_x or 0) < 0.01 and math.abs(delta_y or 0) < 0.01 then
+        return
+    end
+    -- A wheel event is an incremental scroll operation.  Unlike a synthetic
+    -- touch sequence it has no pointer-down state that Chromium can carry
+    -- into the next Kindle gesture, which is important on the KPW4 content
+    -- shell where repeated touch drags may be interpreted from scroll origin.
+    client:call("Input.dispatchMouseEvent", {
+        type = "mouseMoved",
+        x = x,
+        y = y,
+    })
+    client:call("Input.dispatchMouseEvent", {
+        type = "mouseWheel",
+        x = x,
+        y = y,
+        deltaX = delta_x or 0,
+        deltaY = delta_y or 0,
+    })
+    socket.sleep(0.01)
+end
+
 local function dispatch_touch_swipe(client, event)
     local start_x, start_y = browser_input_point(
         client, event.start_x or event.x, event.start_y or event.y
@@ -772,55 +796,81 @@ local function dispatch_touch_swipe(client, event)
     dispatch_touch_point(client, "touchEnd")
 end
 
-local function dispatch_touch_pan(client, event, touch_active)
+local function dispatch_scroll_swipe(client, event)
+    local start_x, start_y = browser_input_point(
+        client, event.start_x or event.x, event.start_y or event.y
+    )
+    local end_x, end_y = browser_input_point(
+        client, event.end_x or event.x, event.end_y or event.y
+    )
+    if not start_x or not start_y or not end_x or not end_y then return end
+    local delta_x = start_x - end_x
+    local delta_y = start_y - end_y
+    -- Keep horizontal swipes as real touch gestures for carousels and other
+    -- source pages that intentionally listen for touch events. Vertical
+    -- swipes, which are the normal reading-page scroll operation, use an
+    -- incremental wheel event so every gesture starts at the current offset.
+    if math.abs(delta_y) >= math.abs(delta_x) then
+        dispatch_mouse_wheel(client, start_x, start_y, delta_x, delta_y)
+    else
+        dispatch_touch_swipe(client, event)
+    end
+end
+
+local function dispatch_scroll_pan(client, event, pan_position)
     local x, y = browser_input_point(client, event.x, event.y)
-    if not x or not y then return touch_active end
-    if not touch_active then
+    if not x or not y then return pan_position end
+    if not pan_position then
         local start_x, start_y = browser_input_point(
             client, event.start_x or event.x, event.start_y or event.y
         )
-        if not start_x or not start_y then return touch_active end
-        dispatch_touch_point(client, "touchStart", start_x, start_y)
-        touch_active = true
+        if not start_x or not start_y then return pan_position end
+        pan_position = { x = start_x, y = start_y }
     end
-    dispatch_touch_point(client, "touchMove", x, y)
-    return touch_active
+    dispatch_mouse_wheel(
+        client,
+        x,
+        y,
+        pan_position.x - x,
+        pan_position.y - y
+    )
+    pan_position.x = x
+    pan_position.y = y
+    return pan_position
 end
 
-local function dispatch_touch_pan_release(client, event, touch_active)
-    if not touch_active then return false end
+local function dispatch_scroll_pan_release(client, event, pan_position)
+    if not pan_position then return nil end
     local x, y = browser_input_point(client, event.x, event.y)
     if x and y then
-        dispatch_touch_point(client, "touchMove", x, y)
+        dispatch_mouse_wheel(
+            client,
+            x,
+            y,
+            pan_position.x - x,
+            pan_position.y - y
+        )
     end
-    dispatch_touch_point(client, "touchEnd")
-    return false
+    return nil
 end
 
-local function forward_browser_inputs(client, token, touch_active)
+local function forward_browser_inputs(client, token, pan_position)
     for _, event in ipairs(BrowserInput.receive(token)) do
         local kind = tostring(event.kind or "")
         if kind == "pan" then
-            touch_active = dispatch_touch_pan(client, event, touch_active)
+            pan_position = dispatch_scroll_pan(client, event, pan_position)
         elseif kind == "pan_release" then
-            touch_active = dispatch_touch_pan_release(client, event, touch_active)
+            pan_position = dispatch_scroll_pan_release(client, event, pan_position)
         elseif kind == "swipe" then
-            -- A new gesture must not leave the previous touch contact held.
-            if touch_active then
-                dispatch_touch_point(client, "touchEnd")
-                touch_active = false
-            end
-            dispatch_touch_swipe(client, event)
+            pan_position = nil
+            dispatch_scroll_swipe(client, event)
         elseif kind == "tap" or kind == "hold" or kind == "hold_release"
                 or kind == "gesture" then
-            if touch_active then
-                dispatch_touch_point(client, "touchEnd")
-                touch_active = false
-            end
+            pan_position = nil
             dispatch_mouse_click(client, event)
         end
     end
-    return touch_active
+    return pan_position
 end
 
 local function add_done_button(client)
@@ -1019,7 +1069,7 @@ function Browser.await(url, options)
     local deadline = now() + (tonumber(options.timeout) or DEFAULT_TIMEOUT)
     local last_url = ""
     local injected = false
-    local touch_active = false
+    local pan_position
     while now() < deadline do
         if not browser_process_alive(pid) then
             return finish(nil, "Kindle browser exited before the action completed")
@@ -1037,7 +1087,7 @@ function Browser.await(url, options)
         -- the Chromium client raised as Awesome/KPP may reassert its own
         -- stacking order after a navigation or a virtual-keyboard event.
         promote_browser_window(now() + 0.15, hidden_kpp_windows)
-        touch_active = forward_browser_inputs(client, token, touch_active)
+        pan_position = forward_browser_inputs(client, token, pan_position)
         local done = client:evaluate("window.__legado_browser_done === true")
         if done == true then
             local result, result_err = document_result(client)
