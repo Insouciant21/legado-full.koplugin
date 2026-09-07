@@ -8,6 +8,7 @@ local MultiInputDialog = require("ui/widget/multiinputdialog")
 local PathChooser = require("ui/widget/pathchooser")
 local ProgressbarDialog = require("ui/widget/progressbardialog")
 local Trapper = require("ui/trapper")
+local TrapWidget = require("ui/widget/trapwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local T = require("ffi/util").template
@@ -287,6 +288,23 @@ end
 function Legado:runWorker(message, task, on_success, options)
     options = options or {}
     local trap_widget = options.trap_widget
+    if options.interactive and not trap_widget then
+        -- A source action may open the Kindle Chromium bridge and wait for
+        -- real user input.  Trapper's normal TrapWidget interprets the first
+        -- touch as "dismiss/cancel the worker", even when Chromium is the
+        -- visible foreground client.  Keep a full-screen guard so the
+        -- underlying KOReader UI cannot also consume the touch, but make the
+        -- guard non-dismissable for this kind of task.  The browser's own
+        -- completion control remains the explicit end of the action.
+        trap_widget = TrapWidget:new{
+            text = message,
+        }
+        trap_widget._dismissAndResend = function()
+            return true
+        end
+        UIManager:show(trap_widget)
+        UIManager:forceRePaint()
+    end
     local trap_target
     if options.invisible then
         -- Background work should not put a modal progress surface over the
@@ -1555,6 +1573,7 @@ function Legado:runSourceLogin(source, values, action, label, context)
                 self:showSourceLoginActions(source, context.buttons, values)
             end
         end,
+        interactive = true,
     })
 end
 
