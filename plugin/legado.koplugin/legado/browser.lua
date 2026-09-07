@@ -49,6 +49,8 @@ do
             int XChangeProperty(legado_Display *display, legado_Window window,
                 legado_Atom property, legado_Atom type, int format, int mode,
                 const unsigned char *data, int nelements);
+            int XMapWindow(legado_Display *display, legado_Window window);
+            int XUnmapWindow(legado_Display *display, legado_Window window);
             int XMapRaised(legado_Display *display, legado_Window window);
             int XRaiseWindow(legado_Display *display, legado_Window window);
             int XSync(legado_Display *display, int discard);
@@ -106,9 +108,75 @@ local function find_browser_window()
     return window
 end
 
-local function promote_browser_window(deadline)
+local function find_kpp_cover_windows()
+    local handle = io.popen(
+        "DISPLAY=:0 /usr/bin/xwininfo -root -tree 2>/dev/null", "r"
+    )
+    if not handle then return {} end
+    local windows = {}
+    for line in handle:lines() do
+        -- When Awesome is resumed on a jailbroken Kindle, KPPMainApp can
+        -- remap a full-screen client above the Chromium content shell.  The
+        -- top/bottom chrome also belongs to KPPMainApp, so only consider a
+        -- large, currently viewable application window here.
+        if line:find("ID:com.lab126.KPPMainApp", 1, true)
+                and line:find("MapState=IsViewable", 1, true) then
+            local width, height = line:match(
+                "%s(%d+)x(%d+)%+%-?%d+%+%-?%d+"
+            )
+            local value = line:match("^%s+(0x[%da-fA-F]+)")
+            if value and tonumber(width) and tonumber(height)
+                    and tonumber(width) >= 800 and tonumber(height) >= 800 then
+                windows[#windows + 1] = tonumber(value:sub(3), 16)
+            end
+        end
+    end
+    handle:close()
+    return windows
+end
+
+local function hide_kpp_cover_windows(hidden_windows)
+    if not x11 or not x11_ffi or type(hidden_windows) ~= "table" then
+        return
+    end
+    local already_hidden = {}
+    for _, window in ipairs(hidden_windows) do
+        already_hidden[window] = true
+    end
+    local candidates = find_kpp_cover_windows()
+    if #candidates == 0 then return end
+    local display = x11.XOpenDisplay(":0")
+    if display == nil then return end
+    for _, window in ipairs(candidates) do
+        if not already_hidden[window] then
+            if x11.XUnmapWindow(display, window) ~= 0 then
+                hidden_windows[#hidden_windows + 1] = window
+                already_hidden[window] = true
+            end
+        end
+    end
+    x11.XSync(display, 0)
+    x11.XCloseDisplay(display)
+end
+
+local function restore_kpp_cover_windows(hidden_windows)
+    if not x11 or not x11_ffi or type(hidden_windows) ~= "table"
+            or #hidden_windows == 0 then
+        return
+    end
+    local display = x11.XOpenDisplay(":0")
+    if display == nil then return end
+    for _, window in ipairs(hidden_windows) do
+        x11.XMapWindow(display, window)
+    end
+    x11.XSync(display, 0)
+    x11.XCloseDisplay(display)
+end
+
+local function promote_browser_window(deadline, hidden_windows)
     if not x11 or not x11_ffi then return false end
     while now() < deadline do
+        hide_kpp_cover_windows(hidden_windows)
         local window = find_browser_window()
         if window then
             local display = x11.XOpenDisplay(":0")
@@ -635,6 +703,22 @@ local function browser_input_point(client, x, y)
     return (x - geometry.x) / scale, (y - geometry.y) / scale
 end
 
+local function dispatch_touch_point(client, event_type, x, y)
+    client:call("Input.dispatchTouchEvent", {
+        type = event_type,
+        touchPoints = event_type == "touchEnd" and {} or {
+            {
+                id = 1,
+                x = x,
+                y = y,
+                radiusX = 1,
+                radiusY = 1,
+                force = 1,
+            },
+        },
+    })
+end
+
 local function dispatch_mouse_click(client, event)
     local x, y = browser_input_point(client, event.x, event.y)
     if not x or not y then return end
@@ -674,47 +758,69 @@ local function dispatch_touch_swipe(client, event)
         client, event.end_x or event.x, event.end_y or event.y
     )
     if not start_x or not start_y or not end_x or not end_y then return end
-    local function touch_point(x, y)
-        return {
-            id = 1,
-            x = x,
-            y = y,
-            radiusX = 1,
-            radiusY = 1,
-            force = 1,
-        }
-    end
-    client:call("Input.dispatchTouchEvent", {
-        type = "touchStart",
-        touchPoints = { touch_point(start_x, start_y) },
-    })
+    dispatch_touch_point(client, "touchStart", start_x, start_y)
     for index = 1, 4 do
         local fraction = index / 4
-        client:call("Input.dispatchTouchEvent", {
-            type = "touchMove",
-            touchPoints = { touch_point(
-                start_x + (end_x - start_x) * fraction,
-                start_y + (end_y - start_y) * fraction
-            ) },
-        })
+        dispatch_touch_point(
+            client,
+            "touchMove",
+            start_x + (end_x - start_x) * fraction,
+            start_y + (end_y - start_y) * fraction
+        )
         socket.sleep(0.03)
     end
-    client:call("Input.dispatchTouchEvent", {
-        type = "touchEnd",
-        touchPoints = {},
-    })
+    dispatch_touch_point(client, "touchEnd")
 end
 
-local function forward_browser_inputs(client, token)
+local function dispatch_touch_pan(client, event, touch_active)
+    local x, y = browser_input_point(client, event.x, event.y)
+    if not x or not y then return touch_active end
+    if not touch_active then
+        local start_x, start_y = browser_input_point(
+            client, event.start_x or event.x, event.start_y or event.y
+        )
+        if not start_x or not start_y then return touch_active end
+        dispatch_touch_point(client, "touchStart", start_x, start_y)
+        touch_active = true
+    end
+    dispatch_touch_point(client, "touchMove", x, y)
+    return touch_active
+end
+
+local function dispatch_touch_pan_release(client, event, touch_active)
+    if not touch_active then return false end
+    local x, y = browser_input_point(client, event.x, event.y)
+    if x and y then
+        dispatch_touch_point(client, "touchMove", x, y)
+    end
+    dispatch_touch_point(client, "touchEnd")
+    return false
+end
+
+local function forward_browser_inputs(client, token, touch_active)
     for _, event in ipairs(BrowserInput.receive(token)) do
         local kind = tostring(event.kind or "")
-        if kind == "swipe" then
+        if kind == "pan" then
+            touch_active = dispatch_touch_pan(client, event, touch_active)
+        elseif kind == "pan_release" then
+            touch_active = dispatch_touch_pan_release(client, event, touch_active)
+        elseif kind == "swipe" then
+            -- A new gesture must not leave the previous touch contact held.
+            if touch_active then
+                dispatch_touch_point(client, "touchEnd")
+                touch_active = false
+            end
             dispatch_touch_swipe(client, event)
         elseif kind == "tap" or kind == "hold" or kind == "hold_release"
                 or kind == "gesture" then
+            if touch_active then
+                dispatch_touch_point(client, "touchEnd")
+                touch_active = false
+            end
             dispatch_mouse_click(client, event)
         end
     end
+    return touch_active
 end
 
 local function add_done_button(client)
@@ -830,6 +936,7 @@ function Browser.await(url, options)
     end
 
     local client
+    local hidden_kpp_windows = {}
     local awesome_restored = false
     local function restore_window_manager()
         if restore_awesome and not awesome_restored then
@@ -843,6 +950,7 @@ function Browser.await(url, options)
         BrowserInput.finish(token)
         remove_profile(user_dir)
         os.remove(log_path)
+        restore_kpp_cover_windows(hidden_kpp_windows)
         restore_window_manager()
         return result, err
     end
@@ -850,7 +958,7 @@ function Browser.await(url, options)
     -- Promote the content shell before attaching DevTools.  Without a valid
     -- Kindle window name, Awesome can leave the browser mapped but visually
     -- underneath the current KOReader/KPP application.
-    promote_browser_window(now() + 5)
+    promote_browser_window(now() + 5, hidden_kpp_windows)
 
     local page, page_err = wait_for_page(port, now() + 20)
     if not page then return finish(nil, page_err) end
@@ -891,7 +999,7 @@ function Browser.await(url, options)
     end
     local _, navigation_err = client:call("Page.navigate", { url = navigation_url })
     if navigation_err then return finish(nil, navigation_err) end
-    promote_browser_window(now() + 2)
+    promote_browser_window(now() + 2, hidden_kpp_windows)
     if type(options.html) == "string" and options.html ~= "" then
         if #options.html > MAX_HTML_BYTES then
             return finish(nil, "browser HTML is too large")
@@ -911,6 +1019,7 @@ function Browser.await(url, options)
     local deadline = now() + (tonumber(options.timeout) or DEFAULT_TIMEOUT)
     local last_url = ""
     local injected = false
+    local touch_active = false
     while now() < deadline do
         if not browser_process_alive(pid) then
             return finish(nil, "Kindle browser exited before the action completed")
@@ -919,7 +1028,7 @@ function Browser.await(url, options)
         if current_url ~= last_url then
             last_url = current_url
             injected = false
-            promote_browser_window(now() + 1)
+            promote_browser_window(now() + 1, hidden_kpp_windows)
         end
         if not injected then
             injected = add_done_button(client) == true
@@ -927,8 +1036,8 @@ function Browser.await(url, options)
         -- KOReader owns the input device while its worker is active.  Keep
         -- the Chromium client raised as Awesome/KPP may reassert its own
         -- stacking order after a navigation or a virtual-keyboard event.
-        promote_browser_window(now() + 0.15)
-        forward_browser_inputs(client, token)
+        promote_browser_window(now() + 0.15, hidden_kpp_windows)
+        touch_active = forward_browser_inputs(client, token, touch_active)
         local done = client:evaluate("window.__legado_browser_done === true")
         if done == true then
             local result, result_err = document_result(client)

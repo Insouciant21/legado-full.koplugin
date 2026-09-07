@@ -1,6 +1,9 @@
 local _ = require("gettext")
 local ConfirmBox = require("ui/widget/confirmbox")
+local Device = require("device")
 local Dispatcher = require("dispatcher")
+local Geom = require("ui/geometry")
+local GestureRange = require("ui/gesturerange")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local Menu = require("ui/widget/menu")
@@ -306,6 +309,27 @@ function Legado:runWorker(message, task, on_success, options)
             -- so pass the completed gesture to the browser worker instead of
             -- dismissing the worker as a normal background task would do.
             BrowserInput.send(event_type, event)
+            return true
+        end
+        -- A slow drag is reported by KOReader as a stream of `pan` events,
+        -- followed by `pan_release`, rather than as one `swipe`. TrapWidget
+        -- normally does not register `pan`, so a browser page would receive
+        -- neither the movement nor enough information to reconstruct it.
+        -- Capture that stream as well; browser.lua keeps one CDP touch active
+        -- until the matching release arrives.
+        trap_widget.ges_events.BrowserPanDismiss = {
+            GestureRange:new{
+                ges = "pan",
+                range = Geom:new{
+                    x = 0,
+                    y = 0,
+                    w = Device.screen:getWidth(),
+                    h = Device.screen:getHeight(),
+                },
+            },
+        }
+        trap_widget.onBrowserPanDismiss = function(_, _, event)
+            BrowserInput.send("Gesture", event)
             return true
         end
         UIManager:show(trap_widget)
