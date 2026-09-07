@@ -66,6 +66,11 @@ newly published chapters can then be opened automatically. Only the current
 chapter is needed for normal reading, and cached chapters are reused after
 restarting KOReader.
 
+Opening the chapter list from an active reading session uses the saved local
+TOC immediately; it does not wait for the source network request. The menu has
+an explicit `Refresh chapter list` action for checking a serial source for new
+chapters.
+
 The reader prefetches the next five uncached chapters in the background after a
 Legado chapter is ready. `Legado → Prefetch next N chapters` changes this to
 any value from 5 through 10. Prefetch is sequential and is cancelled by normal

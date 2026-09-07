@@ -535,12 +535,14 @@ function Legado:showReaderChapterList()
         self:showOperationResult(_("The current document is not a Legado chapter."))
         return false
     end
-    local source, err = self:resolveReaderSource(session)
-    if not source then
-        self:showOperationResult(_("Cannot match the reading session source:\n") .. tostring(err))
-        return false
-    end
-    self:showChapters(source, session.book)
+    -- The current reading session already contains the complete TOC that was
+    -- used to open this chapter. Rendering it locally avoids repeating the
+    -- aggregate source's book-info and chapter-list requests just to open the
+    -- reader's directory. Resolve the source only when an action needs it.
+    self:showChapterMenu(nil, session.book, session.chapters, {
+        current_index = session.current_index,
+        reader_session = session,
+    })
     return true
 end
 
@@ -577,7 +579,11 @@ function Legado:openReaderChapter(session, target_index, seamless)
     return true
 end
 
-function Legado:refreshReaderSession(session)
+function Legado:refreshReaderSession(session, advance_after_refresh)
+    if not self._reader_transition_busy then
+        self._reader_transition_busy = true
+    end
+    self:cancelReaderPrefetch()
     local source, source_err = self:resolveReaderSource(session)
     if not source then
         self._reader_transition_busy = false
@@ -617,8 +623,14 @@ function Legado:refreshReaderSession(session)
             source_url = source.bookSourceUrl or "",
             source_name = source.bookSourceName or "",
         }
-        if current_index < #result.chapters then
+        if advance_after_refresh and current_index < #result.chapters then
             self:openReaderChapter(refreshed_session, current_index + 1, true)
+        elseif not advance_after_refresh then
+            self._reader_transition_busy = false
+            self:showChapterMenu(source, display_book, result.chapters, {
+                current_index = current_index,
+                reader_session = refreshed_session,
+            })
         else
             self._reader_transition_busy = false
             self:showOperationResult(_("Chapter list refreshed; you are at the latest chapter."))
@@ -656,7 +668,7 @@ function Legado:advanceReaderChapter(delta, supplied_session, seamless, already_
     end
     if target_index > #session.chapters then
         if step > 0 then
-            return self:refreshReaderSession(session)
+            return self:refreshReaderSession(session, true)
         end
         self._reader_transition_busy = false
         self:showOperationResult(_("This is the latest chapter."))
@@ -1082,6 +1094,106 @@ function Legado:showSearchResults(source, books)
     UIManager:show(result_menu)
 end
 
+function Legado:showChapterMenu(source, display_book, chapters, options)
+    options = options or {}
+    if type(chapters) ~= "table" or #chapters == 0 then
+        self:showOperationResult(_("Chapter list is empty."))
+        return false
+    end
+
+    local last_chapter = tonumber(options.current_index)
+        or self.storage:get_last_chapter(display_book)
+    if last_chapter and not chapters[last_chapter] then
+        last_chapter = nil
+    end
+    local result = {
+        info = display_book,
+        chapters = chapters,
+    }
+    local resolved_source = source
+    local function get_source()
+        if resolved_source then return resolved_source end
+        if not options.reader_session then return nil end
+        local source_err
+        resolved_source, source_err = self:resolveReaderSource(options.reader_session)
+        if not resolved_source then
+            self:showOperationResult(
+                _("Cannot match the reading session source:\n") .. tostring(source_err)
+            )
+        end
+        return resolved_source
+    end
+    local items = {}
+    if last_chapter then
+        items[#items + 1] = {
+            text = T(_("Continue reading chapter %1"), last_chapter),
+            mandatory = display_text(chapters[last_chapter].name),
+            continue = true,
+            chapter = chapters[last_chapter],
+            separator = true,
+        }
+    end
+    items[#items + 1] = {
+        text = T(_("Download entire book (%1 chapters)"), #chapters),
+        mandatory = _("EPUB + TXT"),
+        bulk = true,
+    }
+    items[#items + 1] = {
+        text = _("Jump to chapter number"),
+        mandatory = last_chapter and (tostring(last_chapter) .. "/" .. tostring(#chapters))
+            or ("1/" .. tostring(#chapters)),
+        jump = true,
+    }
+    if options.reader_session then
+        items[#items + 1] = {
+            text = _("Refresh chapter list"),
+            mandatory = _("Network request"),
+            refresh = true,
+        }
+    end
+    for index, chapter in ipairs(chapters) do
+        local downloaded = self.storage:chapter_exists(display_book, chapter)
+        local flags = {}
+        if downloaded then flags[#flags + 1] = _("Downloaded") end
+        if chapter.vip then flags[#flags + 1] = _("VIP") end
+        items[#items + 1] = {
+            text = display_text(chapter.name or _("Unnamed chapter")),
+            mandatory = #flags > 0 and table.concat(flags, " · ") or nil,
+            chapter = chapter,
+            bold = last_chapter == index,
+        }
+    end
+    local chapter_menu
+    chapter_menu = Menu:new{
+        title = display_text(display_book.name or _("Chapters")) .. " · "
+            .. tostring(#chapters) .. " chapters",
+        item_table = items,
+        items_per_page = 12,
+        onMenuSelect = function(menu, item)
+            local action_source = get_source()
+            if not action_source then return end
+            if item.refresh then
+                UIManager:close(menu)
+                self:refreshReaderSession(options.reader_session, false)
+                return
+            end
+            if item.jump then
+                UIManager:close(menu)
+                self:showChapterJump(action_source, display_book, result)
+                return
+            end
+            UIManager:close(menu)
+            if item.bulk then
+                self:downloadBook(action_source, display_book, chapters)
+            else
+                self:openOrDownloadChapter(action_source, display_book, item.chapter, chapters)
+            end
+        end,
+    }
+    UIManager:show(chapter_menu)
+    return true
+end
+
 function Legado:showChapters(source, book)
     self:runWorker(_("Loading chapter list…"), function()
         local Runtime = require("legado/runtime")
@@ -1089,69 +1201,12 @@ function Legado:showChapters(source, book)
         if not result then return nil, err or "chapter list failed" end
         return result
     end, function(result)
-        if type(result) ~= "table" or type(result.chapters) ~= "table" or #result.chapters == 0 then
+        if type(result) ~= "table" then
             self:showOperationResult(_("Chapter list is empty."))
             return
         end
         local display_book = result.info or book
-        local last_chapter = self.storage:get_last_chapter(display_book)
-        if last_chapter and not result.chapters[last_chapter] then
-            last_chapter = nil
-        end
-        local items = {}
-        if last_chapter then
-            items[#items + 1] = {
-                text = T(_("Continue reading chapter %1"), last_chapter),
-                mandatory = display_text(result.chapters[last_chapter].name),
-                continue = true,
-                chapter = result.chapters[last_chapter],
-                separator = true,
-            }
-        end
-        items[#items + 1] = {
-            text = T(_("Download entire book (%1 chapters)"), #result.chapters),
-            mandatory = _("EPUB + TXT"),
-            bulk = true,
-        }
-        items[#items + 1] = {
-            text = _("Jump to chapter number"),
-            mandatory = last_chapter and (tostring(last_chapter) .. "/" .. tostring(#result.chapters))
-                or ("1/" .. tostring(#result.chapters)),
-            jump = true,
-        }
-        for index, chapter in ipairs(result.chapters) do
-            local downloaded = self.storage:chapter_exists(display_book, chapter)
-            local flags = {}
-            if downloaded then flags[#flags + 1] = _("Downloaded") end
-            if chapter.vip then flags[#flags + 1] = _("VIP") end
-            items[#items + 1] = {
-                text = display_text(chapter.name or _("Unnamed chapter")),
-                mandatory = #flags > 0 and table.concat(flags, " · ") or nil,
-                chapter = chapter,
-                bold = last_chapter == index,
-            }
-        end
-        local chapter_menu
-        chapter_menu = Menu:new{
-            title = display_text(display_book.name or _("Chapters")) .. " · "
-                .. tostring(#result.chapters) .. " chapters",
-            item_table = items,
-            items_per_page = 12,
-            onMenuSelect = function(menu, item)
-                if item.jump then
-                    UIManager:close(menu)
-                    self:showChapterJump(source, display_book, result)
-                    return
-                end
-                UIManager:close(menu)
-                if item.bulk then
-                    self:downloadBook(source, display_book, result.chapters)
-                else
-                    self:openOrDownloadChapter(source, display_book, item.chapter, result.chapters)
-                end
-            end,
-        }
-        UIManager:show(chapter_menu)
+        self:showChapterMenu(source, display_book, result.chapters)
     end)
 end
 

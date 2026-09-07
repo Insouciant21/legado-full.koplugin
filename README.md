@@ -66,6 +66,8 @@ Kindle 需要自己的 Wi-Fi；HTTPS 会使用 KOReader 自带的 LuaSec（若�
 Legado 章节生效，普通书籍仍使用 KOReader 原生目录），并在打开章节后后台预载
 后续未缓存的章节。默认预载 5 章，可在阅读器的 `Legado → Prefetch next N chapters`
 中调整为 5–10 章；预载请求按章顺序执行，不会用进度弹窗遮挡当前阅读。
+阅读中的目录直接使用已保存的本地章节列表，不再为打开目录重复请求网络书源；
+目录菜单中的“Refresh chapter list”才会联网检查连载更新。
 规则层覆盖普通 CSS/Legado 旧式选择器、JSONPath、
 常见 XPath、正则（含 `:` 开头的 AllInOne 捕获规则）、`@put/@get` 变量、模板、
 分页、替换规则和 Legado JavaScript。插件内置 QuickJS
