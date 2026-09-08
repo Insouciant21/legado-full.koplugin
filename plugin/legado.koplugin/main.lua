@@ -14,7 +14,8 @@ local Trapper = require("ui/trapper")
 local TrapWidget = require("ui/widget/trapwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local T = require("ffi/util").template
+local FFIUtil = require("ffi/util")
+local T = FFIUtil.template
 local rapidjson = require("rapidjson")
 
 -- Keep plugin modules under a namespaced directory. KOReader temporarily adds
@@ -37,8 +38,35 @@ local function display_text(value)
     return tostring(value or "")
 end
 
+-- These are the settings that affect how a text chapter is rendered.  The
+-- copt_/kopt_ prefixes cover current and future KOReader configurable options
+-- without copying document state such as last_xpointer or page_positions.
+local READER_PREFERENCE_KEYS = {
+    font_face = true,
+    font_family_fonts = true,
+    css = true,
+    style_tweaks = true,
+    style_tweaks_enabled = true,
+    book_style_tweak = true,
+    book_style_tweak_enabled = true,
+    book_style_tweak_last_edit_pos = true,
+    txt_preformatted = true,
+}
+
+local function is_reader_preference_key(key)
+    return type(key) == "string"
+        and (key:match("^copt_") or key:match("^kopt_")
+            or READER_PREFERENCE_KEYS[key])
+end
+
 function Legado:init()
     self.storage = Storage:new()
+    -- ReaderUI has already opened doc_settings before plugin instances are
+    -- created, but its DocSettingsLoad event is not guaranteed to reach
+    -- third-party modules on every KOReader release.  Seed the current
+    -- chapter's settings here, before ReaderUI emits ReadSettings, so the
+    -- native reader modules initialize from the book-wide Legado profile.
+    self:loadActiveReaderPreferences()
     self.emoji_font_ready, self.emoji_font_copied, self.emoji_font_error =
         EmojiFont:ensure_installed()
     if self.emoji_font_ready then
@@ -411,7 +439,12 @@ end
 
 local function same_path(left, right)
     local function normalize(path)
-        return tostring(path or ""):gsub("^%./", "")
+        path = tostring(path or "")
+        -- DataStorage deliberately returns "." on Kindle.  The resulting
+        -- chapter paths are relative, while ReaderUI may expose an absolute
+        -- path (and the reverse can happen after a restart).  realpath()
+        -- makes both forms comparable and also handles test/book symlinks.
+        return FFIUtil.realpath(path) or path:gsub("^%./", "")
     end
     return normalize(left) == normalize(right)
 end
@@ -433,6 +466,97 @@ function Legado:getActiveReaderSession()
         end
     end
     return nil
+end
+
+function Legado:getReaderPreferenceSnapshot()
+    if not self.ui or not self.ui.doc_settings then return nil end
+    local preferences = {}
+    local data = self.ui.doc_settings.data
+    if type(data) == "table" then
+        for key, value in pairs(data) do
+            if is_reader_preference_key(key) then
+                preferences[key] = value
+            end
+        end
+    end
+
+    -- The live configurable object is ahead of doc_settings until KOReader's
+    -- SaveSettings event.  This matters when the user taps Next Chapter
+    -- immediately after changing font size, spacing or margins.
+    local document = self.ui.document
+    local configurable = document and document.configurable
+    if type(configurable) == "table" then
+        for key, value in pairs(configurable) do
+            local value_type = type(value)
+            if (value_type == "number" or value_type == "string"
+                    or value_type == "table") and type(key) == "string" then
+                preferences["copt_" .. key] = value
+            end
+        end
+    end
+
+    -- Capture the live module values as well: these are not all held in the
+    -- document's configurable object, and can change before SaveSettings.
+    local font = self.ui.font
+    if font then
+        preferences.font_face = font.font_face
+        preferences.font_family_fonts = font.font_family_fonts
+    end
+    local typeset = self.ui.typeset
+    if typeset then
+        preferences.css = typeset.css
+        preferences.txt_preformatted = typeset.txt_preformatted
+    end
+    local style_tweak = self.ui.styletweak
+    if style_tweak then
+        preferences.style_tweaks = style_tweak.doc_tweaks
+        if style_tweak.enabled == false then
+            preferences.style_tweaks_enabled = false
+        else
+            preferences.style_tweaks_enabled = nil
+        end
+        preferences.book_style_tweak = style_tweak.book_style_tweak
+        preferences.book_style_tweak_enabled = style_tweak.book_style_tweak_enabled
+        preferences.book_style_tweak_last_edit_pos = style_tweak.book_style_tweak_last_edit_pos
+    end
+    return preferences
+end
+
+function Legado:saveActiveReaderPreferences()
+    local session = self:getActiveReaderSession()
+    local preferences = self:getReaderPreferenceSnapshot()
+    if not session or not preferences then return false end
+    return self.storage:save_reader_preferences(session.book, preferences)
+end
+
+function Legado:flushActiveReaderSettings()
+    -- ReaderConfig keeps font/layout changes in memory until KOReader's
+    -- SaveSettings event.  Chapter navigation can happen before the normal
+    -- document-close path, so explicitly flush the current document first.
+    if not self.ui or type(self.ui.saveSettings) ~= "function" then return false end
+    self.ui:saveSettings()
+    return true
+end
+
+function Legado:applyReaderPreferences(config, preferences)
+    if type(config) ~= "table" or type(preferences) ~= "table" then
+        return false
+    end
+    for key, value in pairs(preferences) do
+        if is_reader_preference_key(key) then
+            config:saveSetting(key, value)
+        end
+    end
+    return true
+end
+
+function Legado:loadActiveReaderPreferences(config)
+    local session = self:getActiveReaderSession()
+    config = config or (self.ui and self.ui.doc_settings)
+    if not session or not config then return false end
+    local preferences = self.storage:load_reader_preferences(session.book)
+    if not preferences then return false end
+    return self:applyReaderPreferences(config, preferences)
 end
 
 function Legado:resolveReaderSource(session)
@@ -486,6 +610,7 @@ function Legado:installReaderHooks()
 end
 
 function Legado:onDocSettingsLoad(_doc_settings, document)
+    self:loadActiveReaderPreferences(_doc_settings)
     if not self.emoji_font_ready or type(document) ~= "table" then return end
     local registered = EmojiFont:register_with_cre()
     EmojiFont:add_document_fallback(document)
@@ -498,6 +623,9 @@ end
 
 function Legado:onReaderReady()
     self:installReaderHooks()
+    -- Seed a profile for existing sessions and keep it current after a normal
+    -- KOReader settings flush.  Subsequent Legado chapters will inherit it.
+    self:saveActiveReaderPreferences()
     if self.emoji_font_ready and self.ui and self.ui.document then
         -- This is also useful when CRe was initialized before the plugin and
         -- the fallback list was rebuilt by a document reload.
@@ -506,6 +634,10 @@ function Legado:onReaderReady()
     UIManager:nextTick(function()
         self:startReaderPrefetch()
     end)
+end
+
+function Legado:onSaveSettings()
+    self:saveActiveReaderPreferences()
 end
 
 function Legado:cancelReaderPrefetch()
@@ -656,6 +788,11 @@ end
 
 function Legado:openReaderChapter(session, target_index, seamless)
     self:cancelReaderPrefetch()
+    -- Save before the session index changes.  Otherwise selecting a chapter
+    -- from the local chapter list would make the old document look unrelated
+    -- to the session before ReaderUI emits SaveSettings.
+    self:flushActiveReaderSettings()
+    self:saveActiveReaderPreferences()
     local chapter = session.chapters[target_index]
     if not chapter then
         self._reader_transition_busy = false
@@ -1915,6 +2052,10 @@ function Legado:showChapterJump(source, book, result)
 end
 
 function Legado:openOrDownloadChapter(source, book, chapter, chapters)
+    -- Preserve the current chapter's live font/layout choices before replacing
+    -- the session with the selected target chapter.
+    self:flushActiveReaderSettings()
+    self:saveActiveReaderPreferences()
     if chapters then
         self.storage:save_reader_session(book, source, chapters, chapter.index)
     end

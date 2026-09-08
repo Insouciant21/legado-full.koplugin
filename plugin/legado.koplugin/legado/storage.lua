@@ -186,6 +186,36 @@ function Storage:save_prefetch_count(value)
     return value
 end
 
+-- KOReader stores reading options in the sidecar belonging to each document.
+-- Legado chapters are deliberately separate TXT documents, so keep a second
+-- profile keyed by the logical Legado book and apply it when another chapter
+-- is opened.  This profile contains presentation options only; positions,
+-- bookmarks and document metadata remain in the chapter's own sidecar.
+function Storage:load_reader_preferences(book)
+    local key = book_key(book)
+    if key == "" then return nil end
+    local books = self:get_reader_preferences():readSetting("books")
+    if type(books) ~= "table" or type(books[key]) ~= "table" then
+        return nil
+    end
+    return copy_session_value(books[key], 0)
+end
+
+function Storage:save_reader_preferences(book, preferences)
+    local key = book_key(book)
+    if key == "" or type(preferences) ~= "table" then return false end
+    local saved = copy_session_value(preferences, 0)
+    if type(saved) ~= "table" then return false end
+
+    local settings = self:get_reader_preferences()
+    local books = settings:readSetting("books")
+    if type(books) ~= "table" then books = {} end
+    books[key] = saved
+    settings:saveSetting("books", books)
+    settings:flush()
+    return true
+end
+
 function Storage:load_reader_session()
     local session = self:get_reader_session_settings():readSetting("session")
     if type(session) ~= "table" or type(session.book) ~= "table"
