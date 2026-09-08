@@ -1,10 +1,9 @@
 -- Content normalization for network novels.
 --
--- Android Legado normally hands the reader an HTML fragment.  KOReader's
--- plain-text document provider does not interpret that fragment, so writing it
--- directly to a .txt file makes tags and sometimes very large
--- inline SVG attributes visible to the reader.  Keep this conversion small and
--- dependency-free: it runs after source rules/replacements have completed.
+-- Android Legado normally hands the reader an HTML fragment.  Normalize it
+-- before caching so tags and sometimes very large inline SVG attributes never
+-- reach the reader. Keep this conversion small and dependency-free: it runs
+-- after source rules/replacements have completed.
 
 local Content = {}
 

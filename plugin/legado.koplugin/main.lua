@@ -427,7 +427,10 @@ function Legado:getActiveReaderSession()
     -- recovers gracefully if KOReader was closed after the user selected a
     -- different cached chapter.
     for index, chapter in ipairs(session.chapters) do
-        if same_path(current_file, self.storage:get_chapter_path(session.book, chapter)) then
+        local chapter_path = self.storage:get_chapter_path(session.book, chapter)
+        local legacy_path = self.storage:get_legacy_chapter_path(session.book, chapter)
+        if same_path(current_file, chapter_path)
+                or same_path(current_file, legacy_path) then
             session.current_index = index
             return session
         end
@@ -469,9 +472,10 @@ function Legado:installReaderHooks()
         end
     end
 
-    -- A cached Legado chapter is a standalone TXT, so CRe quite correctly
-    -- reports no native ToC. Redirect the standard KOReader ToC action to the
-    -- source chapter list only while a Legado reading session is active.
+    -- A cached Legado chapter is a standalone document, so CRe quite
+    -- correctly reports no native ToC. Redirect the standard KOReader ToC
+    -- action to the source chapter list only while a Legado reading session is
+    -- active.
     local toc = self.ui and self.ui.toc
     if toc and type(toc.onShowToc) == "function"
             and not toc._legado_show_toc_hook then
@@ -499,6 +503,7 @@ end
 
 function Legado:onReaderReady()
     self:installReaderHooks()
+    self:upgradeLegacyReaderDocument()
     if self.emoji_font_ready and self.ui and self.ui.document then
         -- This is also useful when CRe was initialized before the plugin and
         -- the fallback list was rebuilt by a document reload.
@@ -507,6 +512,40 @@ function Legado:onReaderReady()
     UIManager:nextTick(function()
         self:startReaderPrefetch()
     end)
+end
+
+function Legado:upgradeLegacyReaderDocument()
+    local session = self:getActiveReaderSession()
+    if not session or self._legacy_upgrade_pending then return false end
+    local current_file = self.ui and self.ui.document
+        and (self.ui.document.file or self.ui.document.filename)
+    local chapter = session.chapters[session.current_index]
+    if type(current_file) ~= "string" or type(chapter) ~= "table"
+            or not current_file:lower():match("%.txt$") then
+        return false
+    end
+
+    -- chapter_is_readable() converts the old cached TXT to an HTML document
+    -- locally. No Android reader settings are copied; the new document gets
+    -- its presentation from KOReader's normal document-settings flow.
+    local readable, modern_path = self.storage:chapter_is_readable(
+        session.book, chapter
+    )
+    if not readable or type(modern_path) ~= "string"
+            or modern_path:lower():match("%.txt$") then
+        return false
+    end
+
+    self._legacy_upgrade_pending = true
+    UIManager:nextTick(function()
+        self._legacy_upgrade_pending = false
+        local document = self.ui and self.ui.document
+        local active_file = document and (document.file or document.filename)
+        if type(active_file) == "string" and same_path(active_file, current_file) then
+            self:openDownloadedFile(modern_path, true)
+        end
+    end)
+    return true
 end
 
 function Legado:cancelReaderPrefetch()

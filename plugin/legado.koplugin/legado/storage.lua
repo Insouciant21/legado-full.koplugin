@@ -145,21 +145,73 @@ end
 function Storage:get_chapter_path(book, chapter)
     local index = tonumber(chapter and chapter.index or 1) or 1
     return self:get_book_dir(book) .. "/"
+        -- TXT files are treated as preformatted/monospace by KOReader's CRe
+        -- provider.  A standalone HTML chapter keeps the text source-only,
+        -- while allowing KOReader's normal selected font to apply to body
+        -- paragraphs without any plugin-owned reader setting.
+        .. string.format("%04d-%s.html", index, safe_name(chapter and chapter.name))
+end
+
+function Storage:get_legacy_chapter_path(book, chapter)
+    local index = tonumber(chapter and chapter.index or 1) or 1
+    return self:get_book_dir(book) .. "/"
         .. string.format("%04d-%s.txt", index, safe_name(chapter and chapter.name))
 end
 
 function Storage:chapter_exists(book, chapter)
     local path = self:get_chapter_path(book, chapter)
-    return lfs.attributes(path, "mode") == "file", path
+    if lfs.attributes(path, "mode") == "file" then
+        return true, path
+    end
+    -- Keep old downloads useful. chapter_is_readable() upgrades them to the
+    -- HTML representation before a reader document is opened.
+    local legacy_path = self:get_legacy_chapter_path(book, chapter)
+    return lfs.attributes(legacy_path, "mode") == "file", legacy_path
+end
+
+local function html_body(raw)
+    if type(raw) ~= "string" then return "" end
+    local body = raw:match("<body[^>]*>(.-)</body%s*>")
+    if not body then return raw end
+    -- The generated document has a title heading which is already displayed
+    -- by the reader header/session UI; don't duplicate it during bulk export.
+    body = body:gsub("^%s*<h1[^>]*>.-</h1>%s*", "", 1)
+    return body
+end
+
+local function legacy_body(raw, chapter)
+    if type(raw) ~= "string" then return "" end
+    local marker = "\n\n" .. (chapter and chapter.name or "") .. "\n\n"
+    local _, marker_end = raw:find(marker, 1, true)
+    if marker_end then
+        return raw:sub(marker_end + 1)
+    end
+    return raw
 end
 
 function Storage:chapter_is_readable(book, chapter)
     local exists, path = self:chapter_exists(book, chapter)
     if not exists then return false, path end
     local content = util.readFromFile(path)
-    -- Older plugin versions wrote raw HTML into TXT. Treat those files as a
-    -- stale cache so tapping a chapter transparently refreshes it once.
-    return type(content) == "string" and not Content.has_markup(content), path
+    if type(content) ~= "string" or content == "" then
+        return false, path
+    end
+    if path:lower():sub(-5) == ".html" then
+        return Content.to_text(html_body(content)) ~= "", path
+    end
+
+    -- Older plugin versions wrote readable prose to TXT, which makes CRe use
+    -- its monospace/preformatted path. Convert that cache locally so opening
+    -- an existing chapter also gets the native KOReader font behavior.
+    if not Content.has_markup(content) then
+        local migrated_path = self:write_chapter(book, chapter, legacy_body(content, chapter))
+        if migrated_path then return true, migrated_path end
+        -- A read-only or nearly-full filesystem should not make a cached
+        -- chapter disappear; retain the old fallback for this one open.
+        return true, path
+    end
+    -- Raw HTML in a legacy TXT cache is stale and must be downloaded again.
+    return false, path
 end
 
 function Storage:get_progress_settings()
@@ -470,12 +522,16 @@ function Storage:write_chapter(book, chapter, content)
     util.makePath(book_dir)
     local path = self:get_chapter_path(book, chapter)
     content = Content.to_text(content)
-    local header = (book.name or "") .. "\n"
-    if book.author and book.author ~= "" then
-        header = header .. (book.author or "") .. "\n"
-    end
-    header = header .. "\n" .. (chapter.name or "") .. "\n\n"
-    local ok = util.writeToFile(header .. content, path)
+    local title = Content.xml_escape(chapter and chapter.name or book and book.name or "")
+    local html = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        .. "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head>"
+        .. "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"/>"
+        .. "<title>" .. title .. "</title>"
+        -- Deliberately omit font-family: KOReader owns the document's font.
+        .. "<style>body{margin:0 4%;line-height:1.65;}h1{text-align:center;font-size:1.35em;margin:0 0 1.5em;}p{text-indent:2em;margin:0 0 0.8em;}</style>"
+        .. "</head><body><h1>" .. title .. "</h1>"
+        .. Content.to_xhtml(content) .. "</body></html>"
+    local ok = util.writeToFile(html, path)
     if not ok then
         return nil, "cannot save downloaded chapter"
     end
@@ -487,15 +543,10 @@ function Storage:read_chapter_content(book, chapter)
     if not exists then return nil, path end
     local raw = util.readFromFile(path)
     if type(raw) ~= "string" then return nil, "cannot read cached chapter" end
-    -- Strip the small header written by write_chapter when reusing a cached
-    -- chapter for incremental whole-book export. If a legacy file has a
-    -- different header, fall back to normal HTML/text cleanup.
-    local marker = "\n\n" .. (chapter and chapter.name or "") .. "\n\n"
-    local _, marker_end = raw:find(marker, 1, true)
-    if marker_end then
-        raw = raw:sub(marker_end + 1)
+    if path:lower():sub(-5) == ".html" then
+        return Content.to_text(html_body(raw))
     end
-    return Content.to_text(raw)
+    return Content.to_text(legacy_body(raw, chapter))
 end
 
 function Storage:write_book(book, content)
