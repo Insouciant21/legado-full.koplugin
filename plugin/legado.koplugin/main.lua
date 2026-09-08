@@ -17,7 +17,6 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local FFIUtil = require("ffi/util")
 local T = FFIUtil.template
 local rapidjson = require("rapidjson")
-local Event = require("ui/event")
 
 -- Keep plugin modules under a namespaced directory. KOReader temporarily adds
 -- the plugin directory to package.path while loading the entry point.
@@ -39,70 +38,8 @@ local function display_text(value)
     return tostring(value or "")
 end
 
--- These are the settings that affect how a text chapter is rendered.  The
--- copt_/kopt_ prefixes cover current and future KOReader configurable options
--- without copying document state such as last_xpointer or page_positions.
-local READER_PREFERENCE_KEYS = {
-    font_face = true,
-    font_family_fonts = true,
-    css = true,
-    style_tweaks = true,
-    style_tweaks_enabled = true,
-    book_style_tweak = true,
-    book_style_tweak_enabled = true,
-    book_style_tweak_last_edit_pos = true,
-    txt_preformatted = true,
-}
-
-local function is_reader_preference_key(key)
-    return type(key) == "string"
-        and (key:match("^copt_") or key:match("^kopt_")
-            or READER_PREFERENCE_KEYS[key])
-end
-
-local function normalize_legado_reader_preferences(preferences)
-    if type(preferences) ~= "table" then
-        return false
-    end
-
-    -- Legado chapters are downloaded and normalized to plain TXT before they
-    -- are opened by KOReader.  They cannot contain a publisher-supplied font.
-    -- Keeping KOReader's embedded-font flag at 1 makes the native option look
-    -- enabled (and disabled for interaction when the document has no embedded
-    -- font), which can also hide the effect of the selected CJK face.  Make
-    -- the user-selected KOReader font authoritative for this reading session.
-    if preferences.copt_embedded_fonts ~= 0 then
-        preferences.copt_embedded_fonts = 0
-        return true
-    end
-    return false
-end
-
-local function get_global_reader_font_face()
-    -- ReaderFont gives a document's font_face precedence over KOReader's
-    -- global cre_font default.  Do not let a profile that was created from
-    -- that default permanently hide later changes made in KOReader.
-    local settings = rawget(_G, "G_reader_settings")
-    if not settings or type(settings.readSetting) ~= "function" then
-        return nil
-    end
-    local ok, face = pcall(function()
-        return settings:readSetting("cre_font")
-    end)
-    if ok and type(face) == "string" and face ~= "" then
-        return face
-    end
-    return nil
-end
-
 function Legado:init()
     self.storage = Storage:new()
-    -- ReaderUI has already opened doc_settings before plugin instances are
-    -- created, but its DocSettingsLoad event is not guaranteed to reach
-    -- third-party modules on every KOReader release.  Seed the current
-    -- chapter's settings here, before ReaderUI emits ReadSettings, so the
-    -- native reader modules initialize from the book-wide Legado profile.
-    self:loadActiveReaderPreferences()
     self.emoji_font_ready, self.emoji_font_copied, self.emoji_font_error =
         EmojiFont:ensure_installed()
     if self.emoji_font_ready then
@@ -295,15 +232,9 @@ end
 function Legado:getBackupMenuItems()
     return {
         {
-            text = _("Import Android backup"),
+            text = _("Import sources, bookshelf and reading history"),
             callback = function()
                 self:chooseBackupFile()
-            end,
-        },
-        {
-            text = _("Export Android backup"),
-            callback = function()
-                self:chooseExportDirectory()
             end,
         },
     }
@@ -504,207 +435,6 @@ function Legado:getActiveReaderSession()
     return nil
 end
 
-function Legado:getReaderPreferenceSnapshot()
-    if not self.ui or not self.ui.doc_settings then return nil end
-    local preferences = {}
-    local data = self.ui.doc_settings.data
-    if type(data) == "table" then
-        for key, value in pairs(data) do
-            if is_reader_preference_key(key) then
-                preferences[key] = value
-            end
-        end
-    end
-
-    -- The live configurable object is ahead of doc_settings until KOReader's
-    -- SaveSettings event.  This matters when the user taps Next Chapter
-    -- immediately after changing font size, spacing or margins.
-    local document = self.ui.document
-    local configurable = document and document.configurable
-    if type(configurable) == "table" then
-        for key, value in pairs(configurable) do
-            local value_type = type(value)
-            if (value_type == "number" or value_type == "string"
-                    or value_type == "table") and type(key) == "string" then
-                preferences["copt_" .. key] = value
-            end
-        end
-    end
-
-    -- Capture the live module values as well: these are not all held in the
-    -- document's configurable object, and can change before SaveSettings.
-    local font = self.ui.font
-    if font then
-        preferences.font_face = font.font_face
-        preferences.font_family_fonts = font.font_family_fonts
-    end
-    local typeset = self.ui.typeset
-    if typeset then
-        preferences.css = typeset.css
-        preferences.txt_preformatted = typeset.txt_preformatted
-    end
-    local style_tweak = self.ui.styletweak
-    if style_tweak then
-        preferences.style_tweaks = style_tweak.doc_tweaks
-        if style_tweak.enabled == false then
-            preferences.style_tweaks_enabled = false
-        else
-            preferences.style_tweaks_enabled = nil
-        end
-        preferences.book_style_tweak = style_tweak.book_style_tweak
-        preferences.book_style_tweak_enabled = style_tweak.book_style_tweak_enabled
-        preferences.book_style_tweak_last_edit_pos = style_tweak.book_style_tweak_last_edit_pos
-    end
-    normalize_legado_reader_preferences(preferences)
-    return preferences
-end
-
-function Legado:syncReaderFontPreference(book, preferences)
-    if type(book) ~= "table" or type(preferences) ~= "table" then
-        return false
-    end
-
-    local global_face = get_global_reader_font_face()
-    local previous = self.storage:load_reader_preferences(book)
-    local previous_face = previous and previous.font_face
-    local previous_global = previous and previous._legado_global_font_face
-    local previous_explicit = previous
-        and previous._legado_font_face_explicit == true
-    local previous_has_mode = previous
-        and previous._legado_font_face_explicit ~= nil
-    local changed = false
-
-    -- Profiles written before this metadata existed were seeded from the
-    -- current chapter. Treat them as following KOReader's default, so an
-    -- already changed global font can take effect immediately. New profiles
-    -- use the same rule unless the user selects a different face for this
-    -- book in the reader.
-    local follows_global = previous and not previous_explicit
-    local old_profile = previous and previous._legado_font_face_explicit == nil
-    if global_face and previous and (follows_global or old_profile)
-            and previous_face and preferences.font_face == previous_face
-            and previous_face ~= global_face
-            and (previous_global == nil or previous_global ~= global_face) then
-        preferences.font_face = global_face
-        changed = true
-    end
-
-    local current_face = preferences.font_face
-    local explicit = previous_explicit or false
-    local user_selected = self._legado_font_face_user_selected
-    if user_selected and current_face == user_selected then
-        -- A font selected through KOReader's own face menu is a deliberate
-        -- choice even when no global cre_font default has been configured.
-        -- If it equals the global default, it can still follow that default.
-        explicit = global_face and current_face ~= global_face or true
-    elseif global_face and (not previous or not previous_has_mode
-            or current_face ~= previous_face) then
-        -- A face different from the global default is a deliberate
-        -- book-level choice. A face equal to it continues to follow global
-        -- KOReader changes on future chapter transitions.
-        explicit = current_face ~= global_face
-    elseif not global_face and previous and current_face ~= previous_face then
-        -- Older KOReader settings may not contain cre_font at all. A change
-        -- between two profile saves is still evidence of a book-level choice.
-        explicit = true
-    end
-
-    if preferences._legado_font_face_explicit ~= explicit then
-        preferences._legado_font_face_explicit = explicit
-        changed = true
-    end
-    if global_face and preferences._legado_global_font_face ~= global_face then
-        preferences._legado_global_font_face = global_face
-        changed = true
-    end
-    return changed
-end
-
-function Legado:saveActiveReaderPreferences()
-    local session = self:getActiveReaderSession()
-    local preferences = self:getReaderPreferenceSnapshot()
-    if not session or not preferences then return false end
-    self:syncReaderFontPreference(session.book, preferences)
-    return self.storage:save_reader_preferences(session.book, preferences)
-end
-
-function Legado:flushActiveReaderSettings()
-    -- ReaderConfig keeps font/layout changes in memory until KOReader's
-    -- SaveSettings event.  Chapter navigation can happen before the normal
-    -- document-close path, so explicitly flush the current document first.
-    if not self.ui or type(self.ui.saveSettings) ~= "function" then return false end
-    self.ui:saveSettings()
-    return true
-end
-
-function Legado:applyReaderPreferences(config, preferences)
-    if type(config) ~= "table" or type(preferences) ~= "table" then
-        return false
-    end
-    for key, value in pairs(preferences) do
-        if is_reader_preference_key(key) then
-            config:saveSetting(key, value)
-        end
-    end
-    -- Do this after restoring the profile as older profiles may still contain
-    -- copt_embedded_fonts=1.  The current Legado reader format is plain text,
-    -- so there is no embedded publisher font that should override KOReader's
-    -- selected face.
-    normalize_legado_reader_preferences(preferences)
-    config:saveSetting("copt_embedded_fonts", 0)
-    return true
-end
-
-function Legado:applyLegadoTextFont(redraw)
-    -- KOReader keeps preformatted TXT text in the CSS `monospace` family.
-    -- The default monospace face on Kindle has no Chinese glyphs, so CRe uses
-    -- the same CJK fallback regardless of the user's selected main face. That
-    -- makes changing the KOReader font appear to do nothing for Legado books.
-    -- Legado chapters are prose, not source code: use the selected main face
-    -- for this document's monospace family while preserving every other
-    -- document-specific family association.
-    local document = self.ui and self.ui.document
-    local font = self.ui and self.ui.font
-    if not document or not document.is_txt or not font
-            or type(document.setFontFamilyFontFaces) ~= "function" then
-        return false
-    end
-    local face = font.font_face
-    if type(face) ~= "string" or face == "" then return false end
-
-    if type(font.font_family_fonts) ~= "table" then
-        font.font_family_fonts = {}
-    end
-    font.font_family_fonts.monospace = face
-
-    -- Let ReaderFont compose document-specific and global family mappings in
-    -- the same way as its normal KOReader menu. Calling it here avoids
-    -- accidentally clearing a user's serif/sans-serif/emoji associations.
-    if type(font.updateFontFamilyFonts) == "function" then
-        font:updateFontFamilyFonts()
-    else
-        local settings = rawget(_G, "G_reader_settings")
-        local ignore_font_names = settings
-            and type(settings.isTrue) == "function"
-            and settings:isTrue("cre_font_family_ignore_font_names")
-        document:setFontFamilyFontFaces({ monospace = face }, ignore_font_names)
-        if redraw and self.ui and type(self.ui.handleEvent) == "function" then
-            self.ui:handleEvent(Event:new("UpdatePos"))
-        end
-    end
-    return true
-end
-
-function Legado:loadActiveReaderPreferences(config)
-    local session = self:getActiveReaderSession()
-    config = config or (self.ui and self.ui.doc_settings)
-    if not session or not config then return false end
-    local preferences = self.storage:load_reader_preferences(session.book)
-    if not preferences then return false end
-    self:syncReaderFontPreference(session.book, preferences)
-    return self:applyReaderPreferences(config, preferences)
-end
-
 function Legado:resolveReaderSource(session)
     if type(session) ~= "table" then return nil, "reading session is missing" end
     local catalog = SourceCatalog:new(self.storage:get_state_root())
@@ -714,7 +444,7 @@ function Legado:resolveReaderSource(session)
     end
     local sources, err = catalog:list()
     if not sources then return nil, err end
-    for _, source in ipairs(sources) do
+    for source_index, source in ipairs(sources) do
         if source.bookSourceName == session.source_name
                 and tonumber(source.bookSourceType or 0) == 0 then
             return source
@@ -726,56 +456,6 @@ end
 function Legado:installReaderHooks()
     local status = self.ui and self.ui.status
     local plugin = self
-
-    -- ReaderFont:onSetFont is the native source of truth for a font chosen
-    -- in KOReader's face list. Remember that explicit user action so it is
-    -- not confused with a font inherited from a chapter or global default.
-    local reader_font = self.ui and self.ui.font
-    if reader_font and type(reader_font.onSetFont) == "function"
-            and not reader_font._legado_font_hook then
-        local original_on_set_font = reader_font.onSetFont
-        reader_font._legado_font_hook = true
-        reader_font.onSetFont = function(font_instance, face, ...)
-            local previous_face = font_instance.font_face
-            local result = original_on_set_font(font_instance, face, ...)
-            if face and font_instance.font_face == face
-                    and previous_face ~= face then
-                plugin._legado_font_face_user_selected = face
-                plugin:applyLegadoTextFont(false)
-
-                -- ReaderFont normally emits UpdatePos itself.  A Legado
-                -- chapter is a small standalone TXT that may have been
-                -- rendered from a cached CRe layout, though, and on Kindle
-                -- that event can leave the already-visible page unchanged:
-                -- the font menu radio button changes while the text frame
-                -- still contains the previous face.  Force a fresh layout on
-                -- the next UI turn, after the font menu callback has returned.
-                UIManager:nextTick(function()
-                    if not plugin.ui or not plugin.ui.document then return end
-                    -- On KPW4, CRe may keep the already-rendered TXT page even
-                    -- after a forced UpdatePos.  Save first, then use
-                    -- ReaderUI's seamless reload path: it rebuilds the
-                    -- document with the selected face and preserves the
-                    -- current xpointer.
-                    plugin:saveActiveReaderPreferences()
-                    if type(plugin.ui.reloadDocument) == "function" then
-                        plugin.ui:reloadDocument(nil, true)
-                        return
-                    end
-                    local rolling = plugin.ui.rolling
-                    if rolling and type(rolling.onUpdatePos) == "function" then
-                        rolling:onUpdatePos(true)
-                        if type(rolling.onRedrawCurrentView) == "function" then
-                            rolling:onRedrawCurrentView()
-                        end
-                    else
-                        plugin.ui:handleEvent(Event:new("UpdatePos"))
-                    end
-                end)
-            end
-            return result
-        end
-    end
 
     if status and type(status.onEndOfBook) == "function"
             and not status._legado_end_of_book_hook then
@@ -807,7 +487,6 @@ function Legado:installReaderHooks()
 end
 
 function Legado:onDocSettingsLoad(_doc_settings, document)
-    self:loadActiveReaderPreferences(_doc_settings)
     if not self.emoji_font_ready or type(document) ~= "table" then return end
     local registered = EmojiFont:register_with_cre()
     EmojiFont:add_document_fallback(document)
@@ -820,10 +499,6 @@ end
 
 function Legado:onReaderReady()
     self:installReaderHooks()
-    self:applyLegadoTextFont(true)
-    -- Seed a profile for existing sessions and keep it current after a normal
-    -- KOReader settings flush.  Subsequent Legado chapters will inherit it.
-    self:saveActiveReaderPreferences()
     if self.emoji_font_ready and self.ui and self.ui.document then
         -- This is also useful when CRe was initialized before the plugin and
         -- the fallback list was rebuilt by a document reload.
@@ -832,10 +507,6 @@ function Legado:onReaderReady()
     UIManager:nextTick(function()
         self:startReaderPrefetch()
     end)
-end
-
-function Legado:onSaveSettings()
-    self:saveActiveReaderPreferences()
 end
 
 function Legado:cancelReaderPrefetch()
@@ -923,7 +594,7 @@ end
 function Legado:choosePrefetchCount()
     local current = self.storage:get_prefetch_count()
     local items = {}
-    for _, count in ipairs({ 5, 6, 7, 8, 9, 10 }) do
+    for count_index, count in ipairs({ 5, 6, 7, 8, 9, 10 }) do
         items[#items + 1] = {
             text = T(_("Prefetch next %1 chapters"), count),
             mandatory = count == current and _("Current") or nil,
@@ -986,11 +657,6 @@ end
 
 function Legado:openReaderChapter(session, target_index, seamless)
     self:cancelReaderPrefetch()
-    -- Save before the session index changes.  Otherwise selecting a chapter
-    -- from the local chapter list would make the old document look unrelated
-    -- to the session before ReaderUI emits SaveSettings.
-    self:flushActiveReaderSettings()
-    self:saveActiveReaderPreferences()
     local chapter = session.chapters[target_index]
     if not chapter then
         self._reader_transition_busy = false
@@ -1235,7 +901,7 @@ function Legado:mergeSourceJson(raw)
 
     local added = 0
     local replaced = 0
-    for _, source in ipairs(incoming) do
+    for incoming_index, source in ipairs(incoming) do
         local source_url = tostring(source.bookSourceUrl or "")
         local existing_index
         for index, existing in ipairs(sources) do
@@ -1572,7 +1238,7 @@ function Legado:chooseLoginSource()
         return
     end
     local items = {}
-    for _, source in ipairs(sources) do
+    for source_index, source in ipairs(sources) do
         if source.enabled ~= false
                 and tonumber(source.bookSourceType or 0) == 0
                 and source_has_login(source) then
@@ -1783,7 +1449,7 @@ function Legado:showSourceLoginActions(source, buttons, values)
         return
     end
     local items = {}
-    for _, control in ipairs(buttons) do
+    for control_index, control in ipairs(buttons) do
         local action = control.action or control.onClick or control.callback
         if action and tostring(action) ~= "" then
             items[#items + 1] = {
@@ -1860,7 +1526,7 @@ local function append_source_notifications(lines, notifications)
         return
     end
     local messages = {}
-    for _, notification in ipairs(notifications) do
+    for notification_index, notification in ipairs(notifications) do
         local operation = ""
         local message = notification
         if type(notification) == "table" then
@@ -1950,7 +1616,7 @@ function Legado:chooseSearchSource()
         return
     end
     local items = {}
-    for _, source in ipairs(sources) do
+    for source_index, source in ipairs(sources) do
         if source.enabled ~= false
                 and tonumber(source.bookSourceType or 0) == 0
                 and type(source.searchUrl) == "string"
@@ -1986,29 +1652,113 @@ function Legado:showBookshelf()
         self:showOperationResult(_("Cannot load bookshelf:\n") .. tostring(err))
         return
     end
-    local items = {}
-    for index, book in ipairs(books) do
-        if index > 100 then break end
-        if type(book) == "table" and book.name and book.name ~= "" then
-            local author = book.author and book.author ~= ""
-                and ("\n" .. display_text(book.author)) or ""
-            items[#items + 1] = {
-                text = display_text(book.name) .. author,
-                mandatory = display_text(book.originName or book.origin),
-                book = book,
-            }
-        end
+    local groups, group_err = catalog:groups()
+    if not groups then
+        self:showOperationResult(_("Cannot load bookshelf groups:\n") .. tostring(group_err))
+        return
     end
-    if #items == 0 then
+    if #books == 0 then
         self:showOperationResult(_("Bookshelf is empty. Import an Android backup or search and download a book."))
         return
     end
-    local book_menu
-    book_menu = Menu:new{
-        title = _("Legado bookshelf"),
+    self:showBookshelfGroups(catalog, books, groups)
+end
+
+function Legado:showBookshelfGroups(catalog, books, groups)
+    local items = {
+        {
+            text = T(_("All books (%1)"), #books),
+            mandatory = _("Open bookshelf"),
+            group = nil,
+        },
+    }
+    for group_index, group in ipairs(groups) do
+        if type(group) == "table" and group.show ~= false then
+            local selected = catalog:books_for_group(books, group)
+            -- Match the Android bookshelf's visible-group behavior: an
+            -- empty dynamic group is not useful in the reading flow, and a
+            -- large backup often contains audio/video groups with no text
+            -- books. All books remains the explicit empty-safe entry above.
+            if #selected > 0 then
+                local name = display_text(group.groupName or group.name or group.title)
+                if name == "" then name = _("Unnamed group") end
+                items[#items + 1] = {
+                    text = name,
+                    mandatory = T(_("%1 books"), #selected),
+                    group = group,
+                }
+            end
+        end
+    end
+    local group_menu
+    group_menu = Menu:new{
+        title = _("Legado bookshelf groups"),
         item_table = items,
         items_per_page = 12,
         onMenuSelect = function(menu, item)
+            UIManager:close(menu)
+            self:showBookshelfBooks(catalog, books, item.group, groups)
+        end,
+    }
+    UIManager:show(group_menu)
+end
+
+function Legado:showBookshelfBooks(catalog, books, group, groups)
+    local entries
+    if group then
+        entries = catalog:books_for_group(books, group)
+    else
+        entries = {}
+        for index, book in ipairs(books) do
+            entries[#entries + 1] = { book = book, index = index }
+        end
+    end
+    local items = {}
+    if groups and #groups > 0 then
+        items[#items + 1] = {
+            text = _("Change bookshelf group"),
+            mandatory = _("Groups"),
+            choose_group = true,
+            separator = true,
+        }
+    end
+    for entry_index, entry in ipairs(entries) do
+        local book = entry.book
+        if type(book) == "table" and book.name and book.name ~= "" then
+            local author = book.author and book.author ~= ""
+                and ("\n" .. display_text(book.author)) or ""
+            local last = self.storage:get_last_chapter(book)
+            local progress = last and T(_("Chapter %1"), last) or nil
+            local source_label = display_text(book.originName or book.origin)
+            local mandatory = progress and source_label ~= ""
+                and (progress .. " · " .. source_label) or progress or source_label
+            items[#items + 1] = {
+                text = display_text(book.name) .. author,
+                mandatory = mandatory,
+                book = book,
+                book_index = entry.index,
+            }
+        end
+    end
+    if #items == 0 or (#items == 1 and items[1].choose_group) then
+        self:showOperationResult(_("This bookshelf group is empty."))
+        return
+    end
+    local title = _("Legado bookshelf")
+    if group then
+        title = title .. " · " .. display_text(group.groupName or group.name or group.title)
+    end
+    local book_menu
+    book_menu = Menu:new{
+        title = title,
+        item_table = items,
+        items_per_page = 12,
+        onMenuSelect = function(menu, item)
+            if item.choose_group then
+                UIManager:close(menu)
+                self:showBookshelfGroups(catalog, books, groups)
+                return
+            end
             UIManager:close(menu)
             local source, source_err = catalog:find_for_book(item.book)
             if not source then
@@ -2250,10 +2000,6 @@ function Legado:showChapterJump(source, book, result)
 end
 
 function Legado:openOrDownloadChapter(source, book, chapter, chapters)
-    -- Preserve the current chapter's live font/layout choices before replacing
-    -- the session with the selected target chapter.
-    self:flushActiveReaderSettings()
-    self:saveActiveReaderPreferences()
     if chapters then
         self.storage:save_reader_session(book, source, chapters, chapter.index)
     end
@@ -2454,41 +2200,32 @@ function Legado:chooseBackupFile()
             self:runWorker(_("Importing backup…"), function()
                 local result, err = Backup.import_archive(filename, self.storage:get_state_root())
                 if not result then return nil, err or "backup import failed" end
+                -- Android's three read-record tables are kept as supported
+                -- state members, then converted to the Kindle-native progress
+                -- and history files without importing Android reader options.
+                local imported_storage = Storage:new()
+                local reading, reading_err = imported_storage:import_reading_records()
+                result.reading_import = reading
+                result.reading_import_error = reading_err
                 return result
             end, function(result)
                 local counts = result.summary.counts or {}
-                local previous = result.previous_root and ("\n" .. _("Previous state kept at:") .. "\n" .. result.previous_root) or ""
+                local reading = result.reading_import or {}
+                local records = reading.records or {}
+                local reading_error = result.reading_import_error
+                    and ("\n" .. _("Reading history conversion:") .. " " .. tostring(result.reading_import_error))
+                    or ""
                 self:showOperationResult(string.format(
-                    _("Imported backup.\nSources: %s\nBooks: %s%s"),
+                    _("Imported Android data.\nSources: %s\nBooks: %s\nGroups: %s\nRead records: %s\nRead details: %s\nRead sessions: %s\nResumed books: %s\nIgnored Android settings: %s%s"),
                     tostring(counts.book_sources or 0),
                     tostring(counts.bookshelf_books or 0),
-                    previous
-                ))
-            end)
-        end,
-    }
-    UIManager:show(chooser)
-end
-
-function Legado:chooseExportDirectory()
-    local chooser = PathChooser:new{
-        title = _("Long-press a folder for the exported ZIP"),
-        select_directory = true,
-        select_file = false,
-        path = self.storage:get_default_path(),
-        onConfirm = function(directory)
-            local filename = directory .. "/legado-kindle-" .. os.date("%Y%m%d-%H%M%S") .. ".zip"
-            self:runWorker(_("Exporting backup…"), function()
-                local result, err = Backup.export_state(self.storage:get_state_root(), filename)
-                if not result then return nil, err or "backup export failed" end
-                return result
-            end, function(result)
-                local counts = result.summary.counts or {}
-                self:showOperationResult(string.format(
-                    _("Exported backup.\nSources: %s\nBooks: %s\n\n%s"),
-                    tostring(counts.book_sources or 0),
-                    tostring(counts.bookshelf_books or 0),
-                    filename
+                    tostring(counts.book_groups or 0),
+                    tostring(counts.read_records or records.read_records or 0),
+                    tostring(counts.read_record_details or records.read_record_details or 0),
+                    tostring(counts.read_record_sessions or records.read_record_sessions or 0),
+                    tostring(reading.progress_books or 0),
+                    tostring(counts.ignored_members or 0),
+                    reading_error
                 ))
             end)
         end,
@@ -2501,10 +2238,12 @@ function Legado:onLegadoShowStatus()
     local error_line = state.error and ("\n" .. _("State:") .. " " .. tostring(state.error)) or ""
     UIManager:show(InfoMessage:new{
         text = string.format(
-            _("Schema: %s\nSources: %s\nBooks: %s\nMembers: %s%s"),
+            _("Schema: %s\nSources: %s\nBooks: %s\nGroups: %s\nRead records: %s\nMembers: %s%s"),
             tostring(state.schema_version or "unknown"),
             tostring(state.sources or 0),
             tostring(state.books or 0),
+            tostring(state.groups or 0),
+            tostring(state.read_records or 0),
             tostring(state.members or 0),
             error_line
         ),

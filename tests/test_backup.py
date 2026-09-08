@@ -6,8 +6,8 @@ import tempfile
 import unittest
 import zipfile
 
-from legado_kindle.backup import ANDROID_BACKUP_FILES, BackupBundle, BackupError
-from legado_kindle.state import StateDirectory, StateError, export_state, import_bundle
+from legado_kindle.backup import IMPORT_MEMBERS, BackupBundle, BackupError
+from legado_kindle.state import StateDirectory, StateError, import_bundle
 
 
 class BackupTests(unittest.TestCase):
@@ -21,43 +21,96 @@ class BackupTests(unittest.TestCase):
             "enabledCookieJar": True,
             "jsLib": "function helper() {}",
             "ruleBookInfo": {"name": "@css:h1@text"},
-            "ruleContent": {"content": "@css:article@text", "nextContentUrl": "@css:a.next@href"},
-            "ruleToc": {"chapterList": "@css:a", "nextTocUrl": "@css:a.next@href"},
+            "ruleContent": {
+                "content": "@css:article@text",
+                "nextContentUrl": "@css:a.next@href",
+            },
+            "ruleToc": {
+                "chapterList": "@css:a",
+                "nextTocUrl": "@css:a.next@href",
+            },
         }
-        json_members = {
-            "bookshelf.json": [{"name": "fixture", "type": 0, "readConfig": {}}],
-            "bookGroup.json": [{"groupId": 1, "groupName": "默认"}],
+        members = {
             "bookSource.json": [source],
-            "rssSources.json": [],
-            "readRecord.json": [],
-            "readRecordDetail.json": [],
-            "readRecordSession.json": [],
-            "searchHistory.json": [],
-            "txtTocRule.json": [],
-            "httpTTS.json": [],
-            "keyboardAssists.json": [],
-            "dictRule.json": [],
-            "readConfig.json": [],
-            "shareReadConfig.json": {},
-            "themeConfig.json": [],
+            "bookshelf.json": [
+                {
+                    "name": "fixture",
+                    "author": "author",
+                    "bookUrl": "https://example.invalid/book",
+                    "origin": "https://example.invalid",
+                    "durChapterIndex": 12,
+                    "durChapterTitle": "chapter",
+                    "durChapterTime": 123,
+                    "group": 7,
+                    "readConfig": {"fontSize": 99, "fontFace": "Droid Sans Mono"},
+                }
+            ],
+            "bookGroup.json": [{"groupId": 7, "groupName": "fixture group"}],
+            "readRecord.json": [
+                {
+                    "bookName": "fixture",
+                    "bookAuthor": "author",
+                    "lastRead": 123,
+                    "readTime": 456,
+                }
+            ],
+            "readRecordDetail.json": [
+                {
+                    "bookName": "fixture",
+                    "bookAuthor": "author",
+                    "date": "2026-01-01",
+                    "lastReadTime": 123,
+                    "readTime": 456,
+                }
+            ],
+            "readRecordSession.json": [
+                {
+                    "bookName": "fixture",
+                    "bookAuthor": "author",
+                    "startTime": 100,
+                    "endTime": 123,
+                    "words": 4,
+                }
+            ],
+        }
+        ignored = {
+            # Invalid ignored members must not break an import.
+            "readConfig.json": b"not-json",
+            "servers.json": b"opaque-server-state",
+            "config.xml": b"not-xml",
+            "future-setting.bin": b"future",
         }
         with zipfile.ZipFile(path, "w") as archive:
-            for filename in ANDROID_BACKUP_FILES:
-                if filename in json_members:
-                    data = json.dumps(json_members[filename], ensure_ascii=False).encode()
-                elif filename == "servers.json":
-                    data = b"opaque-server-state"
-                else:
-                    data = b'<map><boolean name="flag" value="true"/></map>'
+            for filename in IMPORT_MEMBERS:
+                archive.writestr(
+                    filename,
+                    json.dumps(members[filename], ensure_ascii=False).encode(),
+                )
+            for filename, data in ignored.items():
                 archive.writestr(filename, data)
         return path
 
-    def test_summary_is_value_redacted_and_counts_rules(self) -> None:
+    def test_import_boundary_keeps_sources_groups_records_and_strips_reader_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = BackupBundle.load(self.make_archive(Path(temporary)))
+            self.assertEqual(tuple(bundle.members), IMPORT_MEMBERS)
+            self.assertEqual(set(bundle.parsed_json), set(IMPORT_MEMBERS))
+            self.assertIn("readConfig.json", bundle.ignored_files)
+            self.assertIn("config.xml", bundle.ignored_files)
+            self.assertNotIn("readConfig", bundle.json("bookshelf.json")[0])
+            self.assertEqual(bundle.json("bookGroup.json")[0]["groupId"], 7)
+            self.assertEqual(len(bundle.json("readRecordSession.json")), 1)
+
+    def test_summary_is_value_redacted_and_counts_rules_and_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             archive = BackupBundle.load(self.make_archive(Path(temporary)))
             summary = archive.summary().as_dict()
             self.assertEqual(summary["counts"]["book_sources"], 1)
             self.assertEqual(summary["counts"]["bookshelf_books"], 1)
+            self.assertEqual(summary["counts"]["book_groups"], 1)
+            self.assertEqual(summary["counts"]["read_records"], 1)
+            self.assertEqual(summary["counts"]["read_record_details"], 1)
+            self.assertEqual(summary["counts"]["read_record_sessions"], 1)
             self.assertEqual(summary["feature_usage"]["sources_with_js_lib"], 1)
             self.assertEqual(summary["feature_usage"]["sources_with_content_next_url"], 1)
             self.assertIn("nextContentUrl", summary["rule_keys"]["ruleContent"])
@@ -65,18 +118,15 @@ class BackupTests(unittest.TestCase):
             self.assertNotIn("https://example.invalid", rendered)
             self.assertNotIn("fixture", rendered)
 
-    def test_roundtrip_preserves_opaque_member(self) -> None:
+    def test_missing_supported_member_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            source = self.make_archive(Path(temporary))
-            original = BackupBundle.load(source)
-            destination = Path(temporary) / "roundtrip.zip"
-            original.write(destination)
-            rewritten = BackupBundle.load(destination)
-            self.assertEqual(rewritten.members["servers.json"], b"opaque-server-state")
-            self.assertEqual(rewritten.members["config.xml"], original.members["config.xml"])
-            self.assertEqual(rewritten.summary().missing_files, ())
+            path = Path(temporary) / "incomplete.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("bookSource.json", "[]")
+            with self.assertRaisesRegex(BackupError, "bookSource|bookshelf"):
+                BackupBundle.load(path)
 
-    def test_zip_path_traversal_is_rejected(self) -> None:
+    def test_zip_path_traversal_is_rejected_even_for_ignored_members(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "unsafe.zip"
             with zipfile.ZipFile(path, "w") as archive:
@@ -90,24 +140,35 @@ class BackupTests(unittest.TestCase):
             with self.assertRaises(BackupError):
                 BackupBundle.load(nested)
 
-    def test_state_directory_roundtrip_preserves_android_members(self) -> None:
+    def test_state_contains_only_import_members_and_preserves_progress_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = BackupBundle.load(self.make_archive(root))
             state = import_bundle(source, root / "state")
             self.assertIsInstance(state, StateDirectory)
-            self.assertEqual(state.manifest()["state_schema_version"], 1)
-            destination = root / "from-state.zip"
-            export_state(state, destination)
-            rewritten = BackupBundle.load(destination)
-            self.assertEqual(rewritten.members, source.members)
+            self.assertEqual(state.manifest()["state_schema_version"], 2)
+            self.assertEqual(
+                {child.name for child in state.root.iterdir()},
+                set(IMPORT_MEMBERS) | {"manifest.json"},
+            )
+            self.assertFalse((state.root / "android").exists())
+            self.assertNotIn("readConfig", json.loads(state.bookshelf_path.read_text()))
+            self.assertEqual(
+                json.loads(state.groups_path.read_text())[0]["groupName"],
+                "fixture group",
+            )
+            self.assertEqual(len(state.load_bundle().json("readRecord.json")), 1)
 
-    def test_state_directory_rejects_tampered_member(self) -> None:
+    def test_state_directory_rejects_tampered_member_and_android_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = BackupBundle.load(self.make_archive(root))
             state = import_bundle(source, root / "state")
-            (state.android_path / "servers.json").write_bytes(b"tampered")
+            (state.root / "readRecord.json").write_bytes(b"[]\n")
+            with self.assertRaises(StateError):
+                state.load_bundle()
+
+            (state.root / "readConfig.json").write_bytes(b"[]")
             with self.assertRaises(StateError):
                 state.load_bundle()
 

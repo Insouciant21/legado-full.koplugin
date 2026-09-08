@@ -19,3 +19,4 @@ testdata/
 
 # Local KPW4 rendering captures are development artifacts.
 /legado-emoji-*.png
+tmp/

@@ -4,13 +4,14 @@ local util = require("util")
 local Backup = require("legado/backup")
 local Content = require("legado/content")
 local LuaSettings = require("luasettings")
+local rapidjson = require("rapidjson")
 
 local Storage = {}
 Storage.__index = Storage
 
 local function default_state()
     return {
-        schema_version = 1,
+        schema_version = Backup.STATE_SCHEMA_VERSION,
         sources = 0,
         books = 0,
         last_backup = nil,
@@ -24,17 +25,48 @@ function Storage:new()
     object.library_root = object.root .. "/library"
     object.progress_path = object.root .. "/reading-progress.lua"
     object.progress_settings = nil
+    object.history_path = object.root .. "/reading-history.lua"
+    object.history_settings = nil
     object.reader_session_path = object.root .. "/reading-session.lua"
     object.reader_session_settings = nil
-    object.reader_preferences_path = object.root .. "/reading-settings.lua"
-    object.reader_preferences = nil
+    object.settings_path = object.root .. "/settings.lua"
+    object.settings = nil
     if lfs.attributes(object.root, "mode") ~= "directory" then
         lfs.mkdir(object.root)
+    end
+    -- The previous implementation used reading-settings.lua for per-book
+    -- font/layout/CSS profiles. Those settings compete with KOReader and are
+    -- intentionally discarded. Keep only the plugin-owned prefetch count.
+    local legacy_preferences = object.root .. "/reading-settings.lua"
+    local legacy_prefetch
+    if lfs.attributes(legacy_preferences, "mode") == "file" then
+        local ok, old_settings = pcall(LuaSettings.open, LuaSettings, legacy_preferences)
+        if ok and old_settings then
+            legacy_prefetch = tonumber(old_settings:readSetting("prefetch_count"))
+        end
+        os.remove(legacy_preferences)
+    end
+    os.remove(legacy_preferences .. ".old")
+    if legacy_prefetch then
+        object.settings = LuaSettings:open(object.settings_path)
+        object.settings:saveSetting("prefetch_count", math.max(5, math.min(10, math.floor(legacy_prefetch))))
+        object.settings:flush()
+    end
+    -- Compact the temporary v1 state once. This removes the old android/
+    -- directory, including Android UI settings that must never be reused.
+    local compacted, compact_error = Backup.compact_legacy_state(object.state_root)
+    if not compacted then
+        object.legacy_migration_error = compact_error
     end
     return object
 end
 
 function Storage:read_state()
+    if self.legacy_migration_error then
+        local value = default_state()
+        value.error = self.legacy_migration_error
+        return value
+    end
     local bundle, err = Backup.read_state(self.state_root)
     if not bundle then
         local value = default_state()
@@ -48,6 +80,10 @@ function Storage:read_state()
         sources = counts.book_sources or 0,
         books = counts.bookshelf_books or 0,
         members = summary.member_count or 0,
+        groups = counts.book_groups or 0,
+        read_records = counts.read_records or 0,
+        read_record_details = counts.read_record_details or 0,
+        read_record_sessions = counts.read_record_sessions or 0,
         imported_at = bundle.manifest and bundle.manifest.imported_at or nil,
     }
 end
@@ -157,6 +193,172 @@ local function copy_session_value(value, depth)
     return result
 end
 
+local function history_part(value)
+    value = tostring(value or "")
+    return value:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+end
+
+local function history_key(name, author)
+    return history_part(name) .. "\t" .. history_part(author)
+end
+
+local function as_epoch_seconds(value)
+    local number = tonumber(value)
+    if not number or number <= 0 then return 0 end
+    -- Legado stores these timestamps in milliseconds; the local settings
+    -- files use the Unix-second convention used by os.time().
+    if number > 100000000000 then number = number / 1000 end
+    return math.floor(number)
+end
+
+local function decode_record_collection(filename, data)
+    local ok, value = pcall(rapidjson.decode, data)
+    if not ok or type(value) ~= "table" then
+        return nil, filename .. " is not a JSON collection"
+    end
+    return value
+end
+
+local function each_record(collection, callback)
+    if type(collection) ~= "table" then return end
+    -- Accept an object as well as the current Android array shape. This keeps
+    -- the importer tolerant of old Legado exports without changing storage.
+    if collection.bookName ~= nil or collection.bookAuthor ~= nil then
+        callback(collection)
+        return
+    end
+    for _, record in ipairs(collection) do
+        if type(record) == "table" then callback(record) end
+    end
+end
+
+local function merge_history_record(history, record, kind)
+    local name = record.bookName or record.name or record.book_name
+    local author = record.bookAuthor or record.author or record.book_author
+    if not name or tostring(name) == "" then return end
+    local key = history_key(name, author)
+    local item = history[key]
+    if not item then
+        item = {
+            name = tostring(name),
+            author = tostring(author or ""),
+            last_read = 0,
+            read_time = 0,
+            read_words = 0,
+            session_count = 0,
+            detail_count = 0,
+        }
+        history[key] = item
+    end
+    local timestamp = as_epoch_seconds(
+        record.lastRead or record.lastReadTime or record.endTime or record.startTime
+    )
+    if timestamp > (item.last_read or 0) then item.last_read = timestamp end
+    local read_time = tonumber(record.readTime) or 0
+    local read_words = tonumber(record.readWords or record.words) or 0
+    if kind == "readRecord" then
+        -- readRecord is the Android aggregate for this book.
+        if read_time > (item.read_time or 0) then item.read_time = read_time end
+    elseif kind == "readRecordDetail" then
+        item.detail_count = (item.detail_count or 0) + 1
+        item.read_time_detail = (item.read_time_detail or 0) + read_time
+        item.read_words_detail = (item.read_words_detail or 0) + read_words
+    else
+        item.session_count = (item.session_count or 0) + 1
+        item.read_words_session = (item.read_words_session or 0) + read_words
+    end
+end
+
+function Storage:get_history_settings()
+    if not self.history_settings then
+        self.history_settings = LuaSettings:open(self.history_path)
+    end
+    return self.history_settings
+end
+
+function Storage:import_reading_records()
+    local bundle, err = Backup.read_state(self.state_root)
+    if not bundle then return nil, err end
+    local history = {}
+    local history_books = 0
+    local record_counts = {}
+    local record_files = {
+        { name = "readRecord.json", kind = "readRecord", count = "read_records" },
+        { name = "readRecordDetail.json", kind = "readRecordDetail", count = "read_record_details" },
+        { name = "readRecordSession.json", kind = "readRecordSession", count = "read_record_sessions" },
+    }
+    for _, item in ipairs(record_files) do
+        local value, decode_err = decode_record_collection(item.name, bundle.members[item.name])
+        if not value then return nil, decode_err end
+        local count = 0
+        each_record(value, function(record)
+            count = count + 1
+            merge_history_record(history, record, item.kind)
+        end)
+        record_counts[item.count] = count
+        value = nil
+        collectgarbage("step")
+    end
+
+    local books = bundle.parsed_json["bookshelf.json"] or {}
+    local progress = self:get_progress_settings():readSetting("books") or {}
+    if type(progress) ~= "table" then progress = {} end
+    local progress_books = 0
+    for _, book in ipairs(books) do
+        if type(book) == "table" then
+            local index = tonumber(book.durChapterIndex)
+            local book_history = history[history_key(book.name, book.author)]
+            local position = math.max(0, math.floor(tonumber(book.durChapterPos) or 0))
+            -- A refreshed bookshelf can have durChapterTime without the user
+            -- ever opening chapter one. Treat an entry as read when it has a
+            -- non-zero chapter/position or a matching Android read record.
+            if index and index >= 0
+                    and (index > 0 or position > 0 or book_history ~= nil) then
+                local key = book_key(book)
+                if key ~= "" then
+                    -- Android Book.durChapterIndex is zero-based; the plugin
+                    -- chapter list and KOReader-facing progress are one-based.
+                    local entry = {
+                        index = math.floor(index) + 1,
+                        title = tostring(book.durChapterTitle or ""),
+                        position = position,
+                        updated_at = as_epoch_seconds(book.durChapterTime),
+                        imported = true,
+                    }
+                    if book_history and book_history.last_read > entry.updated_at then
+                        entry.updated_at = book_history.last_read
+                    end
+                    local previous = progress[key]
+                    local previous_updated = type(previous) == "table"
+                        and tonumber(previous.updated_at) or 0
+                    -- A second import must not move an already-read Kindle
+                    -- chapter backwards when the Android backup is older.
+                    -- Imported progress may be refreshed by a newer backup.
+                    if previous == nil or previous.imported == true
+                            or previous_updated <= (entry.updated_at or 0) then
+                        progress[key] = entry
+                        progress_books = progress_books + 1
+                    end
+                end
+            end
+        end
+    end
+    local progress_settings = self:get_progress_settings()
+    progress_settings:saveSetting("books", progress)
+    progress_settings:flush()
+
+    local history_settings = self:get_history_settings()
+    history_settings:saveSetting("books", history)
+    history_settings:saveSetting("imported_at", os.time())
+    history_settings:flush()
+    for _ in pairs(history) do history_books = history_books + 1 end
+    return {
+        records = record_counts,
+        history_books = history_books,
+        progress_books = progress_books,
+    }
+end
+
 function Storage:get_reader_session_settings()
     if not self.reader_session_settings then
         self.reader_session_settings = LuaSettings:open(self.reader_session_path)
@@ -164,15 +366,15 @@ function Storage:get_reader_session_settings()
     return self.reader_session_settings
 end
 
-function Storage:get_reader_preferences()
-    if not self.reader_preferences then
-        self.reader_preferences = LuaSettings:open(self.reader_preferences_path)
+function Storage:get_settings()
+    if not self.settings then
+        self.settings = LuaSettings:open(self.settings_path)
     end
-    return self.reader_preferences
+    return self.settings
 end
 
 function Storage:get_prefetch_count()
-    local value = tonumber(self:get_reader_preferences():readSetting("prefetch_count"))
+    local value = tonumber(self:get_settings():readSetting("prefetch_count"))
     if not value then return 5 end
     return math.max(5, math.min(10, math.floor(value)))
 end
@@ -180,40 +382,10 @@ end
 function Storage:save_prefetch_count(value)
     value = tonumber(value) or 5
     value = math.max(5, math.min(10, math.floor(value)))
-    local settings = self:get_reader_preferences()
+    local settings = self:get_settings()
     settings:saveSetting("prefetch_count", value)
     settings:flush()
     return value
-end
-
--- KOReader stores reading options in the sidecar belonging to each document.
--- Legado chapters are deliberately separate TXT documents, so keep a second
--- profile keyed by the logical Legado book and apply it when another chapter
--- is opened.  This profile contains presentation options only; positions,
--- bookmarks and document metadata remain in the chapter's own sidecar.
-function Storage:load_reader_preferences(book)
-    local key = book_key(book)
-    if key == "" then return nil end
-    local books = self:get_reader_preferences():readSetting("books")
-    if type(books) ~= "table" or type(books[key]) ~= "table" then
-        return nil
-    end
-    return copy_session_value(books[key], 0)
-end
-
-function Storage:save_reader_preferences(book, preferences)
-    local key = book_key(book)
-    if key == "" or type(preferences) ~= "table" then return false end
-    local saved = copy_session_value(preferences, 0)
-    if type(saved) ~= "table" then return false end
-
-    local settings = self:get_reader_preferences()
-    local books = settings:readSetting("books")
-    if type(books) ~= "table" then books = {} end
-    books[key] = saved
-    settings:saveSetting("books", books)
-    settings:flush()
-    return true
 end
 
 function Storage:load_reader_session()

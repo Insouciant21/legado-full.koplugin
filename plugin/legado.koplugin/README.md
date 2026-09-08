@@ -14,6 +14,7 @@ koreader/
         ├── legado/
         │   ├── backup.lua
         │   ├── browser_input.lua
+        │   ├── content.lua
         │   ├── font.lua
         │   ├── javascript.lua
         │   ├── network.lua
@@ -21,132 +22,77 @@ koreader/
         │   ├── runtime.lua
         │   ├── session.lua
         │   ├── source.lua
-        │   ├── storage.lua
-        │   └── content.lua
+        │   └── storage.lua
         └── lib/
             ├── armel/liblegado_js.so
             └── armhf/liblegado_js.so
 ```
 
-The plugin can now import an Android Legado backup ZIP and export the imported
-state back to an Android-shaped ZIP. It preserves unknown and Android-specific
-members byte-for-byte, including `servers.json` and `config.xml`; an existing
-on-device state is moved to a `.previous` directory before a new import is
-activated.
+## Import boundary
 
-The source status screen also counts text sources and marks sources containing
-JavaScript or XPath. The Kindle rule layer covers CSS, Legado's old
-`class./tag./id.` selectors, numeric and bracket indexes, text, JSONPath, common
-XPath, regex (including `:` AllInOne capture rules), `@put/@get` rule variables,
-composition, templates, replacement rules, and the common
-`nth-*`/`eq` selector filters used by legacy sources.
+`Legado → Backup & restore` imports an Android backup ZIP. It does not export
+an archive. Only `bookSource.json`, `bookshelf.json`, `bookGroup.json`,
+`readRecord.json`, `readRecordDetail.json` and `readRecordSession.json` are
+stored. Android themes, reader settings, servers, RSS data, search history and
+other members are ignored. The `readConfig` object nested in a bookshelf book
+is also removed.
 
-Search and page requests also understand Legado URL options for GET/POST,
-form/JSON bodies, page-list placeholders such as `<1,2>`, and optional GBK
-conversion when the KOReader base exposes its iconv library. JSON list rules
-are returned as JSON records, so a source can use `@json:` paths for search
-results as well.
+Source definitions are kept complete, including aggregate-source rules,
+pagination, variables, JavaScript, login UI and login actions. No source name,
+endpoint or private aggregate protocol is embedded in the plugin.
+
+The record tables are processed once after import. Android stores the current
+chapter in the bookshelf (`durChapterIndex`, `durChapterTitle` and
+`durChapterTime`), while `readRecord*.json` stores reading statistics. The
+plugin converts the chapter index to its own one-based continuation record and
+stores statistics separately in `reading-history.lua`.
+
+## Bookshelf and reading
 
 The bookshelf is available directly from the KOReader main-menu page as
-`Legado bookshelf`; it is also available as `Legado → Open bookshelf` for
-hosts that group plugin entries. The dispatcher action `Legado: open bookshelf`
-can also be assigned to a KOReader gesture or key. The search flow is
-intentionally conservative: choose one imported text source, search it, choose
-a book, then continue from the last selected chapter, jump to a chapter number,
-or open one chapter.
+`Legado bookshelf`; it is also available as `Legado → Open bookshelf`. The
+dispatcher action `Legado: open bookshelf` can be assigned to a gesture or key.
+The first screen contains `All books` and imported Legado groups. Positive
+custom group IDs are matched as Legado's power-of-two flags against a book's
+stored group; negative built-in groups are derived from generic type, source,
+progress and update fields.
 
-The Android-style source workflow is under `Legado → Source settings`. `Source
-list` includes every imported book-source type so aggregate sources are not
-silently hidden. Selecting a source opens its actions: login/actions when a
-`loginUrl` exists, search, full JSON edit, enable/disable, and delete. `Add
-source` accepts one source object or an array from pasted JSON, or a standalone
-JSON file; matching `bookSourceUrl` entries are replaced. `Backup & restore`
-contains the Android ZIP import/export actions, while `Diagnostics` contains
-status and compatibility reports.
+Selecting a book opens its source chapter list. The current reading session
+contains the book, source and chapter list. At the end of a cached or newly
+downloaded chapter, the plugin opens the next chapter directly. The reader
+menu exposes the local chapter list, previous chapter and next chapter; the
+normal KOReader Table of contents action is redirected only for a Legado TXT
+chapter. The chapter list has an explicit refresh action for serial updates.
 
-Opening a chapter creates a lightweight reading session containing the book,
-source and chapter list. At the end of a cached or newly downloaded chapter,
-the plugin switches directly to the next chapter without returning to the
-bookshelf. The reader menu exposes the chapter list, next chapter and previous
-chapter actions while a Legado chapter is open. KOReader's normal Table of
-contents action is redirected to this Legado chapter list for these standalone
-TXT chapters, while non-Legado documents keep their native ToC. When a serial
-reaches the last known chapter, the plugin refreshes the table of contents;
-newly published chapters can then be opened automatically. Only the current
-chapter is needed for normal reading, and cached chapters are reused after
-restarting KOReader.
+Only the current chapter is needed for normal reading. Whole-book download is
+sequential, cancellable and resumable because cached chapters are skipped.
+After a chapter is ready, the plugin prefetches the next five uncached
+chapters in the background; `Legado → Reading` can change this from 5 to 10.
 
-Opening the chapter list from an active reading session uses the saved local
-TOC immediately; it does not wait for the source network request. The menu has
-an explicit `Refresh chapter list` action for checking a serial source for new
-chapters.
+KOReader owns font, size, spacing, CSS, embedded-font handling, position,
+bookmarks and all other reading presentation. The plugin no longer reads or
+writes its old per-book `reading-settings.lua` profiles. Use KOReader's own
+font and reading menus. Emoji remain in source/book/chapter text; the bundled
+monochrome `Symbola_hint.ttf` is installed as an optional fallback for common
+emoji on KPW4.
 
-The reader prefetches the next five uncached chapters in the background after a
-Legado chapter is ready. `Legado → Reading → Prefetch next N chapters` changes this to
-any value from 5 through 10. Prefetch is sequential and is cancelled by normal
-chapter navigation, so it does not put a progress dialog over the page and an
-incomplete request can be retried in the foreground.
+## Sources and login
 
-`Download entire book` downloads chapters one at a time with a visible,
-cancellable chapter progress bar. Completed chapters are kept in the per-book
-cache, so a later attempt skips them and resumes at the first missing chapter.
-After all chapters are cached, the plugin writes both UTF-8 TXT and EPUB; the
-EPUB is opened when the KOReader archive writer is available. The
-restored-bookshelf entry can perform the same flow for books recorded in
-`bookshelf.json` by matching their original source URL/name.
-`ruleContent.replaceRegex` is applied to the merged chapter text for common
-Java-regex replacement rules.
+`Legado → Source settings → Source list` lists all imported source types.
+Selecting a source provides login/Actions, search, full JSON editing,
+enable/disable and delete. `Add source` accepts a source object or array from
+pasted JSON or a JSON file.
 
-Legado content rules may return HTML fragments. After rule processing, the
-plugin converts block tags such as `p`, `div`, and `br` to paragraph breaks,
-decodes common HTML entities, and removes scripts, styles, images, SVG payloads,
-and remaining tags. This is deliberately a text-novel policy: it keeps
-HTML-backed source prose readable on KPW4 rather than exposing web markup in a
-TXT document. The same normalized text is used when building EPUB paragraphs.
+The rule layer covers common CSS/legacy selectors, JSONPath, XPath, regex,
+`@put/@get` variables, templates, pagination, replacements and Legado
+JavaScript. QuickJS maps generic `java.ajax`, Cookie, variables, cache,
+Base64 and Hex host functions to Kindle, so aggregate sources are handled by
+their imported definitions rather than a source-specific adapter.
 
-Emoji are kept in book names, chapter names, backup data and chapter text. On
-KPW4, the bundled monochrome `Symbola_hint.ttf` is copied to KOReader's
-`fonts/legado/` directory and registered as a CRe/UI fallback. This lets common
-emoji render as grayscale outline glyphs suitable for an e-ink screen instead
-of deleting them or leaving square placeholders. If the running KOReader build
-cannot register a newly copied font, the plugin asks for one restart so its
-normal font scan can load it.
+Source-defined login controls and actions use `loginUi` plus `loginUrl` or
+JavaScript. Cookies, login information and source variables are stored per
+source in `<KOReader data dir>/legado/source-sessions.json`; this file is not
+an Android backup member and must be treated as private credential data.
 
-JavaScript rules run in the bundled QuickJS bridge. The bridge maps the common
-Legado host surface (`java.ajax`, URL options, Cookie, source/book variables,
-memory/cache, Base64 and Hex) to Lua, including typed `data:` responses used by
-some aggregate sources. JSON-mapped remote `jsLib` helpers are downloaded and
-cached per source. `ruleToc.preUpdateJs` and `formatJs` are also executed;
-function-style `formatChapter(index, title)` hooks are supported. Source login is
-available from `Legado → Source settings → Source list`, by opening a source's
-actions: the plugin reads the source's
-`loginUi`, supports text/password/number/textarea controls, offers its declared
-button actions, and runs `loginUrl` (or a pure JavaScript source's `mainJs`) in the
-same QuickJS host. `source.getLoginInfo`,
-`getLoginInfoMap`, `putLoginInfo`, source variables, and HTTP Cookie/Set-Cookie state
-are persisted per source in
-`<KOReader data dir>/legado/source-sessions.json`, then restored for later workers.
-This is deliberately outside the Android ZIP because the Android backup does not
-contain live authentication state; credentials must be entered once on Kindle.
-After an action finishes, its result can be dismissed to return directly to the
-same Actions list, allowing `login()`, `checkStatus()` and `logout()` to be run
-one after another without returning to the KOReader home screen.
-If a source action calls Legado's `java.startBrowserAwait` (or the interactive
-`startBrowser` variants), the plugin opens the Kindle's Chromium content shell,
-returns the current document, final URL, and Cookies for the await variant, and
-persists its source variables and cookies.
-Tap the generic `完成并返回 Kindle` button on the page when the source-defined
-settings or verification flow is complete. No source name, endpoint, field name,
-or private aggregate protocol is embedded in this path; the imported source
-remains the authority for the UI and response parsing.
-WebView-only JavaScript (`@webjs`), Android Java/Jsoup objects, image/captcha/audio
-features, and `java.webView` remain explicit unsupported capabilities.
-The session JSON is permission-restricted where the KOReader filesystem supports it,
-but it is not end-to-end encrypted; treat it as private credential/token data.
-
-Choose a backup by long-pressing the ZIP in the file chooser. Exporting creates
-`legado-kindle-YYYYMMDD-HHMMSS.zip` in the selected folder. The book-source
-members remain Android-shaped; WebDAV's separate `bookProgress/` sidecars are
-not ZIP members. Network and HTML work run in a Trapper subprocess so a slow
-source does not block the KOReader UI. The runtime is for text sources only
-and keeps explicit errors for capabilities it cannot safely execute.
+WebView-only JavaScript, Android Java/Jsoup objects, image/audio/manga-only
+features and `java.webView` remain explicit unsupported capabilities.

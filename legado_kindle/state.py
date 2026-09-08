@@ -1,4 +1,4 @@
-"""Versioned on-device state directory for the Kindle port."""
+"""Small on-device state directory for imported Legado data."""
 
 from __future__ import annotations
 
@@ -11,22 +11,15 @@ import shutil
 import tempfile
 from typing import Any
 
-from .backup import BackupBundle, BackupError, JSON_BACKUP_FILES, _validate_member_name
+from .backup import BackupBundle, IMPORT_MEMBERS, _validate_member_name
 
 
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
+STATE_FORMAT = "legado-imported-data"
 
 
 class StateError(ValueError):
     """Raised when a Kindle state directory is invalid."""
-
-
-def _member_kind(name: str) -> str:
-    if name in JSON_BACKUP_FILES:
-        return "json"
-    if name == "config.xml":
-        return "xml"
-    return "opaque"
 
 
 @dataclass(frozen=True)
@@ -38,8 +31,21 @@ class StateDirectory:
         return self.root / "manifest.json"
 
     @property
-    def android_path(self) -> Path:
-        return self.root / "android"
+    def sources_path(self) -> Path:
+        return self.root / "bookSource.json"
+
+    @property
+    def bookshelf_path(self) -> Path:
+        return self.root / "bookshelf.json"
+
+    @property
+    def groups_path(self) -> Path:
+        return self.root / "bookGroup.json"
+
+    def member_path(self, name: str) -> Path:
+        if name not in IMPORT_MEMBERS:
+            raise StateError(f"unsupported state member: {name}")
+        return self.root / name
 
     def manifest(self) -> dict[str, Any]:
         try:
@@ -50,14 +56,12 @@ class StateDirectory:
             raise StateError("invalid state manifest")
         if data.get("state_schema_version") != STATE_SCHEMA_VERSION:
             raise StateError("unsupported state schema version")
-        if data.get("format") != "legado-android-backup":
+        if data.get("format") != STATE_FORMAT:
             raise StateError("unsupported state format")
         return data
 
     def load_bundle(self) -> BackupBundle:
         manifest = self.manifest()
-        if not self.android_path.is_dir():
-            raise StateError("state directory has no android member directory")
         expected: dict[str, dict[str, Any]] = {}
         manifest_members = manifest.get("members")
         if not isinstance(manifest_members, list):
@@ -65,66 +69,78 @@ class StateDirectory:
         for item in manifest_members:
             if not isinstance(item, dict) or not isinstance(item.get("name"), str):
                 raise StateError("state manifest has an invalid member entry")
-            _validate_member_name(item["name"])
-            if item["name"] in expected:
-                raise StateError(f"duplicate state manifest member: {item['name']}")
-            if item.get("kind") != _member_kind(item["name"]):
-                raise StateError(f"state member kind mismatch: {item['name']}")
+            name = item["name"]
+            _validate_member_name(name)
+            if name not in IMPORT_MEMBERS:
+                raise StateError(f"state manifest contains an unsupported member: {name}")
+            if name in expected:
+                raise StateError(f"duplicate state manifest member: {name}")
+            if item.get("kind") != "json":
+                raise StateError(f"state member kind mismatch: {name}")
             if not isinstance(item.get("size"), int) or item["size"] < 0:
-                raise StateError(f"state member size is invalid: {item['name']}")
-            expected[item["name"]] = item
+                raise StateError(f"state member size is invalid: {name}")
+            expected[name] = item
+
+        if set(expected) != set(IMPORT_MEMBERS):
+            missing = sorted(set(IMPORT_MEMBERS) - set(expected))
+            extra = sorted(set(expected) - set(IMPORT_MEMBERS))
+            if missing:
+                raise StateError(f"state manifest is missing members: {missing}")
+            raise StateError(f"state manifest contains extra members: {extra}")
+
+        allowed = set(IMPORT_MEMBERS) | {"manifest.json"}
+        try:
+            children = list(self.root.iterdir())
+        except OSError as exc:
+            raise StateError(f"cannot read state directory: {exc}") from exc
+        for child in children:
+            if child.name not in allowed:
+                raise StateError(f"state contains an unsupported file: {child.name}")
+            if child.name != "manifest.json" and not child.is_file():
+                raise StateError(f"state member is not a file: {child.name}")
+
         members: dict[str, bytes] = {}
-        for file in self.android_path.iterdir():
-            if not file.is_file():
-                continue
-            _validate_member_name(file.name)
-            data = file.read_bytes()
-            info = expected.get(file.name)
-            if info is None:
-                raise StateError(f"state member is not listed in manifest: {file.name}")
+        for name in IMPORT_MEMBERS:
+            path = self.root / name
+            if not path.is_file():
+                raise StateError(f"state member is missing: {name}")
+            data = path.read_bytes()
+            info = expected[name]
             if info["size"] != len(data):
-                raise StateError(f"state member size mismatch: {file.name}")
-            # The Kindle Lua implementation intentionally omits a hash because
-            # KOReader's base does not expose a stable hashing API.  Desktop
-            # state manifests include it and are checked when present.
+                raise StateError(f"state member size mismatch: {name}")
             expected_hash = info.get("sha256")
             if expected_hash is not None and expected_hash != hashlib.sha256(data).hexdigest():
-                raise StateError(f"state member hash mismatch: {file.name}")
-            members[file.name] = data
-        if set(members) != set(expected):
-            missing = sorted(set(expected) - set(members))
-            extra = sorted(set(members) - set(expected))
-            raise StateError(f"state manifest/member mismatch: missing={missing}, extra={extra}")
-        bundle = BackupBundle.load_from_members(members)
-        return bundle
+                raise StateError(f"state member hash mismatch: {name}")
+            members[name] = data
+
+        try:
+            return BackupBundle.load_from_members(members)
+        except ValueError as exc:
+            raise StateError(str(exc)) from exc
 
 
 def _manifest_for(bundle: BackupBundle) -> dict[str, Any]:
     members = []
-    for name in sorted(bundle.members):
+    for name in IMPORT_MEMBERS:
         data = bundle.members[name]
         members.append(
             {
                 "name": name,
                 "size": len(data),
                 "sha256": hashlib.sha256(data).hexdigest(),
-                "kind": _member_kind(name),
+                "kind": "json",
             }
         )
     return {
         "state_schema_version": STATE_SCHEMA_VERSION,
-        "format": "legado-android-backup",
+        "format": STATE_FORMAT,
         "members": members,
         "summary": bundle.summary().as_dict(),
     }
 
 
 def import_bundle(bundle: BackupBundle, destination: str | os.PathLike[str]) -> StateDirectory:
-    """Materialize a backup into a new state directory.
-
-    The destination must not already exist. A staging directory is used so a
-    failed import cannot leave a partially populated state behind.
-    """
+    """Materialize only the six supported import members at state root."""
 
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -134,11 +150,9 @@ def import_bundle(bundle: BackupBundle, destination: str | os.PathLike[str]) -> 
     staging_name = tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent)
     staging = Path(staging_name)
     try:
-        android = staging / "android"
-        android.mkdir()
-        for name, data in bundle.members.items():
+        for name in IMPORT_MEMBERS:
             _validate_member_name(name)
-            (android / name).write_bytes(data)
+            (staging / name).write_bytes(bundle.members[name])
         (staging / "manifest.json").write_text(
             json.dumps(_manifest_for(bundle), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -148,10 +162,3 @@ def import_bundle(bundle: BackupBundle, destination: str | os.PathLike[str]) -> 
         shutil.rmtree(staging, ignore_errors=True)
         raise
     return StateDirectory(target)
-
-
-def export_state(state: StateDirectory, destination: str | os.PathLike[str]) -> None:
-    """Create an Android-shaped ZIP from a Kindle state directory."""
-
-    bundle = state.load_bundle()
-    bundle.write(destination)
