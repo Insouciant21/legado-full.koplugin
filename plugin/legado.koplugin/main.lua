@@ -2,6 +2,7 @@ local _ = require("gettext")
 local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local Dispatcher = require("dispatcher")
+local DocSettings = require("docsettings")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local InfoMessage = require("ui/widget/infomessage")
@@ -17,6 +18,74 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local FFIUtil = require("ffi/util")
 local T = FFIUtil.template
 local rapidjson = require("rapidjson")
+
+-- Legado chapters are separate files, while KOReader normally stores these
+-- options in each document's own sidecar.  Propagate only native reading
+-- presentation settings when moving between chapters.  Progress, position,
+-- annotations and document metadata must remain chapter-specific.
+local READER_PRESENTATION_KEYS = {
+    font_face = true,
+    font_family_fonts = true,
+    css = true,
+    style_tweaks = true,
+    style_tweaks_enabled = true,
+    book_style_tweak = true,
+    book_style_tweak_enabled = true,
+    book_style_tweak_last_edit_pos = true,
+    text_lang = true,
+    text_lang_embedded_langs = true,
+    hyphenation = true,
+    hyph_force_algorithmic = true,
+    hyph_soft_hyphens_only = true,
+    hyph_trust_soft_hyphens = true,
+    floating_punctuation = true,
+    inverse_reading_order = true,
+    page_overlap_style = true,
+    hide_nonlinear_flows = true,
+}
+
+local function is_reader_presentation_key(key)
+    return type(key) == "string"
+        and (key:match("^copt_") or key:match("^kopt_")
+            or READER_PRESENTATION_KEYS[key])
+end
+
+local function copy_setting_value(value, depth)
+    local value_type = type(value)
+    if value == nil or value_type == "string" or value_type == "number"
+            or value_type == "boolean" then
+        return value
+    end
+    if value_type ~= "table" or (depth or 0) >= 6 then
+        return nil
+    end
+    local result = {}
+    for key, child in pairs(value) do
+        local key_type = type(key)
+        if key_type == "string" or key_type == "number" then
+            local copied = copy_setting_value(child, (depth or 0) + 1)
+            if copied ~= nil then result[key] = copied end
+        end
+    end
+    return result
+end
+
+local function settings_equal(left, right, depth)
+    if left == right then return true end
+    if type(left) ~= type(right) or type(left) ~= "table" then
+        return false
+    end
+    if (depth or 0) >= 6 then return false end
+    for key, value in pairs(left) do
+        if not settings_equal(value, right[key], (depth or 0) + 1) then
+            return false
+        end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then return false end
+    end
+    return true
+end
 
 -- Keep plugin modules under a namespaced directory. KOReader temporarily adds
 -- the plugin directory to package.path while loading the entry point.
@@ -272,7 +341,79 @@ function Legado:showOperationResult(message, on_dismiss)
     })
 end
 
+function Legado:preserveReaderSettings(filename)
+    if type(filename) ~= "string" or filename == ""
+            or not self.ui or not self.ui.document
+            or not self.ui.doc_settings then
+        return false
+    end
+    -- Only carry settings while replacing a chapter in a known Legado
+    -- session. This keeps opening an unrelated file from inheriting a novel's
+    -- document settings by accident.
+    if not self:getActiveReaderSession() then return false end
+
+    -- ReaderConfig and ReaderFont keep the newest values in their live
+    -- modules until KOReader's SaveSettings event. Flush that event before
+    -- taking the snapshot, so a font/size change made immediately before a
+    -- chapter turn is included.
+    if type(self.ui.saveSettings) == "function" then
+        pcall(self.ui.saveSettings, self.ui)
+    end
+
+    local source_data = self.ui.doc_settings.data
+    if type(source_data) ~= "table" then return false end
+    local target_settings = DocSettings:open(filename)
+    local target_data = target_settings.data
+    if type(target_data) ~= "table" then return false end
+
+    -- Include settings present only in the target as well, so an option that
+    -- is absent in the current document falls back to KOReader's normal
+    -- default instead of retaining a stale chapter-specific value.
+    local keys = {}
+    for key in pairs(source_data) do
+        if is_reader_presentation_key(key) then keys[key] = true end
+    end
+    for key in pairs(target_data) do
+        if is_reader_presentation_key(key) then keys[key] = true end
+    end
+
+    local changed = false
+    for key in pairs(keys) do
+        local value = source_data[key]
+        if value == nil then
+            if target_data[key] ~= nil then
+                target_data[key] = nil
+                changed = true
+            end
+        elseif not settings_equal(target_data[key], value, 0) then
+            local copied = copy_setting_value(value, 0)
+            if copied ~= nil then
+                target_data[key] = copied
+                changed = true
+            end
+        end
+    end
+
+    -- This flag belongs to KOReader's legacy TXT provider. It must not leak
+    -- into the HTML chapter representation, or the target can become
+    -- preformatted again and make font/indent changes appear ineffective.
+    if filename:lower():match("%.html$") and target_data.txt_preformatted ~= nil then
+        target_data.txt_preformatted = nil
+        changed = true
+    end
+
+    if changed then
+        target_settings:flush()
+    end
+    return changed
+end
+
 function Legado:openDownloadedFile(filename, seamless)
+    -- KOReader gives every standalone chapter its own document settings
+    -- sidecar. Seed the target sidecar before switchDocument() closes the
+    -- current document, preserving KOReader's native reading presentation
+    -- without introducing a second plugin-owned settings system.
+    self:preserveReaderSettings(filename)
     if self.ui and self.ui.document and type(self.ui.switchDocument) == "function" then
         self.ui:switchDocument(filename, seamless == true)
     elseif self.ui and type(self.ui.showReader) == "function" then

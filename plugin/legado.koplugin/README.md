@@ -73,7 +73,10 @@ chapters in the background; `Legado → Reading` can change this from 5 to 10.
 KOReader owns font, size, spacing, CSS, embedded-font handling, position,
 bookmarks and all other reading presentation. The plugin no longer reads or
 writes its old per-book `reading-settings.lua` profiles. Use KOReader's own
-font and reading menus. Emoji remain in source/book/chapter text; the bundled
+font and reading menus. Since each Legado chapter is a separate document, the
+plugin copies only KOReader's native presentation fields to the next chapter's
+`.sdr` before switching; position, bookmarks, annotations and Android settings
+remain document-specific. Emoji remain in source/book/chapter text; the bundled
 monochrome `Symbola_hint.ttf` is installed as an optional fallback for common
 emoji on KPW4.
 

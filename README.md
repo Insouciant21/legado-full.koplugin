@@ -76,7 +76,9 @@ readRecordSession.json
 
 KOReader 完全负责字体、字号、间距、CSS、嵌入字体开关和其他阅读界面设置。插件不再
 读取或写入按书保存的 `reading-settings.lua`，也不把 Android 的阅读设置复制到书架；
-切换字体应直接使用 KOReader 的字体菜单。Emoji 数据不会被删除，插件提供单色
+切换字体应直接使用 KOReader 的字体菜单。由于每个 Legado 章节是独立文档，章节切换
+前插件只会把当前 KOReader 文档的原生阅读字段同步到目标章节的 `.sdr`，不复制位置、
+书签、批注或 Android 设置。Emoji 数据不会被删除，插件提供单色
 `Symbola_hint.ttf` 作为回退字体，首次安装后必要时重启 KOReader 完成字体扫描。
 
 规则层覆盖普通 CSS/Legado 旧式选择器、JSONPath、常见 XPath、正则（含 `:` 开头的
