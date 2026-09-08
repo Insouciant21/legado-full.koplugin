@@ -59,6 +59,24 @@ local function is_reader_preference_key(key)
             or READER_PREFERENCE_KEYS[key])
 end
 
+local function normalize_legado_reader_preferences(preferences)
+    if type(preferences) ~= "table" then
+        return false
+    end
+
+    -- Legado chapters are downloaded and normalized to plain TXT before they
+    -- are opened by KOReader.  They cannot contain a publisher-supplied font.
+    -- Keeping KOReader's embedded-font flag at 1 makes the native option look
+    -- enabled (and disabled for interaction when the document has no embedded
+    -- font), which can also hide the effect of the selected CJK face.  Make
+    -- the user-selected KOReader font authoritative for this reading session.
+    if preferences.copt_embedded_fonts ~= 0 then
+        preferences.copt_embedded_fonts = 0
+        return true
+    end
+    return false
+end
+
 local function get_global_reader_font_face()
     -- ReaderFont gives a document's font_face precedence over KOReader's
     -- global cre_font default.  Do not let a profile that was created from
@@ -536,6 +554,7 @@ function Legado:getReaderPreferenceSnapshot()
         preferences.book_style_tweak_enabled = style_tweak.book_style_tweak_enabled
         preferences.book_style_tweak_last_edit_pos = style_tweak.book_style_tweak_last_edit_pos
     end
+    normalize_legado_reader_preferences(preferences)
     return preferences
 end
 
@@ -626,6 +645,12 @@ function Legado:applyReaderPreferences(config, preferences)
             config:saveSetting(key, value)
         end
     end
+    -- Do this after restoring the profile as older profiles may still contain
+    -- copt_embedded_fonts=1.  The current Legado reader format is plain text,
+    -- so there is no embedded publisher font that should override KOReader's
+    -- selected face.
+    normalize_legado_reader_preferences(preferences)
+    config:saveSetting("copt_embedded_fonts", 0)
     return true
 end
 
