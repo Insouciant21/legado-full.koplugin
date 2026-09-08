@@ -197,7 +197,18 @@ function Storage:chapter_is_readable(book, chapter)
         return false, path
     end
     if path:lower():sub(-5) == ".html" then
-        return Content.to_text(html_body(content)) ~= "", path
+        local body = html_body(content)
+        local normalized = Content.to_text(body)
+        if normalized == "" then return false, path end
+        -- Rebuild HTML written by an earlier version after normalization (for
+        -- example, one that retained source-level full-width indentation).
+        -- This changes only the cache document; KOReader remains the sole
+        -- owner of font, size and other reading presentation settings.
+        if body ~= Content.to_xhtml(normalized) then
+            local refreshed_path = self:write_chapter(book, chapter, normalized)
+            if refreshed_path then return true, refreshed_path end
+        end
+        return true, path
     end
 
     -- Older plugin versions wrote readable prose to TXT, which makes CRe use

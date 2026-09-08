@@ -94,6 +94,11 @@ local function trim_line(line)
     -- Only collapse horizontal ASCII whitespace.  `%s` also matches newlines
     -- in Lua patterns and would accidentally merge paragraph boundaries.
     line = line:gsub("[\t ]+", " ")
+    -- Many Chinese web sources already prefix every paragraph with two
+    -- ideographic spaces. The generated HTML supplies the conventional 2em
+    -- paragraph indent, so keeping both would produce a visibly oversized
+    -- blank area at the start of each paragraph.
+    line = line:gsub("^[　]+", "")
     return (line:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 

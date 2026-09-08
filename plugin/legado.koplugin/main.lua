@@ -521,18 +521,21 @@ function Legado:upgradeLegacyReaderDocument()
         and (self.ui.document.file or self.ui.document.filename)
     local chapter = session.chapters[session.current_index]
     if type(current_file) ~= "string" or type(chapter) ~= "table"
-            or not current_file:lower():match("%.txt$") then
+            or (not current_file:lower():match("%.txt$")
+                and not current_file:lower():match("%.html$")) then
         return false
     end
 
-    -- chapter_is_readable() converts the old cached TXT to an HTML document
-    -- locally. No Android reader settings are copied; the new document gets
-    -- its presentation from KOReader's normal document-settings flow.
+    -- chapter_is_readable() converts old cached TXT files and canonicalizes
+    -- older generated HTML locally. No Android reader settings are copied;
+    -- the document gets its presentation from KOReader's normal settings
+    -- flow.
     local readable, modern_path = self.storage:chapter_is_readable(
         session.book, chapter
     )
     if not readable or type(modern_path) ~= "string"
-            or modern_path:lower():match("%.txt$") then
+            or modern_path:lower():match("%.txt$")
+            or same_path(modern_path, current_file) then
         return false
     end
 
