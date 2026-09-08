@@ -545,13 +545,13 @@ function Legado:syncReaderFontPreference(book, preferences)
     end
 
     local global_face = get_global_reader_font_face()
-    if not global_face then return false end
-
     local previous = self.storage:load_reader_preferences(book)
     local previous_face = previous and previous.font_face
     local previous_global = previous and previous._legado_global_font_face
     local previous_explicit = previous
         and previous._legado_font_face_explicit == true
+    local previous_has_mode = previous
+        and previous._legado_font_face_explicit ~= nil
     local changed = false
 
     -- Profiles written before this metadata existed were seeded from the
@@ -561,7 +561,7 @@ function Legado:syncReaderFontPreference(book, preferences)
     -- book in the reader.
     local follows_global = previous and not previous_explicit
     local old_profile = previous and previous._legado_font_face_explicit == nil
-    if previous and (follows_global or old_profile)
+    if global_face and previous and (follows_global or old_profile)
             and previous_face and preferences.font_face == previous_face
             and previous_face ~= global_face
             and (previous_global == nil or previous_global ~= global_face) then
@@ -571,19 +571,29 @@ function Legado:syncReaderFontPreference(book, preferences)
 
     local current_face = preferences.font_face
     local explicit = previous_explicit or false
-    if not previous or not previous._legado_font_face_explicit
-            or current_face ~= previous_face then
+    local user_selected = self._legado_font_face_user_selected
+    if user_selected and current_face == user_selected then
+        -- A font selected through KOReader's own face menu is a deliberate
+        -- choice even when no global cre_font default has been configured.
+        -- If it equals the global default, it can still follow that default.
+        explicit = global_face and current_face ~= global_face or true
+    elseif global_face and (not previous or not previous_has_mode
+            or current_face ~= previous_face) then
         -- A face different from the global default is a deliberate
         -- book-level choice. A face equal to it continues to follow global
         -- KOReader changes on future chapter transitions.
         explicit = current_face ~= global_face
+    elseif not global_face and previous and current_face ~= previous_face then
+        -- Older KOReader settings may not contain cre_font at all. A change
+        -- between two profile saves is still evidence of a book-level choice.
+        explicit = true
     end
 
     if preferences._legado_font_face_explicit ~= explicit then
         preferences._legado_font_face_explicit = explicit
         changed = true
     end
-    if preferences._legado_global_font_face ~= global_face then
+    if global_face and preferences._legado_global_font_face ~= global_face then
         preferences._legado_global_font_face = global_face
         changed = true
     end
@@ -650,6 +660,26 @@ end
 function Legado:installReaderHooks()
     local status = self.ui and self.ui.status
     local plugin = self
+
+    -- ReaderFont:onSetFont is the native source of truth for a font chosen
+    -- in KOReader's face list. Remember that explicit user action so it is
+    -- not confused with a font inherited from a chapter or global default.
+    local reader_font = self.ui and self.ui.font
+    if reader_font and type(reader_font.onSetFont) == "function"
+            and not reader_font._legado_font_hook then
+        local original_on_set_font = reader_font.onSetFont
+        reader_font._legado_font_hook = true
+        reader_font.onSetFont = function(font_instance, face, ...)
+            local previous_face = font_instance.font_face
+            local result = original_on_set_font(font_instance, face, ...)
+            if face and font_instance.font_face == face
+                    and previous_face ~= face then
+                plugin._legado_font_face_user_selected = face
+            end
+            return result
+        end
+    end
+
     if status and type(status.onEndOfBook) == "function"
             and not status._legado_end_of_book_hook then
         local original_on_end = status.onEndOfBook
