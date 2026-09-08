@@ -461,7 +461,10 @@ function Storage:write_epub(book, sections)
         .. '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="'
         .. Content.xml_escape(identifier) .. '"/></head><docTitle><text>' .. Content.xml_escape(title)
         .. '</text></docTitle><navMap>' .. table.concat(ncx) .. '</navMap></ncx>'
-    local style = 'body{margin:0 4%;font-family:serif;line-height:1.65;}h1{text-align:center;font-size:1.35em;margin:0 0 1.5em;}p{text-indent:2em;margin:0 0 0.8em;}'
+    -- Do not set a font-family here.  KOReader's selected face must remain
+    -- authoritative; a generic CSS family would otherwise make a generated
+    -- EPUB appear stuck on the book's own serif choice.
+    local style = 'body{margin:0 4%;line-height:1.65;}h1{text-align:center;font-size:1.35em;margin:0 0 1.5em;}p{text-indent:2em;margin:0 0 0.8em;}'
     local container = '<?xml version="1.0" encoding="UTF-8"?>'
         .. '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
         .. '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'

@@ -59,6 +59,23 @@ local function is_reader_preference_key(key)
             or READER_PREFERENCE_KEYS[key])
 end
 
+local function get_global_reader_font_face()
+    -- ReaderFont gives a document's font_face precedence over KOReader's
+    -- global cre_font default.  Do not let a profile that was created from
+    -- that default permanently hide later changes made in KOReader.
+    local settings = rawget(_G, "G_reader_settings")
+    if not settings or type(settings.readSetting) ~= "function" then
+        return nil
+    end
+    local ok, face = pcall(function()
+        return settings:readSetting("cre_font")
+    end)
+    if ok and type(face) == "string" and face ~= "" then
+        return face
+    end
+    return nil
+end
+
 function Legado:init()
     self.storage = Storage:new()
     -- ReaderUI has already opened doc_settings before plugin instances are
@@ -522,10 +539,62 @@ function Legado:getReaderPreferenceSnapshot()
     return preferences
 end
 
+function Legado:syncReaderFontPreference(book, preferences)
+    if type(book) ~= "table" or type(preferences) ~= "table" then
+        return false
+    end
+
+    local global_face = get_global_reader_font_face()
+    if not global_face then return false end
+
+    local previous = self.storage:load_reader_preferences(book)
+    local previous_face = previous and previous.font_face
+    local previous_global = previous and previous._legado_global_font_face
+    local previous_explicit = previous
+        and previous._legado_font_face_explicit == true
+    local changed = false
+
+    -- Profiles written before this metadata existed were seeded from the
+    -- current chapter. Treat them as following KOReader's default, so an
+    -- already changed global font can take effect immediately. New profiles
+    -- use the same rule unless the user selects a different face for this
+    -- book in the reader.
+    local follows_global = previous and not previous_explicit
+    local old_profile = previous and previous._legado_font_face_explicit == nil
+    if previous and (follows_global or old_profile)
+            and previous_face and preferences.font_face == previous_face
+            and previous_face ~= global_face
+            and (previous_global == nil or previous_global ~= global_face) then
+        preferences.font_face = global_face
+        changed = true
+    end
+
+    local current_face = preferences.font_face
+    local explicit = previous_explicit or false
+    if not previous or not previous._legado_font_face_explicit
+            or current_face ~= previous_face then
+        -- A face different from the global default is a deliberate
+        -- book-level choice. A face equal to it continues to follow global
+        -- KOReader changes on future chapter transitions.
+        explicit = current_face ~= global_face
+    end
+
+    if preferences._legado_font_face_explicit ~= explicit then
+        preferences._legado_font_face_explicit = explicit
+        changed = true
+    end
+    if preferences._legado_global_font_face ~= global_face then
+        preferences._legado_global_font_face = global_face
+        changed = true
+    end
+    return changed
+end
+
 function Legado:saveActiveReaderPreferences()
     local session = self:getActiveReaderSession()
     local preferences = self:getReaderPreferenceSnapshot()
     if not session or not preferences then return false end
+    self:syncReaderFontPreference(session.book, preferences)
     return self.storage:save_reader_preferences(session.book, preferences)
 end
 
@@ -556,6 +625,7 @@ function Legado:loadActiveReaderPreferences(config)
     if not session or not config then return false end
     local preferences = self.storage:load_reader_preferences(session.book)
     if not preferences then return false end
+    self:syncReaderFontPreference(session.book, preferences)
     return self:applyReaderPreferences(config, preferences)
 end
 
