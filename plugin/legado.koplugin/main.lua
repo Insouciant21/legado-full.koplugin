@@ -17,6 +17,7 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local FFIUtil = require("ffi/util")
 local T = FFIUtil.template
 local rapidjson = require("rapidjson")
+local Event = require("ui/event")
 
 -- Keep plugin modules under a namespaced directory. KOReader temporarily adds
 -- the plugin directory to package.path while loading the entry point.
@@ -654,6 +655,46 @@ function Legado:applyReaderPreferences(config, preferences)
     return true
 end
 
+function Legado:applyLegadoTextFont(redraw)
+    -- KOReader keeps preformatted TXT text in the CSS `monospace` family.
+    -- The default monospace face on Kindle has no Chinese glyphs, so CRe uses
+    -- the same CJK fallback regardless of the user's selected main face. That
+    -- makes changing the KOReader font appear to do nothing for Legado books.
+    -- Legado chapters are prose, not source code: use the selected main face
+    -- for this document's monospace family while preserving every other
+    -- document-specific family association.
+    local document = self.ui and self.ui.document
+    local font = self.ui and self.ui.font
+    if not document or not document.is_txt or not font
+            or type(document.setFontFamilyFontFaces) ~= "function" then
+        return false
+    end
+    local face = font.font_face
+    if type(face) ~= "string" or face == "" then return false end
+
+    if type(font.font_family_fonts) ~= "table" then
+        font.font_family_fonts = {}
+    end
+    font.font_family_fonts.monospace = face
+
+    -- Let ReaderFont compose document-specific and global family mappings in
+    -- the same way as its normal KOReader menu. Calling it here avoids
+    -- accidentally clearing a user's serif/sans-serif/emoji associations.
+    if type(font.updateFontFamilyFonts) == "function" then
+        font:updateFontFamilyFonts()
+    else
+        local settings = rawget(_G, "G_reader_settings")
+        local ignore_font_names = settings
+            and type(settings.isTrue) == "function"
+            and settings:isTrue("cre_font_family_ignore_font_names")
+        document:setFontFamilyFontFaces({ monospace = face }, ignore_font_names)
+        if redraw and self.ui and type(self.ui.handleEvent) == "function" then
+            self.ui:handleEvent(Event:new("UpdatePos"))
+        end
+    end
+    return true
+end
+
 function Legado:loadActiveReaderPreferences(config)
     local session = self:getActiveReaderSession()
     config = config or (self.ui and self.ui.doc_settings)
@@ -700,6 +741,37 @@ function Legado:installReaderHooks()
             if face and font_instance.font_face == face
                     and previous_face ~= face then
                 plugin._legado_font_face_user_selected = face
+                plugin:applyLegadoTextFont(false)
+
+                -- ReaderFont normally emits UpdatePos itself.  A Legado
+                -- chapter is a small standalone TXT that may have been
+                -- rendered from a cached CRe layout, though, and on Kindle
+                -- that event can leave the already-visible page unchanged:
+                -- the font menu radio button changes while the text frame
+                -- still contains the previous face.  Force a fresh layout on
+                -- the next UI turn, after the font menu callback has returned.
+                UIManager:nextTick(function()
+                    if not plugin.ui or not plugin.ui.document then return end
+                    -- On KPW4, CRe may keep the already-rendered TXT page even
+                    -- after a forced UpdatePos.  Save first, then use
+                    -- ReaderUI's seamless reload path: it rebuilds the
+                    -- document with the selected face and preserves the
+                    -- current xpointer.
+                    plugin:saveActiveReaderPreferences()
+                    if type(plugin.ui.reloadDocument) == "function" then
+                        plugin.ui:reloadDocument(nil, true)
+                        return
+                    end
+                    local rolling = plugin.ui.rolling
+                    if rolling and type(rolling.onUpdatePos) == "function" then
+                        rolling:onUpdatePos(true)
+                        if type(rolling.onRedrawCurrentView) == "function" then
+                            rolling:onRedrawCurrentView()
+                        end
+                    else
+                        plugin.ui:handleEvent(Event:new("UpdatePos"))
+                    end
+                end)
             end
             return result
         end
@@ -748,6 +820,7 @@ end
 
 function Legado:onReaderReady()
     self:installReaderHooks()
+    self:applyLegadoTextFont(true)
     -- Seed a profile for existing sessions and keep it current after a normal
     -- KOReader settings flush.  Subsequent Legado chapters will inherit it.
     self:saveActiveReaderPreferences()
