@@ -84,10 +84,17 @@ Kindle-native runtime data is separate:
 <KOReader data dir>/legado/
 ├── reading-progress.lua   # chapter index/title/time, including imported progress
 ├── reading-history.lua    # imported Android reading statistics
-├── reading-session.lua    # current local source/TOC session
+├── reading-session.lua    # static local source/TOC session
+├── reading-position.lua   # tiny hot current-chapter record
 ├── settings.lua           # plugin-owned prefetch setting only
 └── library/               # downloaded chapter text/EPUB cache
 ```
+
+The static reader session is schema version 2. Common rule variables are kept
+once on the book and chapter entries retain only their differing variables.
+Changing chapters updates `reading-position.lua` rather than rewriting the
+whole TOC. Older schema version 1 sessions are compacted automatically on
+first access.
 
 KOReader's own document sidecars remain the authority for font, font size,
 layout, CSS, embedded-font handling, position, bookmarks and other reader UI

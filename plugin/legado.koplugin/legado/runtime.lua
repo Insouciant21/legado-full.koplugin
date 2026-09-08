@@ -246,6 +246,45 @@ local function save_variables(target, variables)
     end
 end
 
+local function variables_equal(left, right, depth)
+    if left == right then return true end
+    if type(left) ~= type(right) or type(left) ~= "table" then
+        return false
+    end
+    if (depth or 0) >= 6 then return false end
+    for key, value in pairs(left) do
+        if not variables_equal(value, right[key], (depth or 0) + 1) then
+            return false
+        end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then return false end
+    end
+    return true
+end
+
+local function compact_chapter_variables(chapters, base_variables)
+    if type(chapters) ~= "table" or type(base_variables) ~= "table" then
+        return
+    end
+    for _, chapter in ipairs(chapters) do
+        local variables = chapter and chapter.variable
+        if type(variables) == "table" then
+            local delta = {}
+            for key, value in pairs(variables) do
+                if not variables_equal(value, base_variables[key], 0) then
+                    delta[key] = value
+                end
+            end
+            if next(delta) == nil then
+                chapter.variable = nil
+            else
+                chapter.variable = delta
+            end
+        end
+    end
+end
+
 local function extract_books(source, html, stage, context)
     local section = source[stage]
     if type(section) ~= "table" then
@@ -530,6 +569,12 @@ function Runtime.chapter_list(source, book)
         info.sourceVariable = source_variable
     end
     save_variables(info, rule_variable_state)
+    -- Chapter extraction starts each item with the same rule-variable state as
+    -- the book. Keep that common state on info/book only and return per-chapter
+    -- deltas. Runtime.chapter_content merges both values, so this preserves
+    -- source semantics while avoiding a large repeated book detail in every
+    -- chapter entry sent back to the UI and written to the session.
+    compact_chapter_variables(chapters, variables_from(info.variable or book.variable))
     return {
         info = info,
         chapters = chapters,

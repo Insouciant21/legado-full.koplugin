@@ -58,12 +58,14 @@ stored group; negative built-in groups are derived from generic type, source,
 progress and update fields.
 
 Selecting a book opens its source chapter list. The current reading session
-contains the book, source and chapter list. At the end of a cached or newly
-downloaded chapter, the plugin opens the next chapter directly. The reader
-menu exposes the local chapter list, previous chapter and next chapter; the
-normal KOReader Table of contents action is redirected only for a Legado
+contains the book, source and chapter list. Its static TOC is stored separately
+from a tiny current-position file, and common rule variables are stored once
+on the book instead of being repeated in every chapter. At the end of a cached
+or newly downloaded chapter, the plugin opens the next chapter directly. The
+reader menu exposes the local chapter list, previous chapter and next chapter;
+the normal KOReader Table of contents action is redirected only for a Legado
 chapter document. The chapter list has an explicit refresh action for serial
-updates.
+updates. Existing schema version 1 sessions are compacted automatically.
 
 Only the current chapter is needed for normal reading. Whole-book download is
 sequential, cancellable and resumable because cached chapters are skipped.

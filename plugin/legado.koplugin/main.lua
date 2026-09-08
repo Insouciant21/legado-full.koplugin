@@ -341,7 +341,7 @@ function Legado:showOperationResult(message, on_dismiss)
     })
 end
 
-function Legado:preserveReaderSettings(filename)
+function Legado:preserveReaderSettings(filename, reader_session)
     if type(filename) ~= "string" or filename == ""
             or not self.ui or not self.ui.document
             or not self.ui.doc_settings then
@@ -350,7 +350,7 @@ function Legado:preserveReaderSettings(filename)
     -- Only carry settings while replacing a chapter in a known Legado
     -- session. This keeps opening an unrelated file from inheriting a novel's
     -- document settings by accident.
-    if not self:getActiveReaderSession() then return false end
+    if not reader_session and not self:getActiveReaderSession() then return false end
 
     -- ReaderConfig and ReaderFont keep the newest values in their live
     -- modules until KOReader's SaveSettings event. Flush that event before
@@ -408,12 +408,12 @@ function Legado:preserveReaderSettings(filename)
     return changed
 end
 
-function Legado:openDownloadedFile(filename, seamless)
+function Legado:openDownloadedFile(filename, seamless, reader_session)
     -- KOReader gives every standalone chapter its own document settings
     -- sidecar. Seed the target sidecar before switchDocument() closes the
     -- current document, preserving KOReader's native reading presentation
     -- without introducing a second plugin-owned settings system.
-    self:preserveReaderSettings(filename)
+    self:preserveReaderSettings(filename, reader_session)
     if self.ui and self.ui.document and type(self.ui.switchDocument) == "function" then
         self.ui:switchDocument(filename, seamless == true)
     elseif self.ui and type(self.ui.showReader) == "function" then
@@ -545,52 +545,110 @@ local function chapter_key(chapter)
     return tostring(chapter.url or chapter.id or chapter.name or "")
 end
 
+local function normalize_path(path)
+    path = tostring(path or "")
+    -- DataStorage deliberately returns "." on Kindle.  The resulting
+    -- chapter paths are relative, while ReaderUI may expose an absolute
+    -- path (and the reverse can happen after a restart).  realpath()
+    -- makes both forms comparable and also handles test/book symlinks.
+    return FFIUtil.realpath(path) or path:gsub("^%./", "")
+end
+
 local function same_path(left, right)
-    local function normalize(path)
-        path = tostring(path or "")
-        -- DataStorage deliberately returns "." on Kindle.  The resulting
-        -- chapter paths are relative, while ReaderUI may expose an absolute
-        -- path (and the reverse can happen after a restart).  realpath()
-        -- makes both forms comparable and also handles test/book symlinks.
-        return FFIUtil.realpath(path) or path:gsub("^%./", "")
-    end
-    return normalize(left) == normalize(right)
+    if tostring(left or "") == tostring(right or "") then return true end
+    return normalize_path(left) == normalize_path(right)
 end
 
 function Legado:getActiveReaderSession()
     if not self.ui or not self.ui.document then return nil end
     local current_file = self.ui.document.file or self.ui.document.filename
     if type(current_file) ~= "string" or current_file == "" then return nil end
-    local session = self.storage:load_reader_session()
+    local session = self._reader_session_cache
+    if not session then
+        session = self.storage:load_reader_session()
+        if not session then return nil end
+        self._reader_session_cache = session
+    end
     if not session or type(session.chapters) ~= "table" then return nil end
+    if self._reader_session_cache_file == current_file then
+        return session
+    end
 
-    -- Use the actual document path rather than only current_index.  This also
+    -- The position file is updated before a seamless switch. On the normal
+    -- path this lets us verify the candidate in O(1), without scanning every
+    -- chapter and calling realpath() hundreds of times.
+    local current_is_txt = current_file:lower():match("%.txt$") ~= nil
+    local function expected_path(chapter)
+        if current_is_txt then
+            return self.storage:get_legacy_chapter_path(session.book, chapter)
+        end
+        return self.storage:get_chapter_path(session.book, chapter)
+    end
+    local normalized_current
+    local function matches(chapter)
+        if type(chapter) ~= "table" then return false end
+        local expected = expected_path(chapter)
+        if expected == current_file then return true end
+        normalized_current = normalized_current or normalize_path(current_file)
+        return normalize_path(expected) == normalized_current
+    end
+
+    local candidate = session.chapters[session.current_index]
+    if candidate and matches(candidate) then
+        self._reader_session_cache_file = current_file
+        return session
+    end
+
+    -- Use the actual document path rather than only current_index. This also
     -- recovers gracefully if KOReader was closed after the user selected a
-    -- different cached chapter.
+    -- different cached chapter. This fallback is only needed after restart or
+    -- when another document was opened; normal chapter turns take the branch
+    -- above.
     for index, chapter in ipairs(session.chapters) do
-        local chapter_path = self.storage:get_chapter_path(session.book, chapter)
-        local legacy_path = self.storage:get_legacy_chapter_path(session.book, chapter)
-        if same_path(current_file, chapter_path)
-                or same_path(current_file, legacy_path) then
+        if matches(chapter) then
             session.current_index = index
+            self._reader_session_cache_file = current_file
             return session
         end
     end
+    self._reader_session_cache_file = nil
     return nil
+end
+
+function Legado:invalidateReaderSourceCache()
+    self._reader_source_catalog = nil
+    self._reader_source_cache_key = nil
+    self._reader_source_cache = nil
 end
 
 function Legado:resolveReaderSource(session)
     if type(session) ~= "table" then return nil, "reading session is missing" end
-    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local source_url = tostring(session.source_url or "")
+    local source_name = tostring(session.source_name or "")
+    local cache_key = source_url .. "\0" .. source_name
+    if self._reader_source_cache_key == cache_key and self._reader_source_cache then
+        return self._reader_source_cache
+    end
+    local catalog = self._reader_source_catalog
+    if not catalog then
+        catalog = SourceCatalog:new(self.storage:get_state_root())
+        self._reader_source_catalog = catalog
+    end
     if session.source_url and session.source_url ~= "" then
         local source = catalog:find_by_url(session.source_url)
-        if source then return source end
+        if source then
+            self._reader_source_cache_key = cache_key
+            self._reader_source_cache = source
+            return source
+        end
     end
     local sources, err = catalog:list()
     if not sources then return nil, err end
     for source_index, source in ipairs(sources) do
         if source.bookSourceName == session.source_name
                 and tonumber(source.bookSourceType or 0) == 0 then
+            self._reader_source_cache_key = cache_key
+            self._reader_source_cache = source
             return source
         end
     end
@@ -845,6 +903,10 @@ function Legado:openReaderChapter(session, target_index, seamless)
         self._reader_transition_busy = false
         return false
     end
+    -- The position is known before a foreground download starts. Keeping it
+    -- in the in-memory session lets ReaderReady identify the target in O(1)
+    -- once the document is opened, including the uncached-chapter path.
+    session.current_index = target_index
     local source, source_err = self:resolveReaderSource(session)
     if not source then
         self._reader_transition_busy = false
@@ -859,7 +921,7 @@ function Legado:openReaderChapter(session, target_index, seamless)
         self.storage:save_last_chapter(session.book, chapter)
         self._reader_transition_busy = false
         UIManager:nextTick(function()
-            self:openDownloadedFile(path, seamless)
+            self:openDownloadedFile(path, seamless, session)
         end)
         return true
     end
@@ -867,6 +929,7 @@ function Legado:openReaderChapter(session, target_index, seamless)
     self:downloadChapter(source, session.book, chapter, session.chapters, {
         seamless = seamless,
         reader_transition = true,
+        reader_session = session,
     })
     return true
 end
@@ -906,7 +969,7 @@ function Legado:refreshReaderSession(session, advance_after_refresh)
         end
         current_index = current_index or math.min(session.current_index, #result.chapters)
         self.storage:save_reader_session(
-            display_book, source, result.chapters, current_index
+            display_book, source, result.chapters, current_index, true
         )
         local refreshed_session = {
             book = display_book,
@@ -915,6 +978,8 @@ function Legado:refreshReaderSession(session, advance_after_refresh)
             source_url = source.bookSourceUrl or "",
             source_name = source.bookSourceName or "",
         }
+        self._reader_session_cache = refreshed_session
+        self._reader_session_cache_file = nil
         if advance_after_refresh and current_index < #result.chapters then
             self:openReaderChapter(refreshed_session, current_index + 1, true)
         elseif not advance_after_refresh then
@@ -1118,6 +1183,7 @@ function Legado:importSourceJson(raw, retry_input)
     self:runWorker(_("Saving source list…"), function()
         return self:mergeSourceJson(raw)
     end, function(result)
+        self:invalidateReaderSourceCache()
         self:showOperationResult(string.format(
             _("Source list saved.\nAdded: %s\nReplaced: %s\nTotal: %s"),
             tostring(result and result.added or 0),
@@ -1308,6 +1374,7 @@ function Legado:runSourceMutation(source_index, updated_source, message, success
         if err then return nil, err end
         return true
     end, function()
+        self:invalidateReaderSourceCache()
         self:showOperationResult(success_message(), function()
             self:showSourceList()
         end)
@@ -1334,6 +1401,7 @@ function Legado:confirmDeleteSource(source_index, source)
                 if err then return nil, err end
                 return true
             end, function()
+                self:invalidateReaderSourceCache()
                 self:showOperationResult(_("Source deleted."), function()
                     self:showSourceList()
                 end)
@@ -1391,6 +1459,7 @@ function Legado:showEditSourceDialog(source, source_index)
                             if update_err then return nil, update_err end
                             return true
                         end, function()
+                            self:invalidateReaderSourceCache()
                             self:showOperationResult(_("Source updated."), function()
                                 self:showSourceList()
                             end)
@@ -2104,23 +2173,39 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
         item_table = items,
         items_per_page = 12,
         onMenuSelect = function(menu, item)
-            local action_source = get_source()
-            if not action_source then return end
             if item.refresh then
                 UIManager:close(menu)
                 self:refreshReaderSession(options.reader_session, false)
                 return
             end
             if item.jump then
+                local action_source = get_source()
+                if not action_source then return end
                 UIManager:close(menu)
-                self:showChapterJump(action_source, display_book, result)
+                self:showChapterJump(
+                    action_source, display_book, result, options.reader_session
+                )
                 return
             end
             UIManager:close(menu)
             if item.bulk then
+                local action_source = get_source()
+                if not action_source then return end
                 self:downloadBook(action_source, display_book, chapters)
+            elseif options.reader_session then
+                -- Keep chapter navigation inside the existing reader session.
+                -- This avoids rebuilding the session from the menu path and
+                -- gives the target document the same settings hand-off as an
+                -- automatic end-of-chapter transition.
+                self:openReaderChapter(
+                    options.reader_session, item.chapter.index, true
+                )
             else
-                self:openOrDownloadChapter(action_source, display_book, item.chapter, chapters)
+                local action_source = get_source()
+                if not action_source then return end
+                self:openOrDownloadChapter(
+                    action_source, display_book, item.chapter, chapters, true
+                )
             end
         end,
     }
@@ -2144,11 +2229,12 @@ function Legado:showChapters(source, book)
     end)
 end
 
-function Legado:showChapterJump(source, book, result)
+function Legado:showChapterJump(source, book, result, reader_session)
     local chapters = result and result.chapters or {}
     local total = #chapters
     if total == 0 then return end
-    local current = self.storage:get_last_chapter(book) or 1
+    local current = reader_session and reader_session.current_index
+        or self.storage:get_last_chapter(book) or 1
     current = math.max(1, math.min(total, current))
     local dialog
     dialog = InputDialog:new{
@@ -2172,7 +2258,13 @@ function Legado:showChapterJump(source, book, result)
                             return
                         end
                         UIManager:close(dialog)
-                        self:openOrDownloadChapter(source, book, chapters[index], chapters)
+                        if reader_session then
+                            self:openReaderChapter(reader_session, index, true)
+                        else
+                            self:openOrDownloadChapter(
+                                source, book, chapters[index], chapters, true
+                            )
+                        end
                     end,
                 },
             },
@@ -2182,16 +2274,27 @@ function Legado:showChapterJump(source, book, result)
     dialog:onShowKeyboard()
 end
 
-function Legado:openOrDownloadChapter(source, book, chapter, chapters)
+function Legado:openOrDownloadChapter(source, book, chapter, chapters, force_static)
     if chapters then
-        self.storage:save_reader_session(book, source, chapters, chapter.index)
+        local _, static_changed = self.storage:save_reader_session(
+            book, source, chapters, chapter.index, force_static == true
+        )
+        if static_changed then
+            -- The current document can still belong to the previous book until
+            -- switchDocument completes. Do not let the active-session cache
+            -- identify that old document as the newly selected session.
+            self._reader_session_cache = nil
+            self._reader_session_cache_file = nil
+        end
     end
     local readable, path = self.storage:chapter_is_readable(book, chapter)
     self.storage:save_last_chapter(book, chapter)
     if readable then
-        self:openDownloadedFile(path)
+        self:openDownloadedFile(path, false, true)
     else
-        self:downloadChapter(source, book, chapter, chapters)
+        self:downloadChapter(source, book, chapter, chapters, {
+            preserve_settings = true,
+        })
     end
 end
 
@@ -2219,13 +2322,23 @@ function Legado:downloadChapter(source, book, chapter, chapters, options)
             return
         end
         if chapters then
-            self.storage:save_reader_session(book, source, chapters, chapter.index)
+            local _, static_changed = self.storage:save_reader_session(
+                book, source, chapters, chapter.index
+            )
+            if static_changed then
+                self._reader_session_cache = nil
+                self._reader_session_cache_file = nil
+            end
         end
         self.storage:save_last_chapter(book, chapter)
         if options.reader_transition then
             self._reader_transition_busy = false
         end
-        self:openDownloadedFile(filename, options.seamless == true)
+        self:openDownloadedFile(
+            filename,
+            options.seamless == true,
+            options.reader_session or options.preserve_settings
+        )
     end, {
         on_failure = failure,
         on_cancel = function()
@@ -2392,6 +2505,9 @@ function Legado:chooseBackupFile()
                 result.reading_import_error = reading_err
                 return result
             end, function(result)
+                self:invalidateReaderSourceCache()
+                self._reader_session_cache = nil
+                self._reader_session_cache_file = nil
                 local counts = result.summary.counts or {}
                 local reading = result.reading_import or {}
                 local records = reading.records or {}

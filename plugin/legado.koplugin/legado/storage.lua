@@ -29,6 +29,14 @@ function Storage:new()
     object.history_settings = nil
     object.reader_session_path = object.root .. "/reading-session.lua"
     object.reader_session_settings = nil
+    -- The chapter list is relatively stable, while the current chapter
+    -- changes on every turn. Keep the hot position update in a tiny separate
+    -- settings file so navigating does not serialize the whole TOC again.
+    object.reader_position_path = object.root .. "/reading-position.lua"
+    object.reader_position_settings = nil
+    object.reader_session_static = nil
+    object.reader_session_load_attempted = false
+    object.readable_cache = {}
     object.settings_path = object.root .. "/settings.lua"
     object.settings = nil
     if lfs.attributes(object.root, "mode") ~= "directory" then
@@ -192,6 +200,12 @@ end
 function Storage:chapter_is_readable(book, chapter)
     local exists, path = self:chapter_exists(book, chapter)
     if not exists then return false, path end
+    -- Generated HTML is immutable once written. Avoid reparsing and
+    -- reserializing the same chapter on every navigation/prefetch check while
+    -- still letting a deleted file fall through to the normal validation.
+    if self.readable_cache[path] then
+        return true, path
+    end
     local content = util.readFromFile(path)
     if type(content) ~= "string" or content == "" then
         return false, path
@@ -208,6 +222,7 @@ function Storage:chapter_is_readable(book, chapter)
             local refreshed_path = self:write_chapter(book, chapter, normalized)
             if refreshed_path then return true, refreshed_path end
         end
+        self.readable_cache[path] = true
         return true, path
     end
 
@@ -219,6 +234,7 @@ function Storage:chapter_is_readable(book, chapter)
         if migrated_path then return true, migrated_path end
         -- A read-only or nearly-full filesystem should not make a cached
         -- chapter disappear; retain the old fallback for this one open.
+        self.readable_cache[path] = true
         return true, path
     end
     -- Raw HTML in a legacy TXT cache is stale and must be downloaded again.
@@ -255,6 +271,96 @@ local function copy_session_value(value, depth)
     end
     return result
 end
+
+local function session_value_equal(left, right, depth)
+    if left == right then return true end
+    if type(left) ~= type(right) or type(left) ~= "table" then
+        return false
+    end
+    if (depth or 0) >= 6 then return false end
+    for key, value in pairs(left) do
+        if not session_value_equal(value, right[key], (depth or 0) + 1) then
+            return false
+        end
+    end
+    for key in pairs(right) do
+        if left[key] == nil then return false end
+    end
+    return true
+end
+
+local function session_variables(value)
+    if type(value) == "table" then
+        return value
+    end
+    if type(value) == "string" and value:gsub("%s+", "") ~= "" then
+        local ok, decoded = pcall(rapidjson.decode, value)
+        if ok and type(decoded) == "table" then
+            return decoded
+        end
+    end
+    return nil
+end
+
+local function copy_session_chapter(chapter, base_variables)
+    if type(chapter) ~= "table" then return nil end
+    local result = {}
+    local variables = session_variables(chapter.variable)
+    for key, value in pairs(chapter) do
+        local key_type = type(key)
+        if key ~= "variable" and (key_type == "string" or key_type == "number") then
+            local copied = copy_session_value(value, 0)
+            if copied ~= nil then result[key] = copied end
+        end
+    end
+
+    if variables then
+        local delta = {}
+        for key, value in pairs(variables) do
+            local key_type = type(key)
+            if (key_type == "string" or key_type == "number")
+                    and not session_value_equal(value, base_variables and base_variables[key], 0) then
+                local copied = copy_session_value(value, 0)
+                if copied ~= nil then delta[key] = copied end
+            end
+        end
+        if next(delta) ~= nil then result.variable = delta end
+    elseif chapter.variable ~= nil then
+        -- Preserve an unusual non-JSON variable value rather than silently
+        -- changing the source contract while still compacting normal tables.
+        result.variable = copy_session_value(chapter.variable, 0)
+    end
+    return result
+end
+
+local function hash_session_text(hash, value)
+    value = tostring(value or "")
+    -- A small deterministic hash is enough to identify a TOC for the purpose
+    -- of deciding whether a full static rewrite is necessary. The complete
+    -- chapter data remains in the file; this is not a security checksum.
+    hash = (hash * 33 + #value) % 2147483647
+    for position = 1, #value do
+        hash = (hash * 33 + value:byte(position)) % 2147483647
+    end
+    return (hash * 33 + 0) % 2147483647
+end
+
+local function reader_session_id(book, source, chapters)
+    local hash = 5381
+    hash = hash_session_text(hash, book_key(book))
+    hash = hash_session_text(hash, source and (source.bookSourceUrl or source.sourceUrl) or "")
+    hash = hash_session_text(hash, source and (source.bookSourceName or source.sourceName) or "")
+    hash = hash_session_text(hash, #chapters)
+    for index, chapter in ipairs(chapters) do
+        hash = hash_session_text(hash, index)
+        hash = hash_session_text(hash, chapter and chapter.name or "")
+        hash = hash_session_text(hash, chapter and chapter.url or "")
+        hash = hash_session_text(hash, chapter and chapter.vip and "1" or "0")
+    end
+    return tostring(hash)
+end
+
+local build_reader_session
 
 local function history_part(value)
     value = tostring(value or "")
@@ -429,6 +535,13 @@ function Storage:get_reader_session_settings()
     return self.reader_session_settings
 end
 
+function Storage:get_reader_position_settings()
+    if not self.reader_position_settings then
+        self.reader_position_settings = LuaSettings:open(self.reader_position_path)
+    end
+    return self.reader_position_settings
+end
+
 function Storage:get_settings()
     if not self.settings then
         self.settings = LuaSettings:open(self.settings_path)
@@ -452,42 +565,112 @@ function Storage:save_prefetch_count(value)
 end
 
 function Storage:load_reader_session()
-    local session = self:get_reader_session_settings():readSetting("session")
-    if type(session) ~= "table" or type(session.book) ~= "table"
-            or type(session.chapters) ~= "table" then
+    if self.reader_session_load_attempted and not self.reader_session_static then
         return nil
     end
-    session.current_index = tonumber(session.current_index) or 1
+    local stored = self.reader_session_static
+    if not stored then
+        self.reader_session_load_attempted = true
+        stored = self:get_reader_session_settings():readSetting("session")
+        if type(stored) ~= "table" or type(stored.book) ~= "table"
+                or type(stored.chapters) ~= "table" or #stored.chapters == 0 then
+            return nil
+        end
+
+        -- v1 kept the mutable current index and a complete copy of every
+        -- chapter variable in one large settings value. Compact it once on
+        -- first access. The migration is deliberately structural and does
+        -- not know anything about a particular source or aggregator.
+        if tonumber(stored.schema_version) ~= 2 or not stored.session_id then
+            local legacy_source = {
+                bookSourceUrl = stored.source_url or "",
+                bookSourceName = stored.source_name or "",
+            }
+            local legacy_index = tonumber(stored.current_index) or 1
+            stored = build_reader_session(
+                stored.book, legacy_source, stored.chapters, legacy_index
+            )
+            self:get_reader_session_settings():saveSetting("session", stored)
+            self:get_reader_session_settings():flush()
+            self:_save_reader_position(stored.session_id, legacy_index, stored.updated_at)
+        end
+        self.reader_session_static = stored
+    end
+
+    local index = tonumber(stored.current_index) or 1
+    local position = self:get_reader_position_settings():readSetting("position")
+    if type(position) == "table" and position.session_id == stored.session_id then
+        index = tonumber(position.current_index) or index
+    end
+    index = math.max(1, math.min(#stored.chapters, math.floor(index)))
+
+    -- Return a shallow session view. The large book and chapter tables remain
+    -- shared in memory, but the mutable current index never gets written back
+    -- into the static settings object by accident.
+    local session = {}
+    for key, value in pairs(stored) do session[key] = value end
+    session.current_index = index
     return session
 end
 
-function Storage:save_reader_session(book, source, chapters, current_index)
+build_reader_session = function(book, source, chapters, current_index)
+    local index = tonumber(current_index) or 1
+    index = math.max(1, math.min(#chapters, math.floor(index)))
+    local saved_book = copy_session_value(book, 0)
+    local base_variables = session_variables(book.variable)
+    local saved_chapters = {}
+    for chapter_index, chapter in ipairs(chapters) do
+        local saved_chapter = copy_session_chapter(chapter, base_variables)
+        if saved_chapter then saved_chapters[chapter_index] = saved_chapter end
+    end
+    return {
+        schema_version = 2,
+        session_id = reader_session_id(book, source, chapters),
+        book = saved_book,
+        source_url = tostring(source.bookSourceUrl or source.sourceUrl or ""),
+        source_name = tostring(source.bookSourceName or source.sourceName or ""),
+        chapters = saved_chapters,
+        updated_at = os.time(),
+    }, index
+end
+
+function Storage:_save_reader_position(session_id, current_index, updated_at)
+    if not session_id then return false end
+    local settings = self:get_reader_position_settings()
+    settings:saveSetting("position", {
+        session_id = tostring(session_id),
+        current_index = math.max(1, math.floor(tonumber(current_index) or 1)),
+        updated_at = tonumber(updated_at) or os.time(),
+    })
+    settings:flush()
+    return true
+end
+
+function Storage:save_reader_session(book, source, chapters, current_index, force_static)
     if type(book) ~= "table" or type(source) ~= "table"
             or type(chapters) ~= "table" or #chapters == 0 then
         return false
     end
     local index = tonumber(current_index) or 1
     index = math.max(1, math.min(#chapters, math.floor(index)))
-    local saved_book = copy_session_value(book, 0)
-    local saved_chapters = {}
-    for chapter_index, chapter in ipairs(chapters) do
-        if type(chapter) == "table" then
-            saved_chapters[chapter_index] = copy_session_value(chapter, 0)
-        end
+
+    local existing = self:load_reader_session()
+    local session_id = reader_session_id(book, source, chapters)
+    if not force_static and existing and existing.session_id == session_id then
+        -- The TOC has not changed. Only the hot position file needs updating.
+        self:_save_reader_position(session_id, index)
+        return true, false
     end
-    local session = {
-        schema_version = 1,
-        book = saved_book,
-        source_url = tostring(source.bookSourceUrl or source.sourceUrl or ""),
-        source_name = tostring(source.bookSourceName or source.sourceName or ""),
-        chapters = saved_chapters,
-        current_index = index,
-        updated_at = os.time(),
-    }
+
+    local session
+    session, index = build_reader_session(book, source, chapters, index)
     local settings = self:get_reader_session_settings()
     settings:saveSetting("session", session)
     settings:flush()
-    return true
+    self.reader_session_static = session
+    self.reader_session_load_attempted = true
+    self:_save_reader_position(session.session_id, index, session.updated_at)
+    return true, true
 end
 
 function Storage:update_reader_session_index(current_index)
@@ -495,12 +678,8 @@ function Storage:update_reader_session_index(current_index)
     if not session then return false end
     local index = tonumber(current_index)
     if not index then return false end
-    session.current_index = math.max(1, math.min(#session.chapters, math.floor(index)))
-    session.updated_at = os.time()
-    local settings = self:get_reader_session_settings()
-    settings:saveSetting("session", session)
-    settings:flush()
-    return true
+    index = math.max(1, math.min(#session.chapters, math.floor(index)))
+    return self:_save_reader_position(session.session_id, index)
 end
 
 function Storage:get_last_chapter(book)
@@ -546,6 +725,7 @@ function Storage:write_chapter(book, chapter, content)
     if not ok then
         return nil, "cannot save downloaded chapter"
     end
+    self.readable_cache[path] = true
     return path
 end
 
