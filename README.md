@@ -81,6 +81,11 @@ KOReader 完全负责字体、字号、间距、CSS、嵌入字体开关和其�
 书签、批注或 Android 设置。Emoji 数据不会被删除，插件提供单色
 `Symbola_hint.ttf` 作为回退字体，首次安装后必要时重启 KOReader 完成字体扫描。
 
+章节下载后会进入插件内的 ContentProcessor：先执行书源定义的 `ruleContent.replaceRegex`，
+再结构化处理 HTML，移除 `head`、脚本、样式、SVG 和图片/媒体内容，将块级标签转换为段落，
+解码 HTML 实体，去除重复章节标题及空段落，最后生成不带固定字体、行距或缩进 CSS 的 XHTML。
+前台下载、后台预载、旧缓存迁移和整本下载共用该处理流程。
+
 规则层覆盖普通 CSS/Legado 旧式选择器、JSONPath、常见 XPath、正则（含 `:` 开头的
 AllInOne 捕获规则）、`@put/@get` 变量、模板、分页、替换规则和 Legado JavaScript。
 QuickJS 桥接把 `java.ajax`、响应对象、Cookie、登录信息、源变量、`infoMap`、缓存、

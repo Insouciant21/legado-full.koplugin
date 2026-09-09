@@ -1453,11 +1453,17 @@ function Runtime.chapter_content(source, chapter, book)
         end
         content = replaced
     end
-    -- Legado's Android reader renders the selected fragment as HTML.  A
-    -- downloaded KOReader TXT does not, so normalize only after all source
-    -- rules/replacements have run while keeping the source's extracted text
-    -- intact.
-    content = Content.to_text(content)
+    -- Mirror Android ContentProcessor after source extraction.  Source-level
+    -- `ruleContent.replaceRegex` has already run above, because it may need
+    -- to match the source fragment before HTML is flattened.  The common
+    -- processor now removes duplicate titles, parses block boundaries,
+    -- removes non-content HTML/media, decodes entities and discards empty
+    -- paragraphs for every source (including WebView-backed sources).
+    content = Content.process(content, {
+        title = chapter.name,
+        book_name = book and book.name or nil,
+        remove_same_title = true,
+    })
     if trim(content) == "" then
         return nil, "chapter content is empty after HTML cleanup"
     end

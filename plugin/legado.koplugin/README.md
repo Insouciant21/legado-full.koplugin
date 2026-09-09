@@ -87,6 +87,16 @@ remain document-specific. Emoji remain in source/book/chapter text; the bundled
 monochrome `Symbola_hint.ttf` is installed as an optional fallback for common
 emoji on KPW4.
 
+Chapter content passes through a plugin-side ContentProcessor before it is
+cached: the source's `ruleContent.replaceRegex` is applied first, then HTML is
+parsed structurally, `head`/script/style/SVG/media containers are discarded,
+block tags become paragraph boundaries, entities are decoded, duplicate
+chapter titles and empty paragraphs are removed, and the result is written as
+plain XHTML paragraphs. No fixed font, line-height or paragraph-indent CSS is
+embedded, so the final presentation remains KOReader's responsibility. This
+is shared by foreground downloads, background prefetch, old-cache migration
+and whole-book downloads.
+
 ## Sources and login
 
 `Legado → Source settings → Source list` lists all imported source types.

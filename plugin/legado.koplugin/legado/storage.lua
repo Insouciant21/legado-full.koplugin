@@ -212,13 +212,21 @@ function Storage:chapter_is_readable(book, chapter)
     end
     if path:lower():sub(-5) == ".html" then
         local body = html_body(content)
-        local normalized = Content.to_text(body)
+        local normalized = Content.process(body, {
+            title = chapter and chapter.name,
+            book_name = book and book.name,
+            remove_same_title = true,
+        })
         if normalized == "" then return false, path end
         -- Rebuild HTML written by an earlier version after normalization (for
         -- example, one that retained source-level full-width indentation).
         -- This changes only the cache document; KOReader remains the sole
         -- owner of font, size and other reading presentation settings.
-        if body ~= Content.to_xhtml(normalized) then
+        -- Older plugin versions embedded fixed reader CSS in every chapter.
+        -- Treat that as stale too, so the next open migrates the cache to the
+        -- CSS-free document that lets KOReader own presentation settings.
+        local has_embedded_reader_css = content:find("<style", 1, true) ~= nil
+        if has_embedded_reader_css or body ~= Content.to_xhtml(normalized) then
             local refreshed_path = self:write_chapter(book, chapter, normalized)
             if refreshed_path then return true, refreshed_path end
         end
@@ -711,14 +719,18 @@ function Storage:write_chapter(book, chapter, content)
     local book_dir = self:get_book_dir(book)
     util.makePath(book_dir)
     local path = self:get_chapter_path(book, chapter)
-    content = Content.to_text(content)
+    content = Content.process(content, {
+        title = chapter and chapter.name,
+        book_name = book and book.name,
+        remove_same_title = true,
+    })
     local title = Content.xml_escape(chapter and chapter.name or book and book.name or "")
     local html = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         .. "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head>"
         .. "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"/>"
         .. "<title>" .. title .. "</title>"
-        -- Deliberately omit font-family: KOReader owns the document's font.
-        .. "<style>body{margin:0 4%;line-height:1.65;}h1{text-align:center;font-size:1.35em;margin:0 0 1.5em;}p{text-indent:2em;margin:0 0 0.8em;}</style>"
+        -- Do not embed reader CSS here. KOReader owns font, size, margins,
+        -- line spacing, paragraph spacing and indentation for this document.
         .. "</head><body><h1>" .. title .. "</h1>"
         .. Content.to_xhtml(content) .. "</body></html>"
     local ok = util.writeToFile(html, path)
@@ -735,7 +747,11 @@ function Storage:read_chapter_content(book, chapter)
     local raw = util.readFromFile(path)
     if type(raw) ~= "string" then return nil, "cannot read cached chapter" end
     if path:lower():sub(-5) == ".html" then
-        return Content.to_text(html_body(raw))
+        return Content.process(html_body(raw), {
+            title = chapter and chapter.name,
+            book_name = book and book.name,
+            remove_same_title = true,
+        })
     end
     return Content.to_text(legacy_body(raw, chapter))
 end
@@ -775,7 +791,7 @@ local function epub_chapter(title, body)
     return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
         .. "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>"
         .. safe_title
-        .. "</title><link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"/></head><body>"
+        .. "</title></head><body>"
         .. "<h1>" .. safe_title .. "</h1>" .. Content.to_xhtml(body)
         .. "</body></html>"
 end
@@ -830,7 +846,6 @@ function Storage:write_epub(book, sections)
     local manifest = {
         '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
         '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
-        '<item id="style" href="style.css" media-type="text/css"/>',
     }
     local spine = {}
     local nav = {}
@@ -875,10 +890,6 @@ function Storage:write_epub(book, sections)
         .. '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="'
         .. Content.xml_escape(identifier) .. '"/></head><docTitle><text>' .. Content.xml_escape(title)
         .. '</text></docTitle><navMap>' .. table.concat(ncx) .. '</navMap></ncx>'
-    -- Do not set a font-family here.  KOReader's selected face must remain
-    -- authoritative; a generic CSS family would otherwise make a generated
-    -- EPUB appear stuck on the book's own serif choice.
-    local style = 'body{margin:0 4%;line-height:1.65;}h1{text-align:center;font-size:1.35em;margin:0 0 1.5em;}p{text-indent:2em;margin:0 0 0.8em;}'
     local container = '<?xml version="1.0" encoding="UTF-8"?>'
         .. '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
         .. '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
@@ -901,7 +912,6 @@ function Storage:write_epub(book, sections)
         add("OEBPS/content.opf", opf)
         add("OEBPS/nav.xhtml", nav_xhtml)
         add("OEBPS/toc.ncx", toc_ncx)
-        add("OEBPS/style.css", style)
         for index, section in ipairs(sections) do
             if type(section) == "table" then
                 local id = section._epub_id or ("chapter-" .. string.format("%05d", index))
