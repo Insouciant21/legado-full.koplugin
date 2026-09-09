@@ -10,6 +10,7 @@ local rapidjson = require("rapidjson")
 local Rules = {}
 local regex_values
 local regex_elements
+local lua_pattern_variants
 
 local function trim(value)
     return (tostring(value):gsub("^%s+", ""):gsub("%s+$", ""))
@@ -184,6 +185,21 @@ local function template_value(expression, context)
     if quote then
         return literal
     end
+
+    -- Legado also uses {{...}} for an inline rule evaluated against the
+    -- current element, not only for a context variable.  Older source
+    -- formats commonly write values such as
+    -- <br>{{@[property="og:description"]@content}}.  Keep variable/path
+    -- interpolation above, then fall back to the same generic rule parser so
+    -- CSS, legacy selectors, JSON and regex expressions all work here.
+    local template_content = context.__legado_template_content
+    if template_content ~= nil then
+        local parsed, parse_err = Rules.parse_text(template_content, name, context)
+        if parsed ~= nil then
+            return parsed
+        end
+        return nil, parse_err
+    end
     return nil, "template requires JavaScript: " .. name
 end
 
@@ -213,6 +229,7 @@ local function context_with_content(context, content)
     for key, value in pairs(context or {}) do
         result[key] = value
     end
+    result.__legado_template_content = content
     if type(content) == "table" and type(content.select) ~= "function" then
         result["$"] = content
     elseif type(content) == "string" then
@@ -232,9 +249,29 @@ local function normalize_text(value)
 end
 
 local function own_text(element)
-    -- htmlparser does not expose text nodes separately.  Removing nested tags
-    -- gives a useful approximation for the source rules used by text sites.
-    return normalize_text((element:getcontent() or ""):gsub("<[^>]*>", ""))
+    -- htmlparser does not expose text nodes separately.  Remove each direct
+    -- child element by its source span instead of merely removing its tags;
+    -- the latter promotes all descendant text to the parent and makes a rule
+    -- such as `text.字数` match nearly the entire document.
+    local root = element.root
+    local source = root and root._text
+    local inner_start = element._openend and element._openend + 1
+    local inner_end = element._closestart and element._closestart - 1
+    if not source or not inner_start or not inner_end or inner_end < inner_start then
+        return normalize_text((element:getcontent() or ""):gsub("<[^>]*>", ""))
+    end
+    local parts = {}
+    local cursor = inner_start
+    for _, child in ipairs(element.nodes or {}) do
+        local child_start = child._openstart
+        local child_end = child._closeend or child._openend
+        if child_start and child_end and child_start >= cursor and child_start <= inner_end + 1 then
+            parts[#parts + 1] = source:sub(cursor, child_start - 1)
+            cursor = math.max(cursor, child_end + 1)
+        end
+    end
+    parts[#parts + 1] = source:sub(cursor, inner_end)
+    return normalize_text(table.concat(parts))
 end
 
 local function element_value(element, mode)
@@ -252,8 +289,43 @@ local function element_value(element, mode)
     return element.attributes[mode] or ""
 end
 
+local function is_element_node(value)
+    local value_type = type(value)
+    if value_type ~= "table" and value_type ~= "userdata" then
+        return false
+    end
+    local ok, select = pcall(function()
+        return value.select
+    end)
+    return ok and type(select) == "function"
+end
+
+local function simple_element_value(element, rule)
+    local mode = trim(rule)
+    if mode == "text" or mode == "ownText" or mode == "textNodes"
+            or mode == "html" or mode == "all" then
+        return element_value(element, mode)
+    end
+    local attributes = element.attributes or {}
+    if attributes[mode] ~= nil then
+        return element_value(element, mode)
+    end
+    return nil
+end
+
 local function parse_html(content)
-    local ok, root = pcall(htmlparser.parse, tostring(content))
+    local text = tostring(content)
+    -- KOReader's htmlparser defaults to 1000 opening tags.  That is enough
+    -- for a normal article but silently truncates large full-book TOCs before
+    -- the requested selector is reached.
+    -- Count only opening tags so the limit follows the actual document while
+    -- retaining the parser's small default for short pages.
+    local tag_count = 0
+    for _ in text:gmatch("<%s*[%a]") do
+        tag_count = tag_count + 1
+    end
+    local parse_limit = math.max(1000, tag_count + 64)
+    local ok, root = pcall(htmlparser.parse, text, parse_limit)
     if not ok then
         return nil, "HTML parse failed: " .. tostring(root)
     end
@@ -463,13 +535,57 @@ local function pseudo_matches(element, filter)
     return true
 end
 
+local function rewrite_css_regex_attributes(selector)
+    local conditions = {}
+    local rewritten = tostring(selector):gsub("%[([^%]]-)%]", function(segment)
+        local attribute, expression = segment:match("^%s*([%w:_-]+)%s*~=%s*(.-)%s*$")
+        if not attribute then
+            return "[" .. segment .. "]"
+        end
+        expression = trim(expression):gsub("^(['\"])(.-)%1$", "%2")
+        conditions[#conditions + 1] = {
+            attribute = attribute,
+            expression = expression,
+        }
+        return "[" .. attribute .. "]"
+    end)
+    if #conditions == 0 then
+        return selector, nil
+    end
+    return rewritten, conditions
+end
+
+local function css_regex_matches(value, expression)
+    local alternatives, operator = split_top_level(expression, { "|" })
+    if operator == nil then
+        alternatives = { expression }
+    end
+    for _, alternative in ipairs(alternatives) do
+        local patterns, pattern_err = lua_pattern_variants(alternative)
+        if not patterns then
+            return nil, pattern_err
+        end
+        for _, pattern in ipairs(patterns) do
+            local ok, found = pcall(string.find, tostring(value or ""), pattern)
+            if not ok then
+                return nil, found
+            end
+            if found then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function select_css_group(root, selector)
     local base, filters, strip_err = strip_runtime_pseudos(selector)
     if not base then
         return nil, strip_err
     end
+    local query, regex_conditions = rewrite_css_regex_attributes(base)
     local ok, elements = pcall(function()
-        return root:select(base)
+        return root:select(query)
     end)
     if not ok then
         return nil, "CSS selector failed: " .. tostring(elements)
@@ -477,6 +593,22 @@ local function select_css_group(root, selector)
     local filtered = {}
     for _, element in ipairs(elements or {}) do
         local matches = true
+        if regex_conditions then
+            for _, condition in ipairs(regex_conditions) do
+                local value = element.attributes and element.attributes[condition.attribute]
+                local condition_matches, condition_err = css_regex_matches(
+                    value,
+                    condition.expression
+                )
+                if condition_err then
+                    return nil, "CSS attribute regex failed: " .. tostring(condition_err)
+                end
+                if not condition_matches then
+                    matches = false
+                    break
+                end
+            end
+        end
         for _, filter in ipairs(filters) do
             if not ({
                 eq = true, lt = true, gt = true, first = true, last = true,
@@ -1622,6 +1754,173 @@ end
 -- small Lua runtime does not bundle a PCRE engine, so translate the useful
 -- common subset to Lua patterns and reject constructs that would otherwise
 -- silently produce a different book.
+local function utf8_char_width(byte)
+    if byte >= 0xc2 and byte <= 0xdf then
+        return 2
+    elseif byte >= 0xe0 and byte <= 0xef then
+        return 3
+    elseif byte >= 0xf0 and byte <= 0xf4 then
+        return 4
+    end
+    return 1
+end
+
+local function copy_regex_state(state)
+    local result = {}
+    for index, token in ipairs(state) do
+        result[index] = { raw = token.raw, kind = token.kind }
+    end
+    return result
+end
+
+local expand_optional_patterns
+
+local function group_end(pattern, opening)
+    local depth = 1
+    local index = opening + 1
+    local in_class = false
+    while index <= #pattern do
+        local char = pattern:sub(index, index)
+        if char == "\\" then
+            index = index + 2
+        elseif in_class then
+            if char == "]" then in_class = false end
+            index = index + 1
+        elseif char == "[" then
+            in_class = true
+            index = index + 1
+        elseif char == "(" then
+            depth = depth + 1
+            index = index + 1
+        elseif char == ")" then
+            depth = depth - 1
+            if depth == 0 then return index end
+            index = index + 1
+        else
+            index = index + 1
+        end
+    end
+    return nil
+end
+
+-- Lua patterns have no one-character `?` quantifier. Expand the useful Java
+-- regex form into ordered alternatives before translating to Lua. Keeping the
+-- expansion here makes it apply equally to source selectors and ##
+-- replacements, without changing any particular source definition.
+expand_optional_patterns = function(pattern)
+    local states = { {} }
+    local index = 1
+    while index <= #pattern do
+        local char = pattern:sub(index, index)
+        if char == "\\" then
+            local escaped = pattern:sub(index + 1, index + 1)
+            if escaped == "" then
+                return nil, "trailing escape"
+            end
+            for _, state in ipairs(states) do
+                state[#state + 1] = { raw = pattern:sub(index, index + 1), kind = "atom" }
+            end
+            index = index + 2
+        elseif char == "[" then
+            local finish = index + 1
+            local escaped = false
+            while finish <= #pattern do
+                local current = pattern:sub(finish, finish)
+                if escaped then
+                    escaped = false
+                elseif current == "\\" then
+                    escaped = true
+                elseif current == "]" then
+                    break
+                end
+                finish = finish + 1
+            end
+            if finish > #pattern then
+                return nil, "unclosed character class"
+            end
+            local raw = pattern:sub(index, finish)
+            for _, state in ipairs(states) do
+                state[#state + 1] = { raw = raw, kind = "atom" }
+            end
+            index = finish + 1
+        elseif char == "(" then
+            local finish = group_end(pattern, index)
+            if not finish then
+                return nil, "unclosed group"
+            end
+            local prefix = pattern:sub(index + 1, index + 1) == "?"
+                and pattern:sub(index + 1, index + 2) or ""
+            local inner_start = index + 1 + #prefix
+            local inner = pattern:sub(inner_start, finish - 1)
+            local inner_variants, inner_err = expand_optional_patterns(inner)
+            if not inner_variants then
+                return nil, inner_err
+            end
+            local expanded_states = {}
+            for _, state in ipairs(states) do
+                for _, variant in ipairs(inner_variants) do
+                    local expanded = copy_regex_state(state)
+                    expanded[#expanded + 1] = {
+                        raw = "(" .. prefix .. variant .. ")",
+                        kind = "atom",
+                    }
+                    expanded_states[#expanded_states + 1] = expanded
+                end
+            end
+            states = expanded_states
+            index = finish + 1
+        elseif char == "?" then
+            local expanded_states = {}
+            for _, state in ipairs(states) do
+                local last = state[#state]
+                if last and last.kind == "quantifier"
+                        and (last.raw == "*" or last.raw == "+") then
+                    local lazy = copy_regex_state(state)
+                    lazy[#lazy].raw = lazy[#lazy].raw .. "?"
+                    expanded_states[#expanded_states + 1] = lazy
+                elseif last and last.kind == "atom" then
+                    -- Preserve the ordered, consuming alternative first. A
+                    -- replacement rule with a prefix therefore behaves like
+                    -- Java's optional quantifier without empty gsub loops.
+                    expanded_states[#expanded_states + 1] = copy_regex_state(state)
+                    local without = copy_regex_state(state)
+                    table.remove(without)
+                    expanded_states[#expanded_states + 1] = without
+                else
+                    return nil, "optional quantifier has no preceding atom"
+                end
+            end
+            states = expanded_states
+            index = index + 1
+        elseif char == "*" or char == "+" then
+            for _, state in ipairs(states) do
+                state[#state + 1] = { raw = char, kind = "quantifier" }
+            end
+            index = index + 1
+        else
+            local width = utf8_char_width(pattern:byte(index) or 0)
+            local kind = (char == "^" or char == "$" or char == "|"
+                or char == "{" or char == "}") and "operator" or "atom"
+            local raw = pattern:sub(index, index + width - 1)
+            for _, state in ipairs(states) do
+                state[#state + 1] = { raw = raw, kind = kind }
+            end
+            index = index + width
+        end
+        if #states > 64 then
+            return nil, "too many optional regex alternatives"
+        end
+    end
+
+    local variants = {}
+    for _, state in ipairs(states) do
+        local pieces = {}
+        for _, token in ipairs(state) do pieces[#pieces + 1] = token.raw end
+        variants[#variants + 1] = table.concat(pieces)
+    end
+    return variants
+end
+
 local function lua_pattern(pattern)
     pattern = tostring(pattern or "")
     if pattern == "" then
@@ -1700,16 +1999,34 @@ local function lua_pattern(pattern)
     return table.concat(output)
 end
 
+lua_pattern_variants = function(pattern)
+    local expanded, expansion_err = expand_optional_patterns(tostring(pattern or ""))
+    if not expanded then
+        return nil, expansion_err
+    end
+    local patterns = {}
+    for _, variant in ipairs(expanded) do
+        local converted, pattern_err = lua_pattern(variant)
+        if not converted then
+            return nil, pattern_err
+        end
+        patterns[#patterns + 1] = converted
+    end
+    return patterns
+end
+
 regex_values = function(content, expression)
-    local pattern, pattern_err = lua_pattern(expression)
-    if not pattern then
+    local patterns, pattern_err = lua_pattern_variants(expression)
+    if not patterns then
         return nil, "regex requires an unsupported Java pattern: " .. tostring(pattern_err)
     end
     local values = {}
     local ok, message = pcall(function()
-        for match in tostring(content):gmatch(pattern) do
-            if match ~= "" then
-                values[#values + 1] = match
+        for _, pattern in ipairs(patterns) do
+            for match in tostring(content):gmatch(pattern) do
+                if match ~= "" then
+                    values[#values + 1] = match
+                end
             end
         end
     end)
@@ -1729,36 +2046,39 @@ local function collect_find_results(...)
 end
 
 regex_elements = function(content, expression)
-    local pattern, pattern_err = lua_pattern(expression)
-    if not pattern then
+    local patterns, pattern_err = lua_pattern_variants(expression)
+    if not patterns then
         return nil, "regex requires an unsupported Java pattern: " .. tostring(pattern_err)
     end
     local text = tostring(content or "")
     local elements = {}
     local position = 1
     local ok, message = pcall(function()
-        while position <= #text do
-            local found, count = collect_find_results(string.find(text, pattern, position))
-            if count == 0 or found[1] == nil then
-                break
-            end
-            local groups = {}
-            if count > 2 then
-                groups[0] = text:sub(found[1], found[2])
-                for index = 3, count do
-                    groups[index - 2] = found[index] or ""
+        for _, pattern in ipairs(patterns) do
+            position = 1
+            while position <= #text do
+                local found, count = collect_find_results(string.find(text, pattern, position))
+                if count == 0 or found[1] == nil then
+                    break
                 end
-            else
-                groups[1] = text:sub(found[1], found[2])
-                groups[0] = groups[1]
+                local groups = {}
+                if count > 2 then
+                    groups[0] = text:sub(found[1], found[2])
+                    for index = 3, count do
+                        groups[index - 2] = found[index] or ""
+                    end
+                else
+                    groups[1] = text:sub(found[1], found[2])
+                    groups[0] = groups[1]
+                end
+                elements[#elements + 1] = {
+                    __regex_groups = groups,
+                }
+                if found[2] >= #text then
+                    break
+                end
+                position = math.max(found[2] + 1, position + 1)
             end
-            elements[#elements + 1] = {
-                __regex_groups = groups,
-            }
-            if found[2] >= #text then
-                break
-            end
-            position = math.max(found[2] + 1, position + 1)
         end
     end)
     if not ok then
@@ -1834,25 +2154,27 @@ local function replace_string(value, pattern, replacement, first, empty_on_miss)
     local converted_replacement = replacement_value(target, replacement)
     local matched = false
     for _, alternative in ipairs(alternatives) do
-        local converted, pattern_err = lua_pattern(alternative)
-        if not converted then
+        local patterns, pattern_err = lua_pattern_variants(alternative)
+        if not patterns then
             return nil, pattern_err
         end
-        local ok, replaced, count = pcall(function()
-            if first then
-                return target:gsub(converted, converted_replacement, 1)
+        for _, converted in ipairs(patterns) do
+            local ok, replaced, count = pcall(function()
+                if first then
+                    return target:gsub(converted, converted_replacement, 1)
+                end
+                return target:gsub(converted, converted_replacement)
+            end)
+            if not ok then
+                return nil, replaced
             end
-            return target:gsub(converted, converted_replacement)
-        end)
-        if not ok then
-            return nil, replaced
-        end
-        if count and count > 0 then
-            matched = true
-        end
-        target = replaced
-        if first and matched then
-            return target
+            if count and count > 0 then
+                matched = true
+            end
+            target = replaced
+            if first and matched then
+                return target
+            end
         end
     end
     if first and empty_on_miss and not matched then
@@ -1980,6 +2302,16 @@ local function single(content, rule, context)
             return { tostring(content.__regex_groups[tonumber(group)] or "") }
         end
     end
+    -- In a Legado list rule, the selected element becomes the current
+    -- context.  Rules such as `text` and `href` therefore read that element
+    -- directly; treating them as descendant tag selectors makes ordinary
+    -- chapterName/chapterUrl rules silently return empty values.
+    if is_element_node(content) then
+        local value = simple_element_value(content, rule)
+        if value ~= nil then
+            return { value }
+        end
+    end
     if type(content) == "table" and type(content.select) ~= "function" then
         return json_values(content, rule)
     end
@@ -2068,6 +2400,21 @@ function Rules.parse_list(content, rule, context)
 
     local replacement_parts = split_top_level(tostring(rule), { "##" })
     local base_rule = replacement_parts[1]
+    -- `{{...}}` is a value template.  Its result is text (possibly mixed
+    -- with literal markup), not a new selector.  Re-parsing a result such as
+    -- `<br>description` as a CSS/default rule loses the value entirely.
+    -- Evaluate the inline rules against the current content and preserve the
+    -- resulting string before applying any trailing ## replacement.
+    if base_rule:find("{{", 1, true) then
+        local expanded, expand_err = Rules.expand_templates(
+            base_rule,
+            context_with_content(context, content)
+        )
+        if not expanded then
+            return nil, expand_err
+        end
+        return apply_replacement({ expanded }, tostring(rule))
+    end
     local values, err = single(content, base_rule, context)
     if not values then
         return nil, err

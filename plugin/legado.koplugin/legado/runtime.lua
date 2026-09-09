@@ -12,15 +12,17 @@ local Runtime = {}
 local js_engine = Javascript:new()
 local active_session_key
 
-local function memory_checkpoint(counter)
+local function memory_checkpoint(counter, collect_now)
     -- LuaJIT's allocator can otherwise postpone collecting short-lived HTML,
     -- JSON and FFI objects until a large TOC has already been
-    -- materialized.  A full collection every 64 records keeps KPW4's peak
-    -- resident memory bounded without turning every chapter into a GC pause.
-    if counter and counter % 64 == 0 then
+    -- materialized.  During item extraction the parsed page is still held by
+    -- every selected element, so a full collection would repeatedly rescan
+    -- the same large tree.  Only do cheap, infrequent incremental work then;
+    -- the caller requests a full collection after releasing that page.
+    if collect_now then
         collectgarbage("collect")
-    else
-        collectgarbage("step", 2000)
+    elseif counter and counter > 0 and counter % 64 == 0 then
+        collectgarbage("step", 4000)
     end
 end
 
@@ -589,7 +591,13 @@ function Runtime.chapter_list(source, book)
         elements = nil
         html = nil
         context = nil
-        memory_checkpoint(#chapters)
+        -- A worker returns immediately after the final page, so there is no
+        -- benefit in scanning the just-released large TOC once more.  Do the
+        -- full collection only when another page will actually be requested.
+        memory_checkpoint(
+            #chapters,
+            next_url ~= "" and not visited[next_url]
+        )
     end
     if page_count >= 50 then
         return nil, "chapter pagination exceeded safety limit"
