@@ -96,6 +96,17 @@ local EmojiFont = require("legado/font")
 local SourceCatalog = require("legado/source")
 local BrowserInput = require("legado/browser_input")
 
+-- Every plugin Menu is a screen-sized page.  Menu's default is a popout,
+-- which gives a full-screen instance a rounded frame and installs an
+-- outside-tap-to-close gesture.  Use KOReader's native full-screen menu
+-- presentation consistently for Legado pages.
+local LegadoMenu = Menu:extend{
+    covers_fullscreen = true,
+    is_borderless = true,
+    is_popout = false,
+    title_bar_fm_style = true,
+}
+
 local Legado = WidgetContainer:extend{
     name = "legado",
     fullname = _("Legado"),
@@ -843,7 +854,7 @@ function Legado:choosePrefetchCount()
         }
     end
     local menu
-    menu = Menu:new{
+    menu = LegadoMenu:new{
         title = _("Prefetch chapter count"),
         item_table = items,
         items_per_page = 6,
@@ -1287,7 +1298,7 @@ function Legado:showSourceList()
         return
     end
     local source_menu
-    source_menu = Menu:new{
+    source_menu = LegadoMenu:new{
         title = _("Source list"),
         item_table = items,
         items_per_page = 12,
@@ -1346,7 +1357,7 @@ function Legado:showSourceActions(source, source_index, source_list_menu)
     }
 
     local action_menu
-    action_menu = Menu:new{
+    action_menu = LegadoMenu:new{
         title = T(_("Source actions: %1"), display_text(source_display_name(source))),
         item_table = items,
         items_per_page = 12,
@@ -1506,7 +1517,7 @@ function Legado:chooseLoginSource()
         return
     end
     local source_menu
-    source_menu = Menu:new{
+    source_menu = LegadoMenu:new{
         title = _("Choose a source to log in"),
         item_table = items,
         items_per_page = 12,
@@ -1715,7 +1726,7 @@ function Legado:showSourceLoginActions(source, buttons, values)
         return
     end
     local action_menu
-    action_menu = Menu:new{
+    action_menu = LegadoMenu:new{
         title = T(_("Actions for %1"), display_text(source.bookSourceName or _("text source"))),
         item_table = items,
         onMenuSelect = function(menu, item)
@@ -1885,7 +1896,7 @@ function Legado:chooseSearchSource()
         return
     end
     local source_menu
-    source_menu = Menu:new{
+    source_menu = LegadoMenu:new{
         title = _("Choose a text source"),
         item_table = items,
         items_per_page = 12,
@@ -1943,7 +1954,7 @@ function Legado:showBookshelfGroups(catalog, books, groups)
         end
     end
     local group_menu
-    group_menu = Menu:new{
+    group_menu = LegadoMenu:new{
         title = _("Legado bookshelf groups"),
         item_table = items,
         items_per_page = 12,
@@ -2001,7 +2012,7 @@ function Legado:showBookshelfBooks(catalog, books, group, groups)
         title = title .. " · " .. display_text(group.groupName or group.name or group.title)
     end
     local book_menu
-    book_menu = Menu:new{
+    book_menu = LegadoMenu:new{
         title = title,
         item_table = items,
         items_per_page = 12,
@@ -2085,7 +2096,7 @@ function Legado:showSearchResults(source, books)
         }
     end
     local result_menu
-    result_menu = Menu:new{
+    result_menu = LegadoMenu:new{
         title = _("Search results"),
         item_table = items,
         items_per_page = 12,
@@ -2181,7 +2192,7 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
         items.current = current_item_number
     end
     local chapter_menu
-    chapter_menu = Menu:new{
+    chapter_menu = LegadoMenu:new{
         title = display_text(display_book.name or _("Chapters")) .. " · "
             .. tostring(#chapters) .. " chapters",
         item_table = items,
