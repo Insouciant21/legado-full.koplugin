@@ -79,6 +79,30 @@ local function set_cookie_header(url, cookie_header)
     return cookies_for(url) or ""
 end
 
+-- LuaSocket may fold repeated Set-Cookie headers into one comma-separated
+-- value. Commas inside Expires attributes are not cookie separators, so only
+-- split when the following text starts another `name=value` pair.
+local function split_set_cookie_header(value)
+    local input = tostring(value or "")
+    local result = {}
+    local start = 1
+    local in_quotes = false
+    for index = 1, #input do
+        local character = input:sub(index, index)
+        if character == '"' then
+            in_quotes = not in_quotes
+        elseif character == "," and not in_quotes then
+            local tail = input:sub(index + 1)
+            if tail:match("^%s*[^=;,%s]+%s*=") then
+                result[#result + 1] = input:sub(start, index - 1)
+                start = index + 1
+            end
+        end
+    end
+    result[#result + 1] = input:sub(start)
+    return result
+end
+
 local function update_cookies(url, response_headers)
     local host = cookie_host(url)
     if not host or type(response_headers) ~= "table" then
@@ -88,14 +112,23 @@ local function update_cookies(url, response_headers)
     if not raw then
         return
     end
+    local cookies = {}
     if type(raw) == "string" then
-        raw = { raw }
-    end
-    if type(raw) ~= "table" then
+        cookies = split_set_cookie_header(raw)
+    elseif type(raw) == "table" then
+        for _, value in pairs(raw) do
+            if type(value) == "string" then
+                local parts = split_set_cookie_header(value)
+                for _, part in ipairs(parts) do
+                    cookies[#cookies + 1] = part
+                end
+            end
+        end
+    else
         return
     end
     local values = cookie_jar[host:lower()] or {}
-    for _, cookie in pairs(raw) do
+    for _, cookie in ipairs(cookies) do
         local pair = tostring(cookie):match("^%s*([^;]+)")
         -- Do not put the matcher behind `and` in a multiple assignment:
         -- Lua collapses the matcher result there and drops the cookie value.

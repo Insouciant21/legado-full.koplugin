@@ -3224,6 +3224,58 @@ local function replacement_value(value, replacement)
     return table.concat(output)
 end
 
+-- A replacement rule is often attached to every item of a large TOC.  Calling
+-- QuickJS for a literal replacement or an end/start anchor is needlessly
+-- expensive on the KPW4.  Keep this conservative: Java regex metacharacters,
+-- capture references and escapes continue through the full JavaScript-backed
+-- path below.
+local function fast_replace_string(value, pattern, replacement, first, empty_on_miss)
+    local target = tostring(value or "")
+    pattern = tostring(pattern or "")
+    replacement = tostring(replacement or "")
+    if pattern == "" or pattern:find("\\", 1, true) then
+        return nil
+    end
+    if replacement:find("[\\$]", 1) then
+        return nil
+    end
+
+    if pattern == "$" then
+        -- Java's end anchor has one zero-width match.  The replacement is
+        -- therefore appended exactly once, including when the target is
+        -- empty.
+        return target .. replacement
+    elseif pattern == "^" then
+        return replacement .. target
+    end
+
+    -- A plain string has no Java regex operators.  Use explicit plain finds
+    -- instead of string.gsub so punctuation such as `.` remains literal.
+    if pattern:find("[%^%(%)%%%.%[%]%*%+%-%?{}|]", 1) then
+        return nil
+    end
+    local start, finish = target:find(pattern, 1, true)
+    if not start then
+        if first and empty_on_miss then return "" end
+        return target
+    end
+    if first then
+        return target:sub(1, start - 1) .. replacement
+            .. target:sub(finish + 1)
+    end
+
+    local output = {}
+    local cursor = 1
+    while start do
+        output[#output + 1] = target:sub(cursor, start - 1)
+        output[#output + 1] = replacement
+        cursor = finish + 1
+        start, finish = target:find(pattern, cursor, true)
+    end
+    output[#output + 1] = target:sub(cursor)
+    return table.concat(output)
+end
+
 local function javascript_replace(value, pattern, replacement, first, empty_on_miss, context)
     local evaluator = js_evaluator(context)
     if not evaluator then return nil end
@@ -3241,6 +3293,12 @@ local function javascript_replace(value, pattern, replacement, first, empty_on_m
 end
 
 local function replace_string(value, pattern, replacement, first, empty_on_miss, context)
+    local fast_result = fast_replace_string(
+        value, pattern, replacement, first, empty_on_miss
+    )
+    if fast_result ~= nil then
+        return fast_result
+    end
     local javascript_result = javascript_replace(
         value, pattern, replacement, first, empty_on_miss, context
     )

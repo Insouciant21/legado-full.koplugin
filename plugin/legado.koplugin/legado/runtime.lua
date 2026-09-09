@@ -83,7 +83,7 @@ local function with_session(source, callback)
 end
 
 local function trim(value)
-    return (tostring(value):gsub("^%s+", ""):gsub("%s+$", ""))
+    return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
 local function rule(section, name)
