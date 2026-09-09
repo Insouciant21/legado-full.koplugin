@@ -933,6 +933,8 @@ function Javascript:evaluate_rule(source, rule, context, content)
     end
     local output = self.output_buffer
     local output_size = self.output_size
+    local batch_contexts = context.__legado_batch_contexts
+    local active_context = context
     local callback
     callback = ffi.cast("legado_js_host_callback", function(operation_ptr, arguments_ptr, output_ptr, output_capacity)
         local ok, response, response_err = pcall(function()
@@ -942,7 +944,16 @@ function Javascript:evaluate_rule(source, rule, context, content)
             if not args_ok then
                 return nil, "invalid JavaScript host arguments: " .. tostring(args)
             end
-            return self:host_call(operation, args, source, context)
+            if operation == "__legado_batch_context" then
+                local index = tonumber(type(args) == "table" and args[1])
+                if type(batch_contexts) ~= "table"
+                        or not index or type(batch_contexts[index]) ~= "table" then
+                    return nil, "invalid JavaScript batch context index"
+                end
+                active_context = batch_contexts[index]
+                return ""
+            end
+            return self:host_call(operation, args, source, active_context)
         end)
         if not ok then
             local callback_error = response
@@ -993,6 +1004,139 @@ function Javascript:evaluate_rule(source, rule, context, content)
         return nil, nil, "JavaScript result is not JSON: " .. tostring(value)
     end
     return value, suffix or ""
+end
+
+-- A TOC rule is often a small JavaScript expression evaluated once for every
+-- chapter.  Starting a new QuickJS runtime for each item is particularly
+-- expensive on the 32-bit Kindle.  Pure/read-only item rules can be evaluated
+-- in one bridge call while keeping the source rule itself unchanged.
+local BATCH_UNSAFE_TOKENS = {
+    "ajax", "post", "importscript", "startbrowser", "showbrowser", "webview",
+    "setvariable", "setcontent", "setcookie", "removecookie", "putlogininfo",
+    "setargument", "setmemory", "putmemory", "cache.put", "cache.delete",
+    "memory.put", "memory.delete", "java.put", "source.set", "book.set",
+    "settimeout", "eval(", "globalthis.",
+}
+
+function Javascript:is_batch_safe_rule(rule)
+    local script, suffix = split_rule(rule)
+    if not script or (suffix and trim(suffix) ~= "") then
+        return false
+    end
+    local lowered = script:lower()
+    for _, token in ipairs(BATCH_UNSAFE_TOKENS) do
+        if lowered:find(token, 1, true) then
+            return false
+        end
+    end
+    return true
+end
+
+function Javascript:evaluate_rule_batch(source, rule, contexts, contents)
+    local script, suffix, split_err = split_rule(rule)
+    if not script then
+        return nil, nil, split_err or "not a JavaScript rule"
+    end
+    if suffix and trim(suffix) ~= "" then
+        return nil, nil, "batch JavaScript rules require an empty trailing rule"
+    end
+    if type(contexts) ~= "table" or type(contents) ~= "table"
+            or #contexts ~= #contents or #contents == 0 then
+        return nil, nil, "invalid JavaScript batch arguments"
+    end
+
+    local first_context = contexts[1] or {}
+    local batch_items = {}
+    for index, content in ipairs(contents) do
+        local item_context = contexts[index] or first_context
+        local item = {
+            result = content,
+            key = item_context.key,
+            page = item_context.page,
+            baseUrl = item_context.baseUrl,
+            index = item_context.index,
+            title = item_context.title,
+            host = item_context.host,
+        }
+        -- The book/chapter values are normally shared across a TOC page. Do
+        -- not duplicate a potentially large book object into every item, but
+        -- retain an explicitly different value for generic source rules.
+        if item_context.book ~= first_context.book then
+            item.book = item_context.book
+        end
+        if item_context.chapter ~= first_context.chapter then
+            item.chapter = item_context.chapter
+        end
+        batch_items[index] = item
+    end
+
+    local batch_context = {}
+    for key, value in pairs(first_context) do
+        if key ~= "result" and key ~= "__js_eval" and key ~= "_js_eval" then
+            batch_context[key] = value
+        end
+    end
+    -- Keys beginning with __ are excluded by value_for_json(), but remain
+    -- available to the Lua callback so host calls can use the active item
+    -- context (book/chapter variables, setContent and nested rules).
+    batch_context.__legado_batch_contexts = contexts
+    batch_context.batch_script = script
+
+    -- Function() gives every item its own lexical scope, so source rules that
+    -- declare `let`/`const` do not collide on the second chapter. The final
+    -- expression is intentionally the array itself: evaluate_rule executes
+    -- the wrapper as a JavaScript script, not as a function body.
+    local batch_wrapper = [=[
+const __legado_items = Array.isArray(result) ? result : [];
+const __legado_code = String(__ctx.batch_script || "");
+const __legado_function = Function("__legado_code", "return eval(__legado_code);");
+const __legado_output = [];
+const __legado_default_key = globalThis.key;
+const __legado_default_page = globalThis.page;
+const __legado_default_base_url = globalThis.baseUrl;
+const __legado_default_index = globalThis.index;
+const __legado_default_title = globalThis.title;
+const __legado_default_book = globalThis.book;
+const __legado_default_chapter = globalThis.chapter;
+const __legado_default_host = globalThis.host;
+for (let __legado_i = 0; __legado_i < __legado_items.length; __legado_i++) {
+    const __legado_item = __legado_items[__legado_i] || {};
+    __legado_host("__legado_batch_context", [__legado_i + 1]);
+    globalThis.result = __legado_item.result;
+    globalThis.key = __legado_item.key === undefined ? __legado_default_key : __legado_item.key;
+    globalThis.page = __legado_item.page === undefined ? __legado_default_page : __legado_item.page;
+    globalThis.baseUrl = __legado_item.baseUrl === undefined ? __legado_default_base_url : __legado_item.baseUrl;
+    globalThis.index = __legado_item.index === undefined ? __legado_default_index : __legado_item.index;
+    globalThis.title = __legado_item.title === undefined ? __legado_default_title : __legado_item.title;
+    globalThis.book = __legado_item.book === undefined ? __legado_default_book : (__legado_item.book || {});
+    globalThis.chapter = __legado_item.chapter === undefined ? __legado_default_chapter : (__legado_item.chapter || {});
+    globalThis.host = __legado_item.host === undefined ? __legado_default_host : (__legado_item.host || []);
+    globalThis.book.getVariable = function(k) {
+        return __legado_host("book.getVariable", [String(k === undefined ? "" : k)]);
+    };
+    globalThis.book.setVariable = function(k, v) {
+        return __legado_host("book.setVariable", [String(k === undefined ? "" : k), v]);
+    };
+    globalThis.book.setUseReplaceRule = function() { return ""; };
+    const __legado_value = __legado_function.call(globalThis, __legado_code);
+    __legado_output.push(__legado_value === undefined ? null : __legado_value);
+}
+__legado_output
+]=]
+
+    local value, result_suffix, eval_err = self:evaluate_rule(
+        source,
+        "<js>" .. batch_wrapper .. "</js>",
+        batch_context,
+        batch_items
+    )
+    if eval_err then
+        return nil, nil, eval_err
+    end
+    if type(value) ~= "table" or #value ~= #contents then
+        return nil, nil, "JavaScript batch result length does not match TOC items"
+    end
+    return value, result_suffix or ""
 end
 
 -- Legado stores a few lifecycle hooks (for example ruleToc.formatJs) as raw

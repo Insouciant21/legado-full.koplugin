@@ -67,6 +67,11 @@ the normal KOReader Table of contents action is redirected only for a Legado
 chapter document. The chapter list has an explicit refresh action for serial
 updates. Existing schema version 1 sessions are compacted automatically.
 
+For source-independent performance, a pure JavaScript `chapterUrl` rule is
+evaluated for all items on a TOC page in one QuickJS bridge call. Rules that
+contain stateful operations, a trailing selector, or JavaScript chapter-name/
+VIP rules retain the original per-chapter evaluation order.
+
 Only the current chapter is needed for normal reading. Whole-book download is
 sequential, cancellable and resumable because cached chapters are skipped.
 After a chapter is ready, the plugin prefetches the next five uncached

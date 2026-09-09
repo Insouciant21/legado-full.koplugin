@@ -209,6 +209,24 @@ local function text_value(element, expression, context)
     return value
 end
 
+local function javascript_value_text(value)
+    if value == nil then return "" end
+    if type(value) ~= "table" then return stringify(value) end
+
+    -- Match Rules.parse_text()'s handling of a JavaScript rule without
+    -- sending each batch item back through the Lua rule parser.
+    for key in pairs(value) do
+        if type(key) ~= "number" then
+            return stringify(value)
+        end
+    end
+    local values = {}
+    for _, item in ipairs(value) do
+        values[#values + 1] = stringify(item)
+    end
+    return table.concat(values, "\n")
+end
+
 local function bool_value(value)
     value = tostring(value or ""):lower()
     return value == "true" or value == "1" or value == "yes" or value == "vip" or value == "付费"
@@ -464,6 +482,20 @@ function Runtime.chapter_list(source, book)
     local visited = {}
     local page_count = 0
     local chapter_url_rule = rule(toc_rule, "chapterUrl")
+    local chapter_name_rule = rule(toc_rule, "chapterName")
+    local chapter_vip_rule = rule(toc_rule, "isVip")
+    -- A pure JavaScript URL rule can be evaluated for the whole page in one
+    -- QuickJS bridge call. Keep the old per-item order when another per-item
+    -- JavaScript rule may mutate source state, so generic source semantics are
+    -- not changed by this optimization.
+    local batch_chapter_url = is_js_rule(chapter_url_rule)
+        and js_engine:is_batch_safe_rule(chapter_url_rule)
+        -- Name/VIP rules are still evaluated one item at a time below. If
+        -- either is JavaScript, keep the original name -> URL -> VIP order;
+        -- a source may mutate variables even when its text happens to avoid
+        -- the known write-operation tokens.
+        and not is_js_rule(chapter_name_rule)
+        and not is_js_rule(chapter_vip_rule)
     while next_url ~= "" and not visited[next_url] and page_count < 50 do
         visited[next_url] = true
         page_count = page_count + 1
@@ -480,32 +512,73 @@ function Runtime.chapter_list(source, book)
         local list_rule = rule(toc_rule, "chapterList")
         local elements, elements_err = Rules.elements(html, list_rule, context)
         if not elements then return nil, elements_err end
-        for _, element in ipairs(elements) do
-            local item_context = {}
-            for key, value in pairs(context) do
-                item_context[key] = value
+        if batch_chapter_url then
+            local item_contexts = {}
+            local item_names = {}
+            local item_elements = {}
+            for _, element in ipairs(elements) do
+                local item_context = {}
+                for key, value in pairs(context) do
+                    item_context[key] = value
+                end
+                item_context.rule_variables = copy_variables(rule_variable_state)
+                local name, name_err = text_value(element, chapter_name_rule, item_context)
+                if name_err then return nil, name_err end
+                item_contexts[#item_contexts + 1] = item_context
+                item_names[#item_names + 1] = name
+                item_elements[#item_elements + 1] = element
             end
-            item_context.rule_variables = copy_variables(rule_variable_state)
-            local name, name_err = text_value(element, rule(toc_rule, "chapterName"), item_context)
-            if name_err then return nil, name_err end
-            -- Always let the source's own chapterUrl rule produce the URL.
-            -- URL options, data URIs and JavaScript host calls are handled by
-            -- the generic rule/network layers; no source family gets a
-            -- special URL reconstruction path here.
-            local chapter_url, url_err = text_value(element, chapter_url_rule, item_context)
-            if url_err then return nil, url_err end
-            if name and name ~= "" and chapter_url and chapter_url ~= "" then
-                local vip, vip_err = text_value(element, rule(toc_rule, "isVip"), item_context)
-                if vip_err then return nil, vip_err end
-                local chapter = {
-                    index = #chapters + 1,
-                    name = name,
-                    url = Network.absolute(next_url, chapter_url),
-                    vip = bool_value(vip),
-                }
-                save_variables(chapter, item_context.rule_variables)
-                chapters[#chapters + 1] = chapter
-                memory_checkpoint(#chapters)
+
+            local batch_urls, _, batch_err = js_engine:evaluate_rule_batch(
+                source, chapter_url_rule, item_contexts, item_elements
+            )
+            if not batch_urls then return nil, batch_err end
+            for item_index, element in ipairs(item_elements) do
+                local item_context = item_contexts[item_index]
+                local name = item_names[item_index]
+                local chapter_url = javascript_value_text(batch_urls[item_index])
+                if name and name ~= "" and chapter_url ~= "" then
+                    local vip, vip_err = text_value(element, chapter_vip_rule, item_context)
+                    if vip_err then return nil, vip_err end
+                    local chapter = {
+                        index = #chapters + 1,
+                        name = name,
+                        url = Network.absolute(next_url, chapter_url),
+                        vip = bool_value(vip),
+                    }
+                    save_variables(chapter, item_context.rule_variables)
+                    chapters[#chapters + 1] = chapter
+                    memory_checkpoint(#chapters)
+                end
+            end
+        else
+            for _, element in ipairs(elements) do
+                local item_context = {}
+                for key, value in pairs(context) do
+                    item_context[key] = value
+                end
+                item_context.rule_variables = copy_variables(rule_variable_state)
+                local name, name_err = text_value(element, chapter_name_rule, item_context)
+                if name_err then return nil, name_err end
+                -- Always let the source's own chapterUrl rule produce the URL.
+                -- URL options, data URIs and JavaScript host calls are handled
+                -- by the generic rule/network layers; no source family gets a
+                -- special URL reconstruction path here.
+                local chapter_url, url_err = text_value(element, chapter_url_rule, item_context)
+                if url_err then return nil, url_err end
+                if name and name ~= "" and chapter_url and chapter_url ~= "" then
+                    local vip, vip_err = text_value(element, chapter_vip_rule, item_context)
+                    if vip_err then return nil, vip_err end
+                    local chapter = {
+                        index = #chapters + 1,
+                        name = name,
+                        url = Network.absolute(next_url, chapter_url),
+                        vip = bool_value(vip),
+                    }
+                    save_variables(chapter, item_context.rule_variables)
+                    chapters[#chapters + 1] = chapter
+                    memory_checkpoint(#chapters)
+                end
             end
         end
         local page_next, next_err = text_value(html, rule(toc_rule, "nextTocUrl"), context)
