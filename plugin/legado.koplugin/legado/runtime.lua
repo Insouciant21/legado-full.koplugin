@@ -11,6 +11,7 @@ local rapidjson = require("rapidjson")
 local Runtime = {}
 local js_engine = Javascript:new()
 local active_session_key
+local web_evaluate
 
 local function memory_checkpoint(counter, collect_now)
     -- LuaJIT's allocator can otherwise postpone collecting short-lived HTML,
@@ -21,8 +22,14 @@ local function memory_checkpoint(counter, collect_now)
     -- the caller requests a full collection after releasing that page.
     if collect_now then
         collectgarbage("collect")
-    elseif counter and counter > 0 and counter % 64 == 0 then
-        collectgarbage("step", 4000)
+    elseif counter and counter > 0 and counter % 256 == 0 then
+        -- A TOC entry is already reduced to a few scalar fields. Running a
+        -- 4k-step collector every 64 entries makes a 2,500-chapter page
+        -- spend more time scanning the still-live DOM than extracting it.
+        -- The full collection after releasing the page remains the memory
+        -- safety point; this smaller checkpoint only handles allocator
+        -- pressure during unusually large pages.
+        collectgarbage("step", 1000)
     end
 end
 
@@ -93,6 +100,13 @@ local function is_js_rule(value)
         or lowered:match("^@webjs:") ~= nil
 end
 
+local function contains_dynamic_rule(value)
+    local lowered = tostring(value or ""):lower()
+    return lowered:find("<js>", 1, true) ~= nil
+        or lowered:find("@js:", 1, true) ~= nil
+        or lowered:find("@webjs:", 1, true) ~= nil
+end
+
 local function stringify(value)
     if value == nil then
         return ""
@@ -156,7 +170,160 @@ local function context_for(source, extra)
         local active_context = current or context
         return js_engine:evaluate_rule(source, expression, active_context, content)
     end
+    context.__web_eval = function(script, content, current)
+        if not web_evaluate then
+            return nil, "WebView evaluator is not initialized"
+        end
+        return web_evaluate(source, current or context, content, script)
+    end
     return context
+end
+
+local function copy_source_for_request(source, header)
+    local result = {}
+    for key, value in pairs(source or {}) do
+        result[key] = value
+    end
+    result.header = header
+    -- The login header is deliberately kept outside the imported Android
+    -- source JSON. It is still part of the active session and must be merged
+    -- into requests made by a dynamically evaluated source header.
+    result.__legado_login_header = source and source.__legado_login_header
+    return result
+end
+
+local function source_for_request(source, context)
+    local header = source and source.header
+    if not is_js_rule(header) then
+        return source
+    end
+    local header_context = {}
+    for key, value in pairs(context or context_for(source)) do
+        header_context[key] = value
+    end
+    header_context.__legado_evaluating_header = true
+    local value, suffix, header_err = js_engine:evaluate_rule(
+        source,
+        header,
+        header_context,
+        header_context.result or ""
+    )
+    if header_err then
+        return nil, "source header: " .. tostring(header_err)
+    end
+    if suffix and trim(suffix) ~= "" then
+        return nil, "source header has an unsupported trailing rule"
+    end
+    if type(value) == "string" then
+        local decoded_ok, decoded = pcall(rapidjson.decode, value)
+        if decoded_ok then value = decoded end
+    end
+    if type(value) ~= "table" then
+        return nil, "source header JavaScript did not return an object"
+    end
+    return copy_source_for_request(source, value)
+end
+
+-- All non-JavaScript rule paths use this helper so dynamic source headers,
+-- login headers, URL options and the WebView substitute are handled uniformly.
+-- JavaScript's java.ajax path performs its own equivalent evaluation because
+-- it can be called recursively from inside the header rule itself.
+local function request_page(source, url, context, extra_options)
+    local request_source, source_err = source_for_request(source, context)
+    if not request_source then
+        return nil, source_err
+    end
+    local request_options = {}
+    if type(extra_options) == "table" then
+        for key, value in pairs(extra_options) do
+            request_options[key] = value
+        end
+    elseif type(extra_options) == "string" then
+        request_options = extra_options
+    end
+    if type(request_options) == "table" then
+        -- URL options such as `js`, `bodyJs` and dynamically generated
+        -- headers are evaluated by Network.get. Keep the current Legado
+        -- context private to that layer; it must never enter an HTTP header or
+        -- be serialized into the source result.
+        request_options.__legado_context = context
+    end
+    return Network.get(url, request_source, request_options)
+end
+
+local function content_page(source, url, context, content_rule)
+    local url_options = Network.url_options(url) or {}
+    local web_js = trim(rule(content_rule, "webJs"))
+    if web_js == "" then web_js = trim(url_options.webJs) end
+    local source_regex = trim(rule(content_rule, "sourceRegex"))
+    if source_regex == "" then source_regex = trim(url_options.sourceRegex) end
+    local use_web_view = url_options.webView == true
+        or tostring(url_options.webView):lower() == "true"
+    if web_js == "" and source_regex == "" and not use_web_view then
+        return request_page(source, url, context)
+    end
+
+    local request_source, source_err = source_for_request(source, context)
+    if not request_source then
+        return nil, source_err
+    end
+    local raw_html
+    if not use_web_view then
+        raw_html, source_err = Network.get(url, request_source)
+        if not raw_html then return nil, source_err end
+    end
+
+    local Browser = require("legado/browser")
+    local browser_headers, header_err = Network.browser_headers(request_source, context)
+    if not browser_headers then return nil, header_err end
+    local browser_result, browser_err = Browser.await(url, {
+        source = request_source,
+        headers = browser_headers,
+        cookies = Network.export_cookies(),
+        html = raw_html,
+            script = web_js,
+            source_regex = source_regex ~= "" and source_regex or nil,
+            timeout = tonumber(url_options.timeout) and tonumber(url_options.timeout) / 1000 or nil,
+            delay = tonumber(url_options.webViewDelayTime),
+            auto = true,
+            refetch_after_success = false,
+    })
+    if not browser_result then
+        return nil, browser_err or "WebView content request failed"
+    end
+    if browser_result.cookies then
+        Network.merge_cookies(browser_result.cookies)
+    end
+    return browser_result.body or "", nil, browser_result
+end
+
+web_evaluate = function(source, context, content, script)
+    local request_source, source_err = source_for_request(source, context)
+    if not request_source then return nil, source_err end
+    local Browser = require("legado/browser")
+    local browser_headers, header_err = Network.browser_headers(request_source, context)
+    if not browser_headers then return nil, header_err end
+    local html = content
+    if type(html) ~= "string" then
+        html = stringify(html)
+    end
+    local browser_result, browser_err = Browser.await(
+        context and context.baseUrl or source.bookSourceUrl or "",
+        {
+            source = request_source,
+            headers = browser_headers,
+            cookies = Network.export_cookies(),
+            html = html ~= "" and html or nil,
+            script = tostring(script or ""),
+            auto = true,
+            refetch_after_success = false,
+        }
+    )
+    if not browser_result then
+        return nil, browser_err or "WebView rule failed"
+    end
+    if browser_result.cookies then Network.merge_cookies(browser_result.cookies) end
+    return browser_result.body or ""
 end
 
 local function expand_url(source, rule_value, context)
@@ -178,6 +345,18 @@ local function expand_url(source, rule_value, context)
             end
         end
         expanded = stringify(value)
+    elseif contains_dynamic_rule(rule_value) then
+        -- `<js>...</js>` may be used between ordinary rule segments (for
+        -- example a selected href followed by a signing expression). Route
+        -- those mixed URL rules through the same generic rule parser instead
+        -- of sending the static prefix to QuickJS as invalid JavaScript.
+        local value, parse_err = Rules.parse_text(
+            context and context.result or "", rule_value, context
+        )
+        if value == nil then
+            return nil, parse_err or "URL rule evaluation failed"
+        end
+        expanded = value
     else
         local template_error
         expanded, template_error = Rules.expand_templates(rule_value or "", context)
@@ -209,6 +388,50 @@ local function text_value(element, expression, context)
         return nil, err
     end
     return value
+end
+
+local function element_text_value(element, expression, context)
+    if expression == nil or expression == "" then
+        return ""
+    end
+    local value, err = Rules.parse_element_text(element, expression, context)
+    if not value then
+        return nil, err
+    end
+    return value
+end
+
+local function rule_value_text(value)
+    if type(value) == "table" and value.__legado_element then
+        return Rules.element_property(value, "text")
+    end
+    return stringify(value)
+end
+
+local function rule_values(element, expression, context)
+    if expression == nil or trim(expression) == "" then
+        return {}
+    end
+    local values, err = Rules.parse_list(element, expression, context)
+    if not values then
+        return nil, err
+    end
+    local result = {}
+    for _, value in ipairs(values) do
+        local text = rule_value_text(value)
+        if trim(text) ~= "" then
+            result[#result + 1] = text
+        end
+    end
+    return result
+end
+
+local function first_rule_value(element, expression, context)
+    local values, err = rule_values(element, expression, context)
+    if not values then
+        return nil, err
+    end
+    return values[1] or ""
 end
 
 local function javascript_value_text(value)
@@ -307,6 +530,13 @@ end
 
 local function extract_books(source, html, stage, context)
     local section = source[stage]
+    -- Android Legado uses the search rule as the discovery rule when a source
+    -- only defines an explore URL.  This is common for older source packs and
+    -- is a semantic fallback, not a source-specific adaptation.
+    if stage == "ruleExplore"
+            and (type(section) ~= "table" or trim(rule(section, "bookList")) == "") then
+        section = source.ruleSearch
+    end
     if type(section) ~= "table" then
         return nil, stage .. " is missing"
     end
@@ -346,15 +576,24 @@ local function extract_books(source, html, stage, context)
             if kind_err then return nil, kind_err end
             local last_chapter, last_err = text_value(element, rule(section, "lastChapter"), item_context)
             if last_err then return nil, last_err end
+            local update_time, update_err = text_value(element, rule(section, "updateTime"), item_context)
+            if update_err then return nil, update_err end
+            local word_count, word_count_err = text_value(element, rule(section, "wordCount"), item_context)
+            if word_count_err then return nil, word_count_err end
+            local toc_url, toc_err = text_value(element, rule(section, "tocUrl"), item_context)
+            if toc_err then return nil, toc_err end
+            local base_url = context.baseUrl or source.bookSourceUrl
             local book = {
                 name = name,
                 author = author or "",
-                bookUrl = Network.absolute(context.baseUrl or source.bookSourceUrl, book_url),
-                tocUrl = Network.absolute(context.baseUrl or source.bookSourceUrl, book_url),
-                coverUrl = Network.absolute(context.baseUrl or source.bookSourceUrl, cover_url),
+                bookUrl = Network.absolute(base_url, book_url),
+                tocUrl = Network.absolute(base_url, toc_url ~= "" and toc_url or book_url),
+                coverUrl = Network.absolute(base_url, cover_url),
                 intro = intro or "",
                 kind = kind or "",
                 lastChapter = last_chapter or "",
+                updateTime = update_time or "",
+                wordCount = word_count or "",
                 sourceName = source.bookSourceName or "",
                 sourceUrl = source.bookSourceUrl or "",
             }
@@ -367,6 +606,283 @@ local function extract_books(source, html, stage, context)
         end
     end
     return books
+end
+
+local function decoded_table(value)
+    if type(value) == "table" then
+        return value
+    end
+    if type(value) ~= "string" then
+        return nil
+    end
+    local text = trim(value)
+    if text == "" then return nil end
+    local first = text:sub(1, 1)
+    if first ~= "[" and first ~= "{" then
+        return nil
+    end
+    local ok, decoded = pcall(rapidjson.decode, text)
+    return ok and type(decoded) == "table" and decoded or nil
+end
+
+local function copy_explore_style(value)
+    if type(value) ~= "table" then return nil end
+    local result = {}
+    for key, child in pairs(value) do
+        if (type(key) == "string" or type(key) == "number")
+                and (type(child) == "string" or type(child) == "number"
+                    or type(child) == "boolean") then
+            result[key] = child
+        end
+    end
+    return result
+end
+
+local function explore_chars(value)
+    if type(value) == "table" then
+        local result = {}
+        for _, child in ipairs(value) do
+            local text = trim(child)
+            if text ~= "" then result[#result + 1] = text end
+        end
+        return result
+    end
+    if value == nil then return {} end
+    local result = {}
+    for child in tostring(value):gmatch("[^,|\n]+") do
+        child = trim(child)
+        if child ~= "" then result[#result + 1] = child end
+    end
+    return result
+end
+
+local function normalized_explore_kind(value, index, map_title)
+    local kind = {}
+    if type(value) == "string" or type(value) == "number" then
+        local text = trim(value)
+        if text == "" then return nil end
+        local separator = text:find("::", 1, true)
+        if separator then
+            kind.title = trim(text:sub(1, separator - 1))
+            kind.url = trim(text:sub(separator + 2))
+        else
+            kind.title = text
+            -- A bare URL is useful as a one-line discovery entry. Ordinary
+            -- labels remain non-clickable headers, matching Legado's parser.
+            local is_url = text:match("^https?://") ~= nil
+                or text:match("^/") ~= nil
+                or text:match("^data:") ~= nil
+                or text:match("^@js:") ~= nil
+                or text:match("^<js>") ~= nil
+            kind.url = is_url and text or ""
+        end
+    elseif type(value) == "table" then
+        local title = value.title or value.name or value.text or value.label
+            or map_title or value.viewName
+        local url = value.url or value.exploreUrl or ""
+        kind.title = trim(title or "")
+        kind.url = trim(url or "")
+        kind.type = trim(value.type or value.inputType or "")
+        kind.action = value.action or value.onClick or value.callback or ""
+        kind.key = value.key or value.paramKey or value.infoKey
+        kind.chars = explore_chars(value.chars or value.options or value.values)
+        if value.default ~= nil then kind.default = tostring(value.default) end
+        if value.value ~= nil then kind.value = tostring(value.value) end
+        kind.viewName = value.viewName
+        kind.style = copy_explore_style(value.style)
+    else
+        return nil
+    end
+    if kind.title == "" and kind.url == "" then return nil end
+    if kind.key == nil or trim(kind.key) == "" then
+        kind.key = kind.title
+    else
+        kind.key = tostring(kind.key)
+    end
+    kind.type = trim(kind.type or ""):lower()
+    if kind.type == "" then
+        kind.type = trim(kind.action or "") ~= "" and kind.url == ""
+            and "button" or "url"
+    end
+    kind.action = tostring(kind.action or "")
+    kind.index = index
+    return kind
+end
+
+local function normalize_explore_kinds(value)
+    local decoded = decoded_table(value)
+    if decoded then value = decoded end
+
+    if type(value) == "string" then
+        local text = value:gsub("\r\n?", "\n")
+        -- Android accepts both newline-separated and &&-separated discovery
+        -- entries. This applies only after a whole-script result has been
+        -- decoded, so JavaScript logical operators are never split here.
+        text = text:gsub("%s*&&%s*", "\n")
+        local result = {}
+        for line in text:gmatch("[^\n]+") do
+            local kind = normalized_explore_kind(line, #result + 1)
+            if kind then result[#result + 1] = kind end
+        end
+        return result
+    end
+    if type(value) ~= "table" then
+        return nil, "exploreUrl did not produce an array or entry list"
+    end
+
+    local result = {}
+    local array_like = #value > 0
+    if array_like then
+        for key in pairs(value) do
+            if type(key) ~= "number" then array_like = false break end
+        end
+    end
+    if array_like then
+        for _, child in ipairs(value) do
+            local kind = normalized_explore_kind(child, #result + 1)
+            if kind then result[#result + 1] = kind end
+        end
+    else
+        -- Some older source scripts return `{ "分类": "/sort/1" }` instead
+        -- of the documented array of ExploreKind objects. Accept that shape
+        -- generically while retaining object fields such as `title`/`url`.
+        local recognized = value.title ~= nil or value.name ~= nil
+            or value.url ~= nil or value.action ~= nil or value.type ~= nil
+        if recognized then
+            local kind = normalized_explore_kind(value, 1)
+            if kind then result[1] = kind end
+        else
+            local keys = {}
+            for key in pairs(value) do keys[#keys + 1] = tostring(key) end
+            table.sort(keys)
+            for _, key in ipairs(keys) do
+                local kind = normalized_explore_kind(value[key], #result + 1, key)
+                if kind then result[#result + 1] = kind end
+            end
+        end
+    end
+    return result
+end
+
+local function explore_context(source, kind, page)
+    local info = js_engine:explore_info(source)
+    local value = kind and kind.value or ""
+    return context_for(source, {
+        result = "",
+        baseUrl = source.bookSourceUrl or "",
+        page = page or 1,
+        explore = kind,
+        exploreKind = kind,
+        exploreValue = value or "",
+        infoMap = info,
+        sourceVariable = js_engine:source_variable(source, {}),
+    })
+end
+
+local function apply_explore_defaults(kinds, info)
+    info = type(info) == "table" and info or {}
+    for _, kind in ipairs(kinds or {}) do
+        local saved = info[kind.key] or info[kind.title]
+        if saved ~= nil then
+            kind.value = tostring(saved)
+        elseif kind.value == nil then
+            kind.value = kind.default
+        end
+        if kind.value == nil and (kind.type == "select" or kind.type == "toggle") then
+            kind.value = kind.chars[1]
+        end
+    end
+end
+
+function Runtime.explore_kinds(source)
+    if tonumber(source and source.bookSourceType or 0) ~= 0 then
+        return nil, "only text book sources are supported"
+    end
+    local raw = source and source.exploreUrl
+    if raw == nil or trim(raw) == "" then
+        return nil, "source has no exploreUrl"
+    end
+    js_engine:clear_notifications()
+    local context = explore_context(source, nil, 1)
+    local value = raw
+    if is_js_rule(raw) then
+        local eval_err
+        value, eval_err = evaluate_script(source, raw, context, "")
+        if eval_err then return nil, eval_err end
+    end
+    local kinds, normalize_err = normalize_explore_kinds(value)
+    if not kinds then return nil, normalize_err end
+    apply_explore_defaults(kinds, js_engine:explore_info(source))
+    kinds.notifications = js_engine:take_notifications()
+    return kinds
+end
+
+function Runtime.explore_source(source, kind, page)
+    if tonumber(source and source.bookSourceType or 0) ~= 0 then
+        return nil, "only text book sources are supported"
+    end
+    if type(kind) ~= "table" then
+        return nil, "discovery entry is invalid"
+    end
+    local entry_url = trim(kind.url or "")
+    if entry_url == "" then
+        return nil, "this discovery entry has no URL"
+    end
+    js_engine:clear_notifications()
+    page = tonumber(page) or 1
+    page = math.max(1, math.floor(page))
+    local context = explore_context(source, kind, page)
+    local url, url_err = expand_url(source, entry_url, context)
+    if not url or trim(url) == "" then
+        return nil, url_err or "discovery URL is empty"
+    end
+    local html, request_err = request_page(source, url, context)
+    if not html then return nil, request_err end
+    local books, books_err = extract_books(source, html, "ruleExplore", context)
+    if not books then return nil, books_err end
+    return {
+        books = books,
+        page = page,
+        url = url,
+        notifications = js_engine:take_notifications(),
+    }
+end
+
+function Runtime.explore_action(source, kind, value)
+    if tonumber(source and source.bookSourceType or 0) ~= 0 then
+        return nil, "only text book sources are supported"
+    end
+    if type(kind) ~= "table" then
+        return nil, "discovery entry is invalid"
+    end
+    js_engine:clear_notifications()
+    local info = js_engine:explore_info(source)
+    local selected = value
+    if selected ~= nil then selected = tostring(selected) end
+    if selected ~= nil and trim(kind.key or kind.title or "") ~= "" then
+        info[tostring(kind.key or kind.title)] = selected
+        -- Keep title-addressed scripts working when a source supplies a
+        -- separate parameter key. The source remains the authority for how
+        -- it consumes these values.
+        if kind.key ~= kind.title then info[tostring(kind.title or "")] = selected end
+        js_engine:set_explore_info(source, info)
+    end
+    local action = trim(kind.action or "")
+    local action_result = selected or ""
+    if action ~= "" then
+        local context = explore_context(source, kind, 1)
+        local action_err
+        action_result, action_err = evaluate_script(
+            source, action, context, selected or ""
+        )
+        if action_err then return nil, action_err end
+        action_result = action_result == nil and "" or action_result
+    end
+    return {
+        actionResult = stringify(action_result),
+        infoMap = js_engine:explore_info(source),
+        notifications = js_engine:take_notifications(),
+    }
 end
 
 function Runtime.search_source(source, keyword, page)
@@ -384,7 +900,7 @@ function Runtime.search_source(source, keyword, page)
     if not url or url == "" then
         return nil, err or "source has no searchUrl"
     end
-    local html, request_err = Network.get(url, source)
+    local html, request_err = request_page(source, url, context)
     if not html then
         return nil, request_err
     end
@@ -396,7 +912,14 @@ function Runtime.book_info(source, book)
     if type(info_rule) ~= "table" then
         return book
     end
-    local raw_result, request_err = Network.get(book.bookUrl, source)
+    local request_context = context_for(source, {
+        result = book.bookUrl or "",
+        baseUrl = book.bookUrl or source.bookSourceUrl or "",
+        book = book,
+        sourceVariable = book.sourceVariable,
+        rule_variables = variables_from(book.variable),
+    })
+    local raw_result, request_err = request_page(source, book.bookUrl, request_context)
     if not raw_result then
         return nil, request_err
     end
@@ -408,12 +931,13 @@ function Runtime.book_info(source, book)
         rule_variables = variables_from(book.variable),
     })
     local html = raw_result
-    if info_rule.init and info_rule.init ~= "" then
+    local info_init_rule = info_rule.init or info_rule.bookInfoInit or ""
+    if info_init_rule ~= "" then
         local value
-        if is_js_rule(info_rule.init) then
+        if is_js_rule(info_init_rule) then
             local suffix
             local js_err
-            value, suffix, js_err = js_engine:evaluate_rule(source, info_rule.init, context, raw_result)
+            value, suffix, js_err = js_engine:evaluate_rule(source, info_init_rule, context, raw_result)
             if js_err then
                 return nil, js_err
             end
@@ -425,13 +949,29 @@ function Runtime.book_info(source, book)
             end
         else
             local init_err
-            value, init_err = Rules.parse_text(raw_result, info_rule.init, context)
+            value, init_err = Rules.parse_text(raw_result, info_init_rule, context)
             if init_err then
                 return nil, "bookInfo.init: " .. tostring(init_err)
             end
         end
         html = value
         context.result = html
+    end
+    -- Reuse one parsed DOM for the ordinary bookInfo field set. JavaScript or
+    -- `init` rules may replace `html` with another value; in that case the
+    -- generic parser below still accepts the replacement unchanged.
+    if html == raw_result and not is_js_rule(info_rule.name)
+            and not is_js_rule(info_rule.author)
+            and not is_js_rule(info_rule.intro)
+            and not is_js_rule(info_rule.kind)
+            and not is_js_rule(info_rule.lastChapter)
+            and not is_js_rule(info_rule.updateTime)
+            and not is_js_rule(info_rule.coverUrl)
+            and not is_js_rule(info_rule.wordCount)
+            and not is_js_rule(info_rule.tocUrl) then
+        local document, document_err = Rules.parse_document(raw_result)
+        if not document then return nil, document_err end
+        html = document
     end
     local info = {}
     for _, name in ipairs({ "name", "author", "intro", "kind", "lastChapter", "updateTime", "coverUrl", "wordCount" }) do
@@ -483,9 +1023,52 @@ function Runtime.chapter_list(source, book)
     local chapters = {}
     local visited = {}
     local page_count = 0
+    local pending_urls = { { url = next_url, follow_next = true } }
+    local pending_index = 1
     local chapter_url_rule = rule(toc_rule, "chapterUrl")
     local chapter_name_rule = rule(toc_rule, "chapterName")
     local chapter_vip_rule = rule(toc_rule, "isVip")
+    local chapter_pay_rule = rule(toc_rule, "isPay")
+    local chapter_volume_rule = rule(toc_rule, "isVolume")
+    local chapter_update_rule = rule(toc_rule, "updateTime")
+    local simple_name_base = Rules.simple_element_base(chapter_name_rule)
+    local simple_url_base = Rules.simple_element_base(chapter_url_rule)
+    local simple_vip_base = chapter_vip_rule ~= ""
+        and Rules.simple_element_base(chapter_vip_rule) or ""
+    local simple_pay_base = chapter_pay_rule ~= ""
+        and Rules.simple_element_base(chapter_pay_rule) or ""
+    local simple_volume_base = chapter_volume_rule ~= ""
+        and Rules.simple_element_base(chapter_volume_rule) or ""
+    local simple_update_base = chapter_update_rule ~= ""
+        and Rules.simple_element_base(chapter_update_rule) or ""
+
+    local function make_chapter(name, chapter_url, vip, pay, volume, update, variables)
+        local volume_value = bool_value(volume)
+        local resolved_url = tostring(chapter_url or "")
+        if trim(resolved_url) == "" then
+            -- This mirrors Legado's BookChapterList behavior: volume rows use
+            -- a stable synthetic URL, while ordinary rows fall back to the
+            -- current TOC page.  Empty chapterUrl is therefore not a reason
+            -- to discard an otherwise valid chapter entry.
+            resolved_url = volume_value
+                and (tostring(name or "") .. tostring(#chapters + 1))
+                or next_url
+        end
+        local chapter = {
+            index = #chapters + 1,
+            name = name,
+            url = Network.absolute(next_url, resolved_url),
+            vip = bool_value(vip),
+            isPay = bool_value(pay),
+            isVolume = volume_value,
+        }
+        if update and trim(update) ~= "" then
+            chapter.updateTime = tostring(update)
+            chapter.tag = tostring(update)
+        end
+        save_variables(chapter, variables)
+        return chapter
+    end
     -- A pure JavaScript URL rule can be evaluated for the whole page in one
     -- QuickJS bridge call. Keep the old per-item order when another per-item
     -- JavaScript rule may mutate source state, so generic source semantics are
@@ -498,23 +1081,31 @@ function Runtime.chapter_list(source, book)
         -- the known write-operation tokens.
         and not is_js_rule(chapter_name_rule)
         and not is_js_rule(chapter_vip_rule)
-    while next_url ~= "" and not visited[next_url] and page_count < 50 do
-        visited[next_url] = true
-        page_count = page_count + 1
-        local context = context_for(source, {
+        and not is_js_rule(chapter_pay_rule)
+        and not is_js_rule(chapter_volume_rule)
+        and not is_js_rule(chapter_update_rule)
+    while pending_index <= #pending_urls and page_count < 50 do
+        local pending = pending_urls[pending_index]
+        next_url = type(pending) == "table" and pending.url or pending
+        local follow_next = type(pending) ~= "table" or pending.follow_next ~= false
+        pending_index = pending_index + 1
+        if next_url ~= "" and not visited[next_url] then
+            visited[next_url] = true
+            page_count = page_count + 1
+            local context = context_for(source, {
             result = next_url,
             baseUrl = next_url,
             page = page_count,
             book = info,
             sourceVariable = info.sourceVariable or book.sourceVariable,
             rule_variables = rule_variable_state,
-        })
-        local html, request_err = Network.get(next_url, source)
-        if not html then return nil, request_err end
-        local list_rule = rule(toc_rule, "chapterList")
-        local elements, elements_err = Rules.elements(html, list_rule, context)
-        if not elements then return nil, elements_err end
-        if batch_chapter_url then
+            })
+            local html, request_err = request_page(source, next_url, context)
+            if not html then return nil, request_err end
+            local list_rule = rule(toc_rule, "chapterList")
+            local elements, elements_err = Rules.elements(html, list_rule, context)
+            if not elements then return nil, elements_err end
+            if batch_chapter_url then
             local item_contexts = {}
             local item_names = {}
             local item_elements = {}
@@ -524,7 +1115,7 @@ function Runtime.chapter_list(source, book)
                     item_context[key] = value
                 end
                 item_context.rule_variables = copy_variables(rule_variable_state)
-                local name, name_err = text_value(element, chapter_name_rule, item_context)
+                local name, name_err = element_text_value(element, chapter_name_rule, item_context)
                 if name_err then return nil, name_err end
                 item_contexts[#item_contexts + 1] = item_context
                 item_names[#item_names + 1] = name
@@ -539,67 +1130,145 @@ function Runtime.chapter_list(source, book)
                 local item_context = item_contexts[item_index]
                 local name = item_names[item_index]
                 local chapter_url = javascript_value_text(batch_urls[item_index])
-                if name and name ~= "" and chapter_url ~= "" then
-                    local vip, vip_err = text_value(element, chapter_vip_rule, item_context)
+                if name and name ~= "" then
+                    local vip, vip_err = element_text_value(element, chapter_vip_rule, item_context)
                     if vip_err then return nil, vip_err end
-                    local chapter = {
-                        index = #chapters + 1,
-                        name = name,
-                        url = Network.absolute(next_url, chapter_url),
-                        vip = bool_value(vip),
-                    }
-                    save_variables(chapter, item_context.rule_variables)
+                    local pay, pay_err = element_text_value(element, chapter_pay_rule, item_context)
+                    if pay_err then return nil, pay_err end
+                    local volume, volume_err = element_text_value(element, chapter_volume_rule, item_context)
+                    if volume_err then return nil, volume_err end
+                    local update, update_err = element_text_value(element, chapter_update_rule, item_context)
+                    if update_err then return nil, update_err end
+                    local chapter = make_chapter(
+                        name, chapter_url, vip, pay, volume, update,
+                        item_context.rule_variables
+                    )
                     chapters[#chapters + 1] = chapter
                     memory_checkpoint(#chapters)
                 end
             end
-        else
+            elseif simple_name_base and simple_url_base
+                and (chapter_vip_rule == "" or simple_vip_base)
+                and (chapter_pay_rule == "" or simple_pay_base)
+                and (chapter_volume_rule == "" or simple_volume_base)
+                and (chapter_update_rule == "" or simple_update_base) then
+            -- The overwhelmingly common TOC shape is a list of already
+            -- selected anchors with scalar `text`/`href` rules. Avoid making
+            -- a fresh context table for each item in that case; any rule
+            -- containing templates, operators, JS or @put was rejected by
+            -- simple_element_base and remains on the full semantic path.
+            for _, element in ipairs(elements) do
+                local name, name_err = Rules.parse_element_text(
+                    element, chapter_name_rule, context, simple_name_base
+                )
+                if name_err then return nil, name_err end
+                local chapter_url, url_err = Rules.parse_element_text(
+                    element, chapter_url_rule, context, simple_url_base
+                )
+                if url_err then return nil, url_err end
+                if name and name ~= "" then
+                    local vip = ""
+                    if chapter_vip_rule ~= "" then
+                        local vip_err
+                        vip, vip_err = Rules.parse_element_text(
+                            element, chapter_vip_rule, context, simple_vip_base
+                        )
+                        if vip_err then return nil, vip_err end
+                    end
+                    local pay = ""
+                    if chapter_pay_rule ~= "" then
+                        local pay_err
+                        pay, pay_err = Rules.parse_element_text(
+                            element, chapter_pay_rule, context, simple_pay_base
+                        )
+                        if pay_err then return nil, pay_err end
+                    end
+                    local volume = ""
+                    if chapter_volume_rule ~= "" then
+                        local volume_err
+                        volume, volume_err = Rules.parse_element_text(
+                            element, chapter_volume_rule, context, simple_volume_base
+                        )
+                        if volume_err then return nil, volume_err end
+                    end
+                    local update = ""
+                    if chapter_update_rule ~= "" then
+                        local update_err
+                        update, update_err = Rules.parse_element_text(
+                            element, chapter_update_rule, context, simple_update_base
+                        )
+                        if update_err then return nil, update_err end
+                    end
+                    local chapter = make_chapter(
+                        name, chapter_url, vip, pay, volume, update,
+                        rule_variable_state
+                    )
+                    chapters[#chapters + 1] = chapter
+                    memory_checkpoint(#chapters)
+                end
+            end
+            else
             for _, element in ipairs(elements) do
                 local item_context = {}
                 for key, value in pairs(context) do
                     item_context[key] = value
                 end
                 item_context.rule_variables = copy_variables(rule_variable_state)
-                local name, name_err = text_value(element, chapter_name_rule, item_context)
+                local name, name_err = element_text_value(element, chapter_name_rule, item_context)
                 if name_err then return nil, name_err end
                 -- Always let the source's own chapterUrl rule produce the URL.
                 -- URL options, data URIs and JavaScript host calls are handled
                 -- by the generic rule/network layers; no source family gets a
                 -- special URL reconstruction path here.
-                local chapter_url, url_err = text_value(element, chapter_url_rule, item_context)
+                local chapter_url, url_err = element_text_value(element, chapter_url_rule, item_context)
                 if url_err then return nil, url_err end
-                if name and name ~= "" and chapter_url and chapter_url ~= "" then
-                    local vip, vip_err = text_value(element, chapter_vip_rule, item_context)
+                if name and name ~= "" then
+                    local vip, vip_err = element_text_value(element, chapter_vip_rule, item_context)
                     if vip_err then return nil, vip_err end
-                    local chapter = {
-                        index = #chapters + 1,
-                        name = name,
-                        url = Network.absolute(next_url, chapter_url),
-                        vip = bool_value(vip),
-                    }
-                    save_variables(chapter, item_context.rule_variables)
+                    local pay, pay_err = element_text_value(element, chapter_pay_rule, item_context)
+                    if pay_err then return nil, pay_err end
+                    local volume, volume_err = element_text_value(element, chapter_volume_rule, item_context)
+                    if volume_err then return nil, volume_err end
+                    local update, update_err = element_text_value(element, chapter_update_rule, item_context)
+                    if update_err then return nil, update_err end
+                    local chapter = make_chapter(
+                        name, chapter_url, vip, pay, volume, update,
+                        item_context.rule_variables
+                    )
                     chapters[#chapters + 1] = chapter
                     memory_checkpoint(#chapters)
                 end
             end
+            end
+            if follow_next then
+                local page_nexts, next_err = rule_values(
+                    html, rule(toc_rule, "nextTocUrl"), context
+                )
+                if not page_nexts then return nil, next_err end
+                local follow_children = #page_nexts == 1
+                for _, page_next in ipairs(page_nexts) do
+                    local page_url = Network.absolute(next_url, page_next)
+                    if page_url ~= "" then
+                        pending_urls[#pending_urls + 1] = {
+                            url = page_url,
+                            -- Legado follows a single next URL as a chain;
+                            -- multiple URLs represent independent TOC pages.
+                            follow_next = follow_children,
+                        }
+                    end
+                end
+            end
+            -- The chapter entries retain only scalar values.  Release the
+            -- parsed page tree before requesting/parsing the next page.
+            elements = nil
+            html = nil
+            context = nil
+            -- A worker returns immediately after the final page, so there is
+            -- no benefit in scanning the just-released large TOC once more.
+            memory_checkpoint(#chapters, pending_index <= #pending_urls)
         end
-        local page_next, next_err = text_value(html, rule(toc_rule, "nextTocUrl"), context)
-        if next_err then return nil, next_err end
-        next_url = Network.absolute(next_url, page_next)
-        -- The chapter entries retain only scalar values.  Release the parsed
-        -- page tree before requesting/parsing the next page.
-        elements = nil
-        html = nil
-        context = nil
-        -- A worker returns immediately after the final page, so there is no
-        -- benefit in scanning the just-released large TOC once more.  Do the
-        -- full collection only when another page will actually be requested.
-        memory_checkpoint(
-            #chapters,
-            next_url ~= "" and not visited[next_url]
-        )
     end
-    if page_count >= 50 then
+    if page_count >= 50 and pending_index <= #pending_urls then
         return nil, "chapter pagination exceeded safety limit"
     end
     if #chapters == 0 then
@@ -667,25 +1336,27 @@ function Runtime.chapter_content(source, chapter, book)
     if type(content_rule) ~= "table" then
         return nil, "ruleContent is missing"
     end
-    if content_rule.webJs and content_rule.webJs ~= "" then
-        return nil, "content webJs uses JavaScript"
-    end
-    if content_rule.sourceRegex and content_rule.sourceRegex ~= "" then
-        return nil, "content sourceRegex is not supported yet"
-    end
     local result = {}
     local next_url = chapter.url
+    local pending_urls = { { url = next_url, follow_next = true } }
+    local pending_index = 1
     local visited = {}
     local page_count = 0
+    local last_html
     local derived_title
     local rule_variable_state = variables_from(book.variable)
     for key, value in pairs(variables_from(chapter.variable)) do
         rule_variable_state[key] = value
     end
-    while next_url ~= "" and not visited[next_url] and page_count < 20 do
-        visited[next_url] = true
-        page_count = page_count + 1
-        local context = context_for(source, {
+    while pending_index <= #pending_urls and page_count < 20 do
+        local pending = pending_urls[pending_index]
+        next_url = type(pending) == "table" and pending.url or pending
+        local follow_next = type(pending) ~= "table" or pending.follow_next ~= false
+        pending_index = pending_index + 1
+        if next_url ~= "" and not visited[next_url] then
+            visited[next_url] = true
+            page_count = page_count + 1
+            local context = context_for(source, {
             result = next_url,
             baseUrl = next_url,
             page = page_count,
@@ -693,27 +1364,69 @@ function Runtime.chapter_content(source, chapter, book)
             book = book,
             sourceVariable = book.sourceVariable,
             rule_variables = rule_variable_state,
-        })
-        local html, request_err = Network.get(next_url, source)
-        if not html then return nil, request_err end
-        local text, text_err = text_value(html, rule(content_rule, "content"), context)
-        if text_err then return nil, text_err end
-        if page_count == 1 and rule(content_rule, "title") ~= "" then
-            local title, title_err = text_value(html, rule(content_rule, "title"), context)
-            if title_err then return nil, title_err end
-            if title and trim(title) ~= "" then
-                derived_title = trim(title)
+            })
+            local html, request_err = content_page(source, next_url, context, content_rule)
+            if not html then return nil, request_err end
+            last_html = html
+            local text, text_err = text_value(html, rule(content_rule, "content"), context)
+            if text_err then return nil, text_err end
+            if page_count == 1 and rule(content_rule, "title") ~= "" then
+                local title, title_err = text_value(html, rule(content_rule, "title"), context)
+                if title_err then return nil, title_err end
+                if title and trim(title) ~= "" then
+                    derived_title = trim(title)
+                end
+            end
+            if text and text ~= "" then
+                result[#result + 1] = text
+            end
+            if follow_next then
+                local page_nexts, next_err = rule_values(
+                    html, rule(content_rule, "nextContentUrl"), context
+                )
+                if not page_nexts then return nil, next_err end
+                local follow_children = #page_nexts == 1
+                for _, page_next in ipairs(page_nexts) do
+                    local page_url = Network.absolute(next_url, page_next)
+                    if page_url ~= "" then
+                        pending_urls[#pending_urls + 1] = {
+                            url = page_url,
+                            follow_next = follow_children,
+                        }
+                    end
+                end
             end
         end
-        if text and text ~= "" then
-            result[#result + 1] = text
-        end
-        local page_next, next_err = text_value(html, rule(content_rule, "nextContentUrl"), context)
-        if next_err then return nil, next_err end
-        next_url = Network.absolute(next_url, page_next)
     end
-    if page_count >= 20 then
+    if page_count >= 20 and pending_index <= #pending_urls then
         return nil, "content pagination exceeded safety limit"
+    end
+
+    -- Legado evaluates subContent against the last fetched page and appends
+    -- an HTTP result directly when the rule returns a URL. This is useful for
+    -- text sources whose main body and a short appendix live separately.
+    local sub_rule = rule(content_rule, "subContent")
+    if sub_rule ~= "" and last_html then
+        local sub_context = context_for(source, {
+            result = last_html,
+            baseUrl = next_url,
+            page = page_count,
+            chapter = chapter,
+            book = book,
+            sourceVariable = book.sourceVariable,
+            rule_variables = rule_variable_state,
+        })
+        local raw_sub_content, sub_err = text_value(last_html, sub_rule, sub_context)
+        if sub_err then return nil, sub_err end
+        local sub_content = raw_sub_content or ""
+        if sub_content:lower():match("^https?://") then
+            local sub_page, sub_request_err = request_page(source, sub_content, sub_context)
+            if not sub_page then return nil, sub_request_err end
+            sub_content = sub_page
+        end
+        if trim(sub_content) ~= "" then
+            result[#result + 1] = sub_content
+        end
     end
     if #result == 0 then
         return nil, "chapter content is empty"
@@ -831,6 +1544,73 @@ local function cookie_count(cookies)
     return count
 end
 
+local function javascript_rule_body(value)
+    local rule_value = trim(value or "")
+    local lowered = rule_value:lower()
+    if lowered:match("^@js:") then
+        return rule_value:sub(5)
+    end
+    if lowered:match("^<js>") then
+        local close_start = lowered:find("</js>", 5, true)
+        if not close_start then return nil, "unterminated <js> rule" end
+        return rule_value:sub(5, close_start - 1)
+    end
+    return rule_value
+end
+
+-- loginUi may be a literal JSON array or a JavaScript rule. Android Legado
+-- evaluates the latter together with loginUrl/mainJs, so expose the same
+-- source-independent path to the Kindle UI instead of showing the raw script
+-- as a generic JSON form.
+function Runtime.login_ui(source)
+    local raw = source and source.loginUi
+    if type(raw) == "table" then
+        return raw
+    end
+    if type(raw) ~= "string" or trim(raw) == "" then
+        return nil, "source has no loginUi"
+    end
+    local decoded_ok, decoded = pcall(rapidjson.decode, raw)
+    if decoded_ok and type(decoded) == "table" then
+        return decoded
+    end
+    if not is_js_rule(raw) then
+        return nil, "loginUi is neither a JSON array nor a JavaScript rule"
+    end
+    return with_session(source, function()
+        local login_body, login_body_err = javascript_rule_body(raw)
+        if not login_body then return nil, login_body_err end
+        local login_url = trim(source.loginUrl or "")
+        local prefix = ""
+        -- A normal loginUrl is often a function declaration used by a
+        -- dynamic loginUi. Do not treat a literal endpoint URL as JavaScript.
+        if login_url ~= "" and not login_url:match("^https?://")
+                and not login_url:match("^data:") then
+            prefix = javascript_rule_body(login_url) or ""
+        end
+        local script = "<js>" .. prefix
+        if prefix ~= "" then script = script .. "\n" end
+        script = script .. login_body .. "</js>"
+        local context = context_for(source, {
+            result = "",
+            baseUrl = source.bookSourceUrl or "",
+            sourceVariable = js_engine:source_variable(source, {}),
+            book = {},
+            chapter = {},
+        })
+        local value, eval_err = evaluate_script(source, script, context, "")
+        if eval_err then return nil, eval_err end
+        if type(value) == "string" then
+            local value_ok, value_decoded = pcall(rapidjson.decode, value)
+            if value_ok then value = value_decoded end
+        end
+        if type(value) ~= "table" then
+            return nil, "dynamic loginUi did not return a JSON array"
+        end
+        return value
+    end)
+end
+
 function Runtime.login_info(source)
     local state, err = Session.load(source)
     if not state then
@@ -858,7 +1638,12 @@ function Runtime.login_source(source, values, action)
     end
     return with_session(source, function()
         js_engine:clear_notifications()
-        js_engine:set_login_info(source, values)
+        -- A source with an empty loginUi uses a browser page rather than a
+        -- JSON form. Do not replace an already saved login-info object with
+        -- an empty table merely because the browser action has no fields.
+        if next(values) ~= nil then
+            js_engine:set_login_info(source, values)
+        end
         local source_variable = js_engine:source_variable(source, {})
         local context = context_for(source, {
             result = values,
@@ -866,23 +1651,64 @@ function Runtime.login_source(source, values, action)
             sourceVariable = source_variable,
             loginInfo = values,
         })
-        local login_script = source.loginUrl
+        local login_result
+        local login_err
         local login_action = login_invocation(action)
-        if login_url == "" then
-            -- Pure JavaScript sources put login()/logout()/settings actions
-            -- in mainJs. evaluate_rule loads that library automatically, so
-            -- evaluate only the requested invocation here and avoid running
-            -- the source implementation twice.
-            login_script = "<js>" .. login_action .. "</js>"
-            login_action = nil
+        local raw_login_ui = source and source.loginUi
+        local has_login_ui = type(raw_login_ui) == "table"
+            or (type(raw_login_ui) == "string" and trim(raw_login_ui) ~= "")
+        local browser_login = not has_login_ui
+            and login_url:match("^https?://") ~= nil
+        if browser_login then
+            -- Android Legado treats a blank loginUi plus an absolute
+            -- loginUrl as a WebView login page. Keep that distinction generic
+            -- so sources with captcha/OAuth/QR pages do not get sent through
+            -- the JavaScript evaluator as if the URL were source code.
+            local Browser = require("legado/browser")
+            local browser_headers, headers_err = Network.browser_headers(source, context)
+            if not browser_headers then
+                return nil, headers_err
+            end
+            local browser_result, browser_err = Browser.await(login_url, {
+                title = source.bookSourceName or "Login",
+                source = source,
+                headers = browser_headers,
+                cookies = Network.export_cookies(),
+                context = context,
+                auto = false,
+                refetch_after_success = true,
+            })
+            if not browser_result then
+                return nil, browser_err or "browser login failed"
+            end
+            if browser_result.cookies then
+                Network.merge_cookies(browser_result.cookies)
+            end
+            context.result = browser_result.body or ""
+            context.src = context.result
+            context.baseUrl = browser_result.url or context.baseUrl
+            -- Browser completion is itself the action result. Keep the HTML
+            -- in the context for loginCheckJs, but do not put a whole page in
+            -- the small action-result dialog.
+            login_result = ""
+        else
+            local login_script = source.loginUrl
+            if login_url == "" then
+                -- Pure JavaScript sources put login()/logout()/settings
+                -- actions in mainJs. evaluate_rule loads that library
+                -- automatically, so evaluate only the requested invocation
+                -- here and avoid running the source implementation twice.
+                login_script = "<js>" .. login_action .. "</js>"
+                login_action = nil
+            end
+            login_result, login_err = evaluate_script(
+                source,
+                login_script,
+                context,
+                values,
+                login_action
+            )
         end
-        local login_result, login_err = evaluate_script(
-            source,
-            login_script,
-            context,
-            values,
-            login_action
-        )
         if login_err then
             return nil, "source login failed: " .. tostring(login_err)
         end
@@ -942,6 +1768,9 @@ end
 -- callers retain their API while every operation receives the same session
 -- restore/save behavior.
 local raw_search_source = Runtime.search_source
+local raw_explore_kinds = Runtime.explore_kinds
+local raw_explore_source = Runtime.explore_source
+local raw_explore_action = Runtime.explore_action
 local raw_book_info = Runtime.book_info
 local raw_chapter_list = Runtime.chapter_list
 local raw_chapter_content = Runtime.chapter_content
@@ -951,6 +1780,24 @@ local raw_book_content = Runtime.book_content
 Runtime.search_source = function(source, keyword, page)
     return with_session(source, function()
         return raw_search_source(source, keyword, page)
+    end)
+end
+
+Runtime.explore_kinds = function(source)
+    return with_session(source, function()
+        return raw_explore_kinds(source)
+    end)
+end
+
+Runtime.explore_source = function(source, kind, page)
+    return with_session(source, function()
+        return raw_explore_source(source, kind, page)
+    end)
+end
+
+Runtime.explore_action = function(source, kind, value)
+    return with_session(source, function()
+        return raw_explore_action(source, kind, value)
     end)
 end
 

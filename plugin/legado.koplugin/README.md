@@ -96,14 +96,21 @@ pasted JSON or a JSON file.
 
 The rule layer covers common CSS/legacy selectors, JSONPath, XPath, regex,
 `@put/@get` variables, templates, pagination, replacements and Legado
-JavaScript. QuickJS maps generic `java.ajax`, Cookie, variables, cache,
-Base64 and Hex host functions to Kindle, so aggregate sources are handled by
-their imported definitions rather than a source-specific adapter.
+JavaScript. QuickJS maps generic `java.ajax`, response objects, Cookie/login
+state, source variables, `infoMap`, cache, browser/WebView, Base64/Hex,
+cryptography and common Java/Jsoup objects to Kindle, so aggregate sources are
+handled by their imported definitions rather than a source-specific adapter.
+Discovery sources may return newline/`&&`/JSON/script-defined categories and
+their select/toggle/button actions; each source's filter state is persisted
+independently.
 
 Source-defined login controls and actions use `loginUi` plus `loginUrl` or
 JavaScript. Cookies, login information and source variables are stored per
 source in `<KOReader data dir>/legado/source-sessions.json`; this file is not
 an Android backup member and must be treated as private credential data.
 
-WebView-only JavaScript, Android Java/Jsoup objects, image/audio/manga-only
-features and `java.webView` remain explicit unsupported capabilities.
+`@webjs`, `java.webView`, `startBrowser*` and browser-based login/discovery
+actions use the Kindle Chromium/browser bridge and may require interactive
+verification. Android-only UI, RSS/image/audio/manga features and `qread` are
+outside the text-reader scope and remain explicit limited/unsupported
+capabilities.

@@ -399,6 +399,9 @@ function Client:new(client)
         socket = client,
         next_id = 0,
         fragments = nil,
+        events = {},
+        resources = {},
+        resource_seen = {},
     }, self)
 end
 
@@ -460,7 +463,32 @@ function Client:call(method, params)
                 return nil, "browser command " .. tostring(method) .. ": " .. tostring(detail)
             end
             return decoded.result or {}
+        elseif decoded_ok and type(decoded) == "table" and decoded.method then
+            -- DevTools events arrive while a synchronous command is waiting
+            -- for its response. Keep them: sourceRegex is implemented using
+            -- the same Network.* resource notifications as Legado's Android
+            -- WebView, rather than guessing from the final document HTML.
+            self:record_event(decoded)
         end
+    end
+end
+
+function Client:record_event(event)
+    if type(event) ~= "table" then return end
+    self.events[#self.events + 1] = event
+    local method = tostring(event.method or "")
+    local params = event.params or {}
+    local url
+    if method == "Network.requestWillBeSent" then
+        url = params.request and params.request.url
+    elseif method == "Network.responseReceived" then
+        url = params.response and params.response.url
+    elseif method == "Page.frameNavigated" then
+        url = params.frame and params.frame.url
+    end
+    if type(url) == "string" and url ~= "" and not self.resource_seen[url] then
+        self.resource_seen[url] = true
+        self.resources[#self.resources + 1] = url
     end
 end
 
@@ -477,6 +505,25 @@ function Client:evaluate(expression)
         return nil, "browser page evaluation failed"
     end
     return remote.value
+end
+
+function Client:matches_regex(value, pattern)
+    pattern = tostring(pattern or "")
+    if pattern == "" then return nil end
+    local pattern_json = rapidjson.encode(pattern)
+    local value_json = rapidjson.encode(tostring(value or ""))
+    return self:evaluate(
+        "(new RegExp(" .. pattern_json .. ")).test(" .. value_json .. ")"
+    )
+end
+
+function Client:matching_resource(pattern)
+    for _, url in ipairs(self.resources) do
+        local matched, err = self:matches_regex(url, pattern)
+        if err then return nil, err end
+        if matched == true then return url end
+    end
+    return nil
 end
 
 local function browser_http_get(port, path)
@@ -1069,6 +1116,7 @@ function Browser.await(url, options)
     local deadline = now() + (tonumber(options.timeout) or DEFAULT_TIMEOUT)
     local last_url = ""
     local injected = false
+    local ready_at
     local pan_position
     while now() < deadline do
         if not browser_process_alive(pid) then
@@ -1080,7 +1128,7 @@ function Browser.await(url, options)
             injected = false
             promote_browser_window(now() + 1, hidden_kpp_windows)
         end
-        if not injected then
+        if not options.auto and not injected then
             injected = add_done_button(client) == true
         end
         -- KOReader owns the input device while its worker is active.  Keep
@@ -1088,6 +1136,68 @@ function Browser.await(url, options)
         -- stacking order after a navigation or a virtual-keyboard event.
         promote_browser_window(now() + 0.15, hidden_kpp_windows)
         pan_position = forward_browser_inputs(client, token, pan_position)
+        if options.override_url_regex and tostring(options.override_url_regex) ~= "" then
+            local matched, match_err = client:matches_regex(
+                current_url,
+                options.override_url_regex
+            )
+            if match_err then return finish(nil, match_err) end
+            if matched == true then
+                local result, result_err = document_result(client)
+                if not result then return finish(nil, result_err) end
+                result.body = current_url
+                result.url = current_url
+                return finish(result)
+            end
+        end
+        if options.source_regex and tostring(options.source_regex) ~= "" then
+            local resource, resource_err = client:matching_resource(options.source_regex)
+            if resource_err then return finish(nil, resource_err) end
+            if resource then
+                local result, result_err = document_result(client)
+                if not result then return finish(nil, result_err) end
+                -- BackstageWebView returns the sniffed URL as the body when
+                -- sourceRegex matches an onLoadResource event. Preserve that
+                -- contract so a normal `<js>result</js>` content rule can use
+                -- it without a site-specific branch.
+                result.body = resource
+                return finish(result)
+            end
+        end
+        if options.auto then
+            local ready = client:evaluate("String(document.readyState || '')")
+            if ready ~= "loading" then
+                if not ready_at then
+                    local delay_ms = tonumber(options.delay) or 0
+                    ready_at = now() + 1 + math.max(0, delay_ms) / 1000
+                end
+                if now() >= ready_at then
+                    local script = tostring(options.script or "")
+                    local script_value
+                    if script ~= "" then
+                        local script_err
+                        -- Runtime.evaluate already returns the value of the last
+                        -- expression. Wrapping the source in a function loses
+                        -- that value for common WebView rules such as
+                        -- `getDecode(); $('#content').html();` and changes the
+                        -- scope of `var` declarations used by legacy sources.
+                        script_value, script_err = client:evaluate(script)
+                        if script_err then return finish(nil, script_err) end
+                    end
+                    local result, result_err = document_result(client)
+                    if not result then return finish(nil, result_err) end
+                    if script_value ~= nil and tostring(script_value) ~= "" then
+                        if type(script_value) == "table" then
+                            local encoded_ok, encoded = pcall(rapidjson.encode, script_value)
+                            result.body = encoded_ok and encoded or tostring(script_value)
+                        else
+                            result.body = tostring(script_value)
+                        end
+                    end
+                    return finish(result)
+                end
+            end
+        end
         local done = client:evaluate("window.__legado_browser_done === true")
         if done == true then
             local result, result_err = document_result(client)
@@ -1095,7 +1205,13 @@ function Browser.await(url, options)
             if options.refetch_after_success == true
                     and not url:lower():match("^data:") then
                 local Network = require("legado/network")
-                local refreshed, refresh_err = Network.get(url, options.source)
+                local refresh_options
+                if type(options.context) == "table" then
+                    refresh_options = { __legado_context = options.context }
+                end
+                local refreshed, refresh_err = Network.get(
+                    url, options.source, refresh_options
+                )
                 if refreshed then
                     result.body = refreshed
                     result.url = url

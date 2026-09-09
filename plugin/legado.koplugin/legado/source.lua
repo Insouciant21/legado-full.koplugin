@@ -400,7 +400,10 @@ function SourceCatalog:compatibility()
             if value:find("{{", 1, true) and value:find("}}", 1, true) then
                 report.templates = report.templates + 1
             end
-            if has_prefix(value, "@js:") or has_prefix(value, "@webjs:") or has_prefix(value, "<js>") or lowered:find("java.", 1, true) then
+            if lowered:find("@js:", 1, true)
+                    or lowered:find("@webjs:", 1, true)
+                    or lowered:find("<js>", 1, true)
+                    or lowered:find("java.", 1, true) then
                 report.javascript = report.javascript + 1
                 source_has_js = true
             end

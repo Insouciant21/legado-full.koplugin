@@ -87,9 +87,20 @@ local function copy_record(value)
     if value.sourceName ~= nil then result.sourceName = tostring(value.sourceName) end
     if value.sourceVariable ~= nil then result.sourceVariable = tostring(value.sourceVariable) end
     if value.loginInfo ~= nil then result.loginInfo = tostring(value.loginInfo) end
+    if value.loginHeader ~= nil then
+        if type(value.loginHeader) == "table" then
+            result.loginHeader = copy_json(value.loginHeader or {})
+        else
+            result.loginHeader = tostring(value.loginHeader)
+        end
+    end
+    if value.exploreInfo ~= nil then
+        result.exploreInfo = copy_json(value.exploreInfo or {})
+    end
     result.cookies = copy_cookies(value.cookies)
     result.arguments = copy_json(value.arguments or {})
     result.store = copy_json(value.store or {})
+    result.cache = copy_json(value.cache or {})
     if value.updatedAt ~= nil then result.updatedAt = tonumber(value.updatedAt) or value.updatedAt end
     return result
 end

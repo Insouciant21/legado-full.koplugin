@@ -6,12 +6,14 @@ local ltn12 = require("ltn12")
 local rapidjson = require("rapidjson")
 local socket_url = require("socket.url")
 local socketutil = require("socketutil")
+local socket = require("socket")
 local https
 pcall(function()
     https = require("ssl.https")
 end)
 
 local Network = {}
+local DEFAULT_HTTP_TIMEOUT_SECONDS = 20
 
 local function trim(value)
     return (tostring(value):gsub("^%s+", ""):gsub("%s+$", ""))
@@ -257,6 +259,20 @@ local function convert_charset(value, from_charset, to_charset)
     return ok and converted or value
 end
 
+local function apply_login_header(headers, source)
+    local raw = source and source.__legado_login_header
+    if type(raw) == "string" then
+        local decoded_ok, decoded = pcall(rapidjson.decode, raw)
+        raw = decoded_ok and decoded or nil
+    end
+    if type(raw) ~= "table" then return end
+    for key, value in pairs(raw) do
+        if type(value) == "string" or type(value) == "number" then
+            headers[tostring(key)] = tostring(value)
+        end
+    end
+end
+
 local function url_encode(value, charset)
     value = convert_charset(value, "UTF-8", charset or "UTF-8")
     return tostring(value):gsub("([^%w%-%._~])", function(char)
@@ -264,7 +280,7 @@ local function url_encode(value, charset)
     end)
 end
 
-local function headers_from_source(source)
+local function headers_from_source(source, context)
     local headers = {
         ["User-Agent"] = socketutil.USER_AGENT,
         ["Accept"] = "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
@@ -276,13 +292,51 @@ local function headers_from_source(source)
                 headers[tostring(key)] = tostring(value)
             end
         end
+        apply_login_header(headers, source)
         return headers
     end
     if type(raw) ~= "string" or raw == "" then
+        apply_login_header(headers, source)
         return headers
     end
     if raw:lower():match("^@js:") or raw:lower():match("^<js>") then
-        return nil, "source header uses JavaScript"
+        local evaluator = context and context.__js_eval
+        if type(evaluator) ~= "function" then
+            return nil, "source header uses JavaScript"
+        end
+        if context.__legado_evaluating_header then
+            -- A header rule may itself make a request. Avoid recursively
+            -- evaluating the same header; the nested request receives the
+            -- default headers and can still use cookies/source variables.
+            raw = ""
+        else
+            local header_context = {}
+            for key, value in pairs(context) do header_context[key] = value end
+            header_context.__legado_evaluating_header = true
+            local value, suffix, eval_err = evaluator(
+                raw,
+                context.result or "",
+                header_context
+            )
+            if eval_err then return nil, "source header: " .. tostring(eval_err) end
+            if suffix and trim(suffix) ~= "" then
+                return nil, "source header has an unsupported trailing rule"
+            end
+            if type(value) == "string" then
+                local decoded_ok, decoded = pcall(rapidjson.decode, value)
+                if decoded_ok then value = decoded end
+            end
+            if type(value) ~= "table" then
+                return nil, "source header JavaScript did not return an object"
+            end
+            for key, item in pairs(value) do
+                if type(item) == "string" or type(item) == "number" then
+                    headers[tostring(key)] = tostring(item)
+                end
+            end
+            apply_login_header(headers, source)
+            return headers
+        end
     end
     local ok, decoded = pcall(rapidjson.decode, raw)
     if ok and type(decoded) == "table" then
@@ -291,6 +345,7 @@ local function headers_from_source(source)
                 headers[tostring(key)] = tostring(value)
             end
         end
+        apply_login_header(headers, source)
         return headers
     end
     -- Some older sources store one HTTP header per line instead of JSON.
@@ -300,6 +355,7 @@ local function headers_from_source(source)
             headers[key] = value
         end
     end
+    apply_login_header(headers, source)
     return headers
 end
 
@@ -307,11 +363,19 @@ end
 -- page. Dynamic `@js` headers still belong to the source's JS/HTTP path and
 -- cannot be evaluated recursively while that same JS call is waiting for the
 -- browser. Cookie state is installed through the browser cookie store.
-function Network.browser_headers(source)
+function Network.browser_headers(source, context)
     local raw = source and source.header
     if type(raw) == "string"
             and (raw:lower():match("^@js:") or raw:lower():match("^<js>")) then
-        return {}
+        local headers, err = headers_from_source(source, context)
+        if not headers then
+            -- startBrowser may be called without a rule context. Dynamic
+            -- headers are then intentionally omitted; ordinary requests
+            -- still evaluate them through the context above.
+            if not context then return {} end
+            return nil, err
+        end
+        return headers
     end
     local headers, err = headers_from_source(source)
     if not headers then
@@ -357,6 +421,38 @@ local function merge_options(primary, secondary)
     return next(result) and result or nil
 end
 
+-- Chapter URL rules commonly append the same JSON option object to every
+-- href (for example `{ "webView": true }`). Decoding and re-encoding that
+-- suffix thousands of times is wasteful on the Kindle's 32-bit CPU. Keep a
+-- bounded cache keyed by the exact JSON tail; callers still receive a fresh
+-- merged table when they need to mutate options.
+local url_option_cache = {}
+local url_option_cache_size = 0
+
+local function cached_url_options(tail)
+    local cached = url_option_cache[tail]
+    if cached then
+        return cached.options, cached.encoded
+    end
+    local ok, options = pcall(rapidjson.decode, tail)
+    if not ok or type(options) ~= "table" then
+        return nil
+    end
+    local encoded_ok, encoded = pcall(rapidjson.encode, options)
+    if not encoded_ok then
+        return options
+    end
+    -- A source can have many distinct signed URLs. Bound this optimization so
+    -- URL parsing never becomes an unbounded state store.
+    if url_option_cache_size >= 256 then
+        url_option_cache = {}
+        url_option_cache_size = 0
+    end
+    url_option_cache[tail] = { options = options, encoded = encoded }
+    url_option_cache_size = url_option_cache_size + 1
+    return options, encoded
+end
+
 local function apply_option_headers(headers, options)
     if type(options) ~= "table" then
         return
@@ -380,16 +476,18 @@ local function split_url_options(value)
     local comma = value:find(",", 1, true)
     local found_url
     local found_options
+    local found_encoded
     while comma do
         local tail = value:sub(comma + 1):match("^%s*(.*)$")
-        local ok, options = pcall(rapidjson.decode, tail)
-        if ok and type(options) == "table" then
+        local options, encoded = cached_url_options(tail)
+        if options then
             found_url = trim(value:sub(1, comma - 1))
             found_options = options
+            found_encoded = encoded
         end
         comma = value:find(",", comma + 1, true)
     end
-    return found_url or trim(value), found_options
+    return found_url or trim(value), found_options, found_encoded
 end
 
 local function decode_response(value, charset)
@@ -400,12 +498,103 @@ local function decode_response(value, charset)
     return convert_charset(value, charset, "UTF-8")
 end
 
+local function shallow_copy(value)
+    local result = {}
+    if type(value) == "table" then
+        for key, item in pairs(value) do result[key] = item end
+    end
+    return result
+end
+
+local function evaluate_url_option_js(clean_url, options)
+    local script = type(options) == "table" and options.js
+    local context = type(options) == "table" and options.__legado_context
+    if type(script) ~= "string" or trim(script) == "" then
+        return clean_url, options
+    end
+    if type(context) ~= "table" or type(context.__js_eval) ~= "function" then
+        return nil, "URL option js requires a JavaScript evaluator"
+    end
+
+    -- AnalyzeUrl runs this code after it has populated java.url and
+    -- java.headerMap. Returning both values lets the Lua request layer apply
+    -- mutations made by source code such as
+    -- `java.headerMap.put('X-Token', token)` without exposing Lua tables to JS.
+    local js_context = shallow_copy(context)
+    js_context.baseUrl = clean_url
+    js_context.result = ""
+    local wrapped = "<js>(function(){\n" .. script
+        .. "\n;return {url:String(java.url||''),headers:java.headerMap||{}};})()</js>"
+    local value, _, err = context.__js_eval(wrapped, "", js_context)
+    if err then return nil, "URL option js: " .. tostring(err) end
+    if type(value) ~= "table" then
+        return nil, "URL option js did not return a request object"
+    end
+    local next_url = trim(value.url or "")
+    if next_url == "" then next_url = clean_url end
+    local next_options = shallow_copy(options)
+    next_options.js = nil
+    if type(value.headers) == "table" then
+        next_options.headers = value.headers
+    end
+    return next_url, next_options
+end
+
+local function apply_body_js(body, options)
+    local script = type(options) == "table" and options.bodyJs
+    local context = type(options) == "table" and options.__legado_context
+    if type(script) ~= "string" or trim(script) == "" then
+        return body
+    end
+    if type(context) ~= "table" or type(context.__js_eval) ~= "function" then
+        return nil, "URL option bodyJs requires a JavaScript evaluator"
+    end
+    local js_context = shallow_copy(context)
+    js_context.result = body or ""
+    js_context.src = body or ""
+    local value, _, err = context.__js_eval("<js>" .. script .. "</js>", body or "", js_context)
+    if err then return nil, "URL option bodyJs: " .. tostring(err) end
+    if value == nil then return "" end
+    if type(value) == "table" then
+        local ok, encoded = pcall(rapidjson.encode, value)
+        return ok and encoded or tostring(value)
+    end
+    return tostring(value)
+end
+
+local function response_body(body_chunks, response_headers, code, options)
+    local response = table.concat(body_chunks or {})
+    if options and options.type ~= nil then
+        return hex_encode(response), response_headers, code
+    end
+    local decoded = decode_response(response, options and options.charset)
+    local body, body_err = apply_body_js(decoded, options)
+    if body == nil then
+        return nil, body_err
+    end
+    return body, response_headers, code
+end
+
+local function response_cookies(url)
+    local host = cookie_host(url)
+    local cookies = host and cookie_jar[host] or nil
+    local result = {}
+    for name, value in pairs(cookies or {}) do
+        result[tostring(name)] = tostring(value)
+    end
+    return result
+end
+
 function Network.url_encode(value, charset)
     return url_encode(value, charset)
 end
 
 function Network.url_encode_charset(value, charset)
     return url_encode(value, charset)
+end
+
+function Network.convert_charset(value, from_charset, to_charset)
+    return convert_charset(value, from_charset, to_charset)
 end
 
 function Network.url_options(value)
@@ -415,6 +604,14 @@ end
 
 function Network.user_agent()
     return socketutil.USER_AGENT
+end
+
+-- Source JavaScript exposes getHeaderMap() as the same resolved request
+-- header map used by the HTTP client. Keep this small public wrapper so the
+-- Lua host can honor dynamic source headers without duplicating their
+-- evaluation rules.
+function Network.headers(source, context)
+    return headers_from_source(source, context)
 end
 
 function Network.cookie_get(url)
@@ -517,21 +714,20 @@ end
 
 function Network.absolute(base_url, value)
     local clean_base = split_url_options(base_url or "")
-    local clean_value, options = split_url_options(value)
+    local clean_value, options, encoded_options = split_url_options(value)
     if clean_value == "" then
         return ""
     end
     if clean_value:lower():match("^data:") then
         if options then
-            return clean_value .. "," .. rapidjson.encode(options)
+            return clean_value .. "," .. (encoded_options or rapidjson.encode(options))
         end
         return clean_value
     end
     local ok, absolute = pcall(socket_url.absolute, clean_base or "", clean_value)
     if ok and absolute then
         if options then
-            local encoded_options = rapidjson.encode(options)
-            return absolute .. "," .. encoded_options
+            return absolute .. "," .. (encoded_options or rapidjson.encode(options))
         end
         return absolute
     end
@@ -539,12 +735,28 @@ function Network.absolute(base_url, value)
 end
 
 function Network.get(url, source, extra_options)
-    local headers, header_err = headers_from_source(source)
+    local clean_url, url_options_value = split_url_options(url)
+    local options = merge_options(url_options_value, decode_options(extra_options) or extra_options)
+    local headers, header_err = headers_from_source(
+        source,
+        options and options.__legado_context
+    )
     if not headers then
         return nil, header_err
     end
-    local clean_url, url_options_value = split_url_options(url)
-    local options = merge_options(url_options_value, decode_options(extra_options) or extra_options)
+    local option_url, option_url_err = evaluate_url_option_js(clean_url, options)
+    if not option_url then return nil, option_url_err end
+    clean_url = option_url
+    -- Keep the private evaluator reference until bodyJs has run. It is never
+    -- copied into request headers or sent to the browser below.
+    local follow_redirects = not (options and options.followRedirects == false)
+    local retry_count = tonumber(options and options.retry) or 0
+    retry_count = math.max(0, math.min(5, math.floor(retry_count)))
+    local timeout = tonumber(options and options.timeout)
+    -- Legado's timeout is milliseconds; LuaSocket expects seconds.
+    local timeout_seconds = timeout and math.max(0.1, timeout / 1000)
+        or DEFAULT_HTTP_TIMEOUT_SECONDS
+    local browser_timeout = timeout and math.max(0.1, timeout / 1000) or nil
     local method = "GET"
     local body
     if options then
@@ -566,6 +778,36 @@ function Network.get(url, source, extra_options)
         end
         apply_option_headers(headers, options)
     end
+
+    -- Android Legado routes URLs marked with {"webView":true} through its
+    -- background WebView.  On Kindle the browser bridge is the equivalent
+    -- renderer; return its final DOM as the response body so the ordinary
+    -- source rule pipeline remains unchanged.
+    if options and (options.webView == true or tostring(options.webView):lower() == "true") then
+        local Browser = require("legado/browser")
+        local browser_headers, browser_header_err = Network.browser_headers(
+            source,
+            options and options.__legado_context
+        )
+        if not browser_headers then return nil, browser_header_err end
+        local browser_result, browser_err = Browser.await(clean_url, {
+            source = source,
+            headers = browser_headers,
+            cookies = Network.export_cookies(),
+            html = options.html,
+            script = options.webJs,
+            -- URL options use milliseconds; Browser.await uses seconds.
+            timeout = browser_timeout,
+            delay = options.webViewDelayTime,
+            auto = true,
+            refetch_after_success = false,
+        })
+        if not browser_result then return nil, browser_err end
+        if browser_result.cookies then Network.merge_cookies(browser_result.cookies) end
+        local browser_body, browser_body_err = apply_body_js(browser_result.body, options)
+        if browser_body == nil then return nil, browser_body_err end
+        return browser_body, browser_result.headers, browser_result.code
+    end
     if method ~= "GET" and method ~= "HEAD" then
         body = body or ""
         if options and options.charset and tostring(options.charset):lower() ~= "utf-8"
@@ -586,10 +828,14 @@ function Network.get(url, source, extra_options)
         if options and options.type ~= nil then
             return hex_encode(data), nil, 200
         end
-        return decode_response(data, options and options.charset), nil, 200
+        local decoded = decode_response(data, options and options.charset)
+        local body, body_err = apply_body_js(decoded, options)
+        if body == nil then return nil, body_err end
+        return body, nil, 200
     end
 
     local redirect_count = 0
+    local attempt = 0
     while true do
         local chunks = {}
         local request_headers = {}
@@ -609,6 +855,17 @@ function Network.get(url, source, extra_options)
             headers = request_headers,
             sink = ltn12.sink.table(chunks),
         }
+        if options and options.proxy then
+            local proxy = tostring(options.proxy)
+            if proxy:lower():match("^socks[45]://") then
+                return nil, "SOCKS proxy is not available in this KOReader build"
+            end
+            request.proxy = proxy
+        end
+        if options and options.origin and request_headers.Origin == nil
+                and request_headers.origin == nil then
+            request_headers.Origin = tostring(options.origin)
+        end
         if method ~= "GET" and method ~= "HEAD" then
             request.source = ltn12.source.string(body or "")
         end
@@ -619,13 +876,25 @@ function Network.get(url, source, extra_options)
             end
             requester = https
         end
+        local previous_timeout = requester.TIMEOUT
+        requester.TIMEOUT = timeout_seconds
         local ok, code, response_headers, status = requester.request(request)
+        requester.TIMEOUT = previous_timeout
         local numeric_code = tonumber(code)
         if not ok then
-            return nil, "HTTP request failed: " .. tostring(code or status or "unknown error")
-        end
-        update_cookies(clean_url, response_headers)
-        if numeric_code and numeric_code >= 300 and numeric_code < 400 then
+            if attempt < retry_count then
+                attempt = attempt + 1
+            else
+                return nil, "HTTP request failed: " .. tostring(code or status or "unknown error")
+            end
+        elseif numeric_code and numeric_code >= 500 and attempt < retry_count then
+            attempt = attempt + 1
+        elseif numeric_code and numeric_code >= 300 and numeric_code < 400
+                and not follow_redirects then
+            update_cookies(clean_url, response_headers)
+            return response_body(chunks, response_headers, numeric_code, options)
+        elseif numeric_code and numeric_code >= 300 and numeric_code < 400 then
+            update_cookies(clean_url, response_headers)
             local location = response_headers and (response_headers.location or response_headers.Location)
             if location and redirect_count < 5 then
                 redirect_count = redirect_count + 1
@@ -639,16 +908,58 @@ function Network.get(url, source, extra_options)
                 return nil, "HTTP redirect limit exceeded"
             end
         else
-            if numeric_code and (numeric_code < 200 or numeric_code >= 400) then
+            if not ok then
+                -- A retryable transport error reaches the top of the loop.
+            elseif numeric_code and (numeric_code < 200 or numeric_code >= 400) then
+                update_cookies(clean_url, response_headers)
+                if options and options.allowHttpError then
+                    return response_body(chunks, response_headers, numeric_code, options)
+                end
                 return nil, "HTTP status " .. tostring(numeric_code)
+            else
+                update_cookies(clean_url, response_headers)
+                return response_body(chunks, response_headers, numeric_code, options)
             end
-            local response = table.concat(chunks)
-            if options and options.type ~= nil then
-                return hex_encode(response), response_headers, numeric_code
-            end
-            return decode_response(response, options and options.charset), response_headers, numeric_code
         end
     end
+end
+
+-- Java's java.connect()/java.getStrResponse() expose a response object rather
+-- than only its body. Keep the same request implementation and add the
+-- object-shaped fields expected by login-check scripts.
+function Network.get_response(url, source, extra_options)
+    local options = shallow_copy(decode_options(extra_options) or extra_options)
+    if options.followRedirects == nil then options.followRedirects = false end
+    -- Jsoup's Connection.Response and Legado's StrResponse are inspectable
+    -- even for HTTP 4xx/5xx responses. Keep the body and status available to
+    -- login checks and redirect/signature scripts instead of turning them
+    -- into an opaque Lua error.
+    options.allowHttpError = true
+    local started = os.clock()
+    local body, headers, code = Network.get(url, source, options)
+    local clean_url = split_url_options(url)
+    if body == nil then
+        local message = tostring(headers or "HTTP request failed")
+        return {
+            body = "",
+            url = clean_url,
+            code = tonumber(code) or -1,
+            message = message,
+            headers = headers or {},
+            cookies = response_cookies(clean_url),
+            callTime = math.floor((os.clock() - started) * 1000),
+            errorBody = message,
+        }
+    end
+    return {
+        body = body,
+        url = clean_url,
+        code = tonumber(code) or 200,
+        message = (tonumber(code) and tonumber(code) >= 400) and "HTTP error" or "OK",
+        headers = headers or {},
+        cookies = response_cookies(clean_url),
+        callTime = math.floor((os.clock() - started) * 1000),
+    }
 end
 
 return Network

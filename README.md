@@ -83,17 +83,21 @@ KOReader 完全负责字体、字号、间距、CSS、嵌入字体开关和其�
 
 规则层覆盖普通 CSS/Legado 旧式选择器、JSONPath、常见 XPath、正则（含 `:` 开头的
 AllInOne 捕获规则）、`@put/@get` 变量、模板、分页、替换规则和 Legado JavaScript。
-QuickJS 桥接把 `java.ajax`、Cookie、变量、缓存、Base64/Hex 等通用主机能力映射到
-Kindle。实现不识别任何聚合源名称、接口地址或私有字段；聚合源只作为通用协议覆盖
-测试的参考。
+QuickJS 桥接把 `java.ajax`、响应对象、Cookie、登录信息、源变量、`infoMap`、缓存、
+浏览器/WebView、Base64/Hex、对称加密和常见 Java/Jsoup 对象映射到 Kindle。发现源
+支持换行/`&&`/JSON/脚本返回的分类项，以及 `select/toggle/button` action；每个源的
+筛选状态独立保存。实现不识别任何聚合源名称、接口地址或私有字段；聚合源只作为
+通用协议覆盖测试的参考。
 
 书源登录读取源定义中的 `loginUi`、按钮和 `loginUrl`/JavaScript，结果 Cookie、登录
 信息和源变量按书源保存到 `<KOReader data dir>/legado/source-sessions.json`，这个
 会话文件不属于 Android 备份，首次迁移到 Kindle 后需要在 Kindle 上登录一次。
 
-`@webjs`、真实 Android Java/Jsoup 对象、图片/音频/漫画专属能力和 `java.webView` 会
-明确报错，不会静默抓取错误内容。网络和 HTML 处理在 Trapper 子进程执行，以避免慢源
-阻塞 KOReader 界面；正文 HTML 会先转换为干净文本再交给 KOReader 排版。
+`@webjs`、`java.webView`、`startBrowser*` 和登录/发现 action 会通过 Kindle 自带的
+Chromium/浏览器桥执行；这类规则需要设备上的浏览器可用，并可能需要用户完成验证码
+或登录。Android 专属 UI、RSS/图片/音频/漫画能力和 `qread` 不属于文本阅读范围，仍会
+明确报错或返回受限结果，不会静默抓取错误内容。网络和 HTML 处理在 Trapper 子进程执行，
+以避免慢源阻塞 KOReader 界面；正文 HTML 会先转换为干净文本再交给 KOReader 排版。
 
 QuickJS 原生库随插件放在 `lib/armel/` 和 `lib/armhf/`；`make plugin-zip` 会构建两种
 ARM ABI，KPW4 使用 `armhf`。
