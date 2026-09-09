@@ -2127,6 +2127,7 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
         return resolved_source
     end
     local items = {}
+    local current_item_number
     if last_chapter then
         items[#items + 1] = {
             text = T(_("Continue reading chapter %1"), last_chapter),
@@ -2165,6 +2166,19 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
             chapter = chapter,
             bold = last_chapter == index,
         }
+        if last_chapter == index then
+            -- Menu uses item_table.current during init to choose the page
+            -- containing the current item.  The chapter list has a few
+            -- action rows before the actual chapters, so the menu item number
+            -- is not the same as the chapter index.
+            current_item_number = #items
+        end
+    end
+    if current_item_number then
+        -- This is a non-array field and does not affect ipairs/#items.  It
+        -- also makes KOReader render the current chapter in its normal bold
+        -- current-item style.
+        items.current = current_item_number
     end
     local chapter_menu
     chapter_menu = Menu:new{
