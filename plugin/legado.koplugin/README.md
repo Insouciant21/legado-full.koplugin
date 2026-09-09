@@ -109,8 +109,11 @@ JavaScript. Cookies, login information and source variables are stored per
 source in `<KOReader data dir>/legado/source-sessions.json`; this file is not
 an Android backup member and must be treated as private credential data.
 
-`@webjs`, `java.webView`, `startBrowser*` and browser-based login/discovery
-actions use the Kindle Chromium/browser bridge and may require interactive
-verification. Android-only UI, RSS/image/audio/manga features and `qread` are
-outside the text-reader scope and remain explicit limited/unsupported
+`@webjs` and `java.webView` use the Kindle Chromium/browser bridge as a
+background DOM renderer: the resulting HTML is returned to KOReader, which
+does the actual reading layout. `startBrowser*` and browser-based
+login/discovery actions are the interactive exception and may require the
+browser page to be brought to the foreground for verification. Android-only
+UI, RSS/image/audio/manga features and `qread` are outside the text-reader
+scope and remain explicit limited/unsupported
 capabilities.

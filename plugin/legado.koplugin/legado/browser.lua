@@ -51,6 +51,9 @@ do
                 const unsigned char *data, int nelements);
             int XMapWindow(legado_Display *display, legado_Window window);
             int XUnmapWindow(legado_Display *display, legado_Window window);
+            int XMoveWindow(legado_Display *display, legado_Window window,
+                int x, int y);
+            int XLowerWindow(legado_Display *display, legado_Window window);
             int XMapRaised(legado_Display *display, legado_Window window);
             int XRaiseWindow(legado_Display *display, legado_Window window);
             int XSync(legado_Display *display, int discard);
@@ -106,6 +109,23 @@ local function find_browser_window()
     end
     handle:close()
     return window
+end
+
+-- Automatic source requests use Chromium only as a DOM renderer. Ask X11 to
+-- keep its client below the reader and move it off the Kindle screen. An old
+-- Kindle content-shell build tears down the DevTools session when its window
+-- is unmapped, so it must remain mapped while the DOM is being rendered.
+local function hide_browser_window()
+    if not x11 or not x11_ffi then return false end
+    local window = find_browser_window()
+    if not window then return false end
+    local display = x11.XOpenDisplay(":0")
+    if display == nil then return false end
+    local moved = x11.XMoveWindow(display, window, -1200, -1500) ~= 0
+    local lowered = x11.XLowerWindow(display, window) ~= 0
+    x11.XSync(display, 0)
+    x11.XCloseDisplay(display)
+    return moved or lowered
 end
 
 local function find_kpp_cover_windows()
@@ -526,10 +546,10 @@ function Client:matching_resource(pattern)
     return nil
 end
 
-local function browser_http_get(port, path)
+local function browser_http_get(port, path, timeout)
     local chunks = {}
     local previous_timeout = http.TIMEOUT
-    http.TIMEOUT = HTTP_TIMEOUT
+    http.TIMEOUT = tonumber(timeout) or HTTP_TIMEOUT
     local request_ok, code, _, request_err = http.request{
         url = "http://127.0.0.1:" .. tostring(port) .. tostring(path),
         method = "GET",
@@ -557,9 +577,12 @@ local function choose_port()
     return nil, "no free local browser port"
 end
 
-local function wait_for_page(port, deadline)
+local function wait_for_page(port, deadline, on_wait, poll_timeout)
     while now() < deadline do
-        local body = browser_http_get(port, "/json")
+        if type(on_wait) == "function" then
+            pcall(on_wait)
+        end
+        local body = browser_http_get(port, "/json", poll_timeout)
         if body then
             local decoded_ok, pages = pcall(rapidjson.decode, body)
             if decoded_ok and type(pages) == "table" then
@@ -625,8 +648,8 @@ local function connect_devtools(page, port)
     return Client:new(client)
 end
 
-local function launch(url, port, user_dir, log_path)
-    local command = table.concat({
+local function launch(url, port, user_dir, log_path, background)
+    local arguments = {
         "DISPLAY=:0",
         "LD_LIBRARY_PATH=" .. shell_quote(BROWSER_LIBRARY_PATH),
         shell_quote(BROWSER_BINARY),
@@ -643,7 +666,8 @@ local function launch(url, port, user_dir, log_path)
         "--remote-debugging-port=" .. tostring(port),
         "--user-data-dir=" .. shell_quote(user_dir),
         "--content-shell-hide-toolbar",
-        "--content-shell-host-window-cord=0,215",
+        "--content-shell-host-window-cord="
+            .. (background and "-1200,-1500" or "0,215"),
         "--force-device-scale-factor=2",
         "--force-gpu-mem-available-mb=40",
         "--enable-low-end-device-mode",
@@ -656,10 +680,18 @@ local function launch(url, port, user_dir, log_path)
             .. "AppleWebKit/531.2+ (KHTML, like Gecko) Version/5.0 "
             .. "Safari/533.2+ Kindle/3.0+"
         ),
-        shell_quote(url),
-        ">", shell_quote(log_path),
-        "2>&1 & echo $!",
-    }, " ")
+    }
+    if background then
+        -- Some Kindle Chromium builds ignore the minimized hint. The X11
+        -- lowering pass below is still required after a navigation.
+        arguments[#arguments + 1] = "--start-minimized"
+    end
+    arguments[#arguments + 1] = shell_quote(url)
+    arguments[#arguments + 1] = ">"
+    arguments[#arguments + 1] = shell_quote(log_path)
+    arguments[#arguments + 1] =
+        "2>&1 & echo $!"
+    local command = table.concat(arguments, " ")
     local handle, open_err = io.popen(command, "r")
     if not handle then return nil, open_err or "cannot launch Kindle browser" end
     local pid = tonumber(trim(handle:read("*l") or ""))
@@ -1000,22 +1032,30 @@ function Browser.await(url, options)
     end
     binary_file:close()
 
+    local automatic = options.auto == true
+        or tostring(options.auto):lower() == "true"
+    local background = options.background == true
+        or (options.background == nil and automatic)
+
     math.randomseed(os.time() + math.floor(now() * 1000) % 100000 + #url)
     local port, port_err = choose_port()
     if not port then return nil, port_err end
     local token = tostring(os.time()) .. "-" .. tostring(math.random(100000, 999999))
     local user_dir = "/var/tmp/legado-browser-" .. token
     local log_path = user_dir .. ".log"
-    local input_started, input_err = BrowserInput.begin(token)
-    if not input_started then
-        return nil, input_err or "cannot start browser input bridge"
+    local input_started = false
+    if not background then
+        local input_err
+        input_started, input_err = BrowserInput.begin(token)
+        if not input_started then
+            return nil, input_err or "cannot start browser input bridge"
+        end
     end
     -- KOReader's Kindle launcher pauses Awesome while it owns the framebuffer.
-    -- Chromium's content shell is an ordinary X client, so it remains unmapped
-    -- until the window manager is allowed to process its application window.
-    -- Temporarily resume it for the browser session and put it back exactly as
-    -- we found it when the session ends.
-    local restore_awesome = awesome_was_stopped()
+    -- Interactive browser actions need the window manager and input bridge;
+    -- automatic DOM requests do not, and must not take the reader out of the
+    -- foreground.
+    local restore_awesome = not background and awesome_was_stopped()
     if restore_awesome then
         continue_awesome()
         -- Give Awesome one scheduling turn before Chromium creates its X
@@ -1025,9 +1065,9 @@ function Browser.await(url, options)
     -- Start on a blank document so the source's existing cookies are installed
     -- before the first request to its page. This matters for login/settings
     -- pages that redirect based on an existing session.
-    local pid, launch_err = launch("about:blank", port, user_dir, log_path)
+    local pid, launch_err = launch("about:blank", port, user_dir, log_path, background)
     if not pid then
-        BrowserInput.finish(token)
+        if input_started then BrowserInput.finish(token) end
         if restore_awesome then stop_awesome() end
         return nil, launch_err
     end
@@ -1044,7 +1084,7 @@ function Browser.await(url, options)
     local function finish(result, err)
         if client then client:close() end
         kill_process(pid)
-        BrowserInput.finish(token)
+        if input_started then BrowserInput.finish(token) end
         remove_profile(user_dir)
         os.remove(log_path)
         restore_kpp_cover_windows(hidden_kpp_windows)
@@ -1052,12 +1092,22 @@ function Browser.await(url, options)
         return result, err
     end
 
-    -- Promote the content shell before attaching DevTools.  Without a valid
-    -- Kindle window name, Awesome can leave the browser mapped but visually
-    -- underneath the current KOReader/KPP application.
-    promote_browser_window(now() + 5, hidden_kpp_windows)
+    -- Promote interactive pages before attaching DevTools. Without a valid
+    -- Kindle window name, Awesome can leave them underneath KOReader/KPP.
+    -- Automatic source requests stay below the reader and never take it out
+    -- of the foreground.
+    if background then
+        hide_browser_window()
+    else
+        promote_browser_window(now() + 5, hidden_kpp_windows)
+    end
 
-    local page, page_err = wait_for_page(port, now() + 20)
+    local page, page_err = wait_for_page(
+        port,
+        now() + 20,
+        background and hide_browser_window or nil,
+        background and 0.35 or nil
+    )
     if not page then return finish(nil, page_err) end
     client, page_err = connect_devtools(page, port)
     if not client then return finish(nil, page_err) end
@@ -1096,7 +1146,11 @@ function Browser.await(url, options)
     end
     local _, navigation_err = client:call("Page.navigate", { url = navigation_url })
     if navigation_err then return finish(nil, navigation_err) end
-    promote_browser_window(now() + 2, hidden_kpp_windows)
+    if background then
+        hide_browser_window()
+    else
+        promote_browser_window(now() + 2, hidden_kpp_windows)
+    end
     if type(options.html) == "string" and options.html ~= "" then
         if #options.html > MAX_HTML_BYTES then
             return finish(nil, "browser HTML is too large")
@@ -1126,16 +1180,24 @@ function Browser.await(url, options)
         if current_url ~= last_url then
             last_url = current_url
             injected = false
-            promote_browser_window(now() + 1, hidden_kpp_windows)
+            if background then
+                hide_browser_window()
+            else
+                promote_browser_window(now() + 1, hidden_kpp_windows)
+            end
         end
-        if not options.auto and not injected then
+        if not automatic and not injected then
             injected = add_done_button(client) == true
         end
         -- KOReader owns the input device while its worker is active.  Keep
         -- the Chromium client raised as Awesome/KPP may reassert its own
         -- stacking order after a navigation or a virtual-keyboard event.
-        promote_browser_window(now() + 0.15, hidden_kpp_windows)
-        pan_position = forward_browser_inputs(client, token, pan_position)
+        if background then
+            hide_browser_window()
+        else
+            promote_browser_window(now() + 0.15, hidden_kpp_windows)
+            pan_position = forward_browser_inputs(client, token, pan_position)
+        end
         if options.override_url_regex and tostring(options.override_url_regex) ~= "" then
             local matched, match_err = client:matches_regex(
                 current_url,
@@ -1164,7 +1226,7 @@ function Browser.await(url, options)
                 return finish(result)
             end
         end
-        if options.auto then
+        if automatic then
             local ready = client:evaluate("String(document.readyState || '')")
             if ready ~= "loading" then
                 if not ready_at then
