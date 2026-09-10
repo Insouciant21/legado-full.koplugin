@@ -2415,7 +2415,7 @@ end
 function Legado:showBookshelfCategories(catalog, books, reading_status)
     local categories = catalog:categories()
     local items = {}
-    for _, category in ipairs(categories) do
+    for category_index, category in ipairs(categories) do
         local selected = catalog:books_for_category(
             books, category.id, reading_status
         )
