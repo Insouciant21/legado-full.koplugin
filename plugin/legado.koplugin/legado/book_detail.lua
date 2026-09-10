@@ -30,6 +30,9 @@ local unpack_values = table.unpack or unpack
 
 local BookDetail = ButtonDialog:extend{
     title = _("Book details"),
+    covers_fullscreen = true,
+    is_borderless = true,
+    is_popout = false,
     book = nil,
     source = nil,
     cover_path = nil,
@@ -263,13 +266,25 @@ function BookDetail:init()
     end
     ButtonDialog.init(self)
 
-    -- This page is deliberately a broad, square KOReader surface.  The
-    -- detail content is already a card-like composition; a second rounded
-    -- frame around a screen-sized menu makes it look like a clipped popup.
+    -- ButtonDialog normally centers a small rounded popup. Details are a
+    -- complete page, so give it a square full-screen white surface and keep
+    -- the existing button dialog centered horizontally but aligned to the
+    -- top. This also prevents the previous KOReader page from showing below
+    -- the dialog on devices with a tall screen.
     if self.movable and self.movable[1] then
         self.movable[1].radius = 0
         self.movable[1].bordersize = 0
     end
+    local dialog_center = self[1]
+    dialog_center.ignore = "height"
+    self[1] = FrameContainer:new{
+        dimen = Screen:getSize(),
+        padding = 0,
+        margin = 0,
+        bordersize = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        dialog_center,
+    }
 end
 
 function BookDetail:dispatch(action)
