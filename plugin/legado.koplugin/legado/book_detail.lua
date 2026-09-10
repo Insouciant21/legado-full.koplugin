@@ -30,7 +30,7 @@ local Screen = Device.screen
 local unpack_values = table.unpack or unpack
 
 local BookDetail = ButtonDialog:extend{
-    title = _("Book details"),
+    title = nil,
     covers_fullscreen = true,
     is_borderless = true,
     is_popout = false,
@@ -113,6 +113,10 @@ end
 
 function BookDetail:init()
     self.book = type(self.book) == "table" and self.book or {}
+    -- The plugin catalog is loaded by _meta.lua. Resolve the title when the
+    -- widget is instantiated, after that catalog is available; resolving it
+    -- in the class declaration leaves only this title untranslated.
+    self.title = _("Book details")
     local screen_width = Screen:getWidth()
     self.width = self.width or math.floor(
         math.min(screen_width, Screen:getHeight()) * self.width_factor
@@ -205,10 +209,18 @@ function BookDetail:init()
     local intro = clean_intro(self.book.intro)
     if intro == "" then intro = _("No introduction available.") end
     local intro_width = title_width - 2 * Size.padding.default
-    local intro_height = math.floor(Screen:getHeight() * 0.34)
+    local intro_height = math.floor(Screen:getHeight() * 0.38)
+    -- A vertical scrollbar shrinks ScrollableContainer's crop width by
+    -- ScrollableContainer:getScrollbarWidth(). Give the text the same inner
+    -- width up front so long introductions never create a useless horizontal
+    -- scrollbar beside the vertical one.
+    local intro_content_width = math.max(
+        Screen:scaleBySize(120),
+        intro_width - ScrollableContainer:getScrollbarWidth()
+    )
     local intro_body = TextBoxWidget:new{
         text = intro,
-        width = intro_width,
+        width = intro_content_width,
         height_adjust = true,
         face = Font:getFace("x_smallinfofont"),
         alignment = "left",
