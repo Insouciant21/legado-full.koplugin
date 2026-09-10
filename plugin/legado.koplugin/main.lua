@@ -2164,7 +2164,7 @@ function Legado:showExploreValue(source, kind)
         return
     end
     local items = {}
-    for _, value in ipairs(values) do
+    for value_index, value in ipairs(values) do
         items[#items + 1] = {
             text = display_text(value),
             mandatory = value == tostring(kind.value or "") and _("Current") or nil,
@@ -2453,7 +2453,7 @@ function Legado:showBookshelfBooks(catalog, books, category, reading_status, cat
             separator = true,
         }
     end
-    for _, entry in ipairs(entries) do
+    for entry_index, entry in ipairs(entries) do
         local book = entry.book
         if type(book) == "table" and book.name and book.name ~= "" then
             local author = book.author and book.author ~= ""
