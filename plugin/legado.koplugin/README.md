@@ -107,13 +107,26 @@ Selecting a source provides login/Actions, search, full JSON editing,
 enable/disable and delete. `Add source` accepts a source object or array from
 pasted JSON or a JSON file.
 
-Book details provide `Change source`: choose an enabled searchable text source,
-edit the search keyword, select and confirm a result. The plugin fetches the new
-TOC before committing the replacement, maps the old reading position by chapter
-title (then index), removes old source chapter/cover/session caches, and refreshes
-the detail and chapter-list parent. Long-press a source in this picker to open
-its generic login/Actions flow; cancelling or failing a search returns to the
-same picker.
+Book details provide `Change source`, modeled after Legado Android's
+`ChangeBookSourceDialog`: opening it searches all enabled searchable text sources
+with the book title, optionally checking the author, and presents the candidates
+in one result list. Results arrive incrementally while the worker reports
+`source/total` progress. On KPW4 the source rules run in one sequential worker
+to keep the 32-bit memory footprint bounded. The list can be filtered by source
+name/title and by one or more source groups; selected groups also limit the
+search pool, the current source is marked, and the menu opens at that result
+when it is available. Long-pressing a result opens the generic source actions
+(login, edit, enable/disable, reorder and delete).
+
+The result options can also load book information or probe chapter counts before
+selection. A TOC probe deliberately returns only the count and is capped at 24
+candidates on Kindle; the full TOC is fetched only for the selected source. This
+keeps the Android-style workflow usable on KPW4 without retaining multiple large
+chapter lists. Tapping a candidate fetches and validates its TOC before the
+replacement is committed, maps the old reading position by chapter title (then
+index), removes old source chapter/cover/session caches, and refreshes the detail
+and chapter-list parent. A broken candidate source therefore cannot replace a
+working shelf entry.
 
 The rule layer covers common CSS/legacy selectors, JSONPath, XPath, regex,
 `@put/@get` variables, templates, pagination, replacements and Legado

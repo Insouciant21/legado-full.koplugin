@@ -17,6 +17,7 @@ local TrapWidget = require("ui/widget/trapwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local FFIUtil = require("ffi/util")
+local util = require("util")
 local T = FFIUtil.template
 local rapidjson = require("rapidjson")
 
@@ -1572,6 +1573,18 @@ function Legado:showSourceActions(source, source_index, source_list_menu)
         }
     end
     items[#items + 1] = {
+        text = _("Move source to top"),
+        callback = function()
+            self:runSourceReorder(source_index, "top")
+        end,
+    }
+    items[#items + 1] = {
+        text = _("Move source to bottom"),
+        callback = function()
+            self:runSourceReorder(source_index, "bottom")
+        end,
+    }
+    items[#items + 1] = {
         text = _("Edit source"),
         callback = function()
             self:showEditSourceDialog(source, source_index)
@@ -1625,6 +1638,29 @@ function Legado:runSourceMutation(source_index, updated_source, message, success
     end, function()
         self:invalidateReaderSourceCache()
         self:showOperationResult(success_message(), function()
+            self:showSourceList()
+        end)
+    end, {
+        on_failure = function(error_message)
+            self:showOperationResult(
+                _("Source operation failed:\n") .. tostring(error_message),
+                function()
+                    self:showSourceList()
+                end
+            )
+        end,
+    })
+end
+
+function Legado:runSourceReorder(source_index, destination)
+    self:runWorker(_("Reordering source…"), function()
+        local catalog = SourceCatalog:new(self.storage:get_state_root())
+        local _, err = catalog:move_source(source_index, destination)
+        if err then return nil, err end
+        return true
+    end, function()
+        self:invalidateReaderSourceCache()
+        self:showOperationResult(_("Source order updated."), function()
             self:showSourceList()
         end)
     end, {
@@ -2850,6 +2886,310 @@ function Legado:downloadBookCover(book, book_index, source, detail_widget, paren
     })
 end
 
+-- Android Legado's change-source page searches all enabled sources and then
+-- presents one live candidate list.  Keep the same data model on Kindle,
+-- while deliberately keeping the worker result small: source rules and HTML
+-- stay in the subprocess, and a preloaded TOC contributes only its count.
+local SOURCE_CHANGE_MAX_CANDIDATES_PER_SOURCE = 5
+local SOURCE_CHANGE_MAX_RESULTS = 240
+local SOURCE_CHANGE_TOC_PROBE_LIMIT = 24
+
+local function source_change_group_tokens(source)
+    local groups = {}
+    local function append(value)
+        value = trim_text(value)
+        if value == "" then return end
+        local found = false
+        for token in value:gmatch("[^,，|]+") do
+            token = trim_text(token)
+            if token ~= "" then
+                found = true
+                local duplicate = false
+                for _, existing in ipairs(groups) do
+                    if existing == token then duplicate = true break end
+                end
+                if not duplicate then groups[#groups + 1] = token end
+            end
+        end
+        if not found then groups[#groups + 1] = value end
+    end
+    local value = source and source.bookSourceGroup
+    if type(value) == "table" then
+        for key, item in pairs(value) do
+            if item == true and type(key) == "string" then
+                append(key)
+            else
+                append(item)
+            end
+        end
+    else
+        append(value)
+    end
+    if #groups == 0 then groups[1] = "" end
+    return groups
+end
+
+local function source_change_group_label(group)
+    return group == "" and _("Ungrouped") or display_text(group)
+end
+
+local function source_change_groups(sources)
+    local values = {}
+    for _, source in ipairs(sources or {}) do
+        if type(source) == "table" and source.enabled ~= false
+                and tonumber(source.bookSourceType or 0) == 0 then
+            for _, group in ipairs(source_change_group_tokens(source)) do
+                values[group] = true
+            end
+        end
+    end
+    local result = {}
+    for group in pairs(values) do result[#result + 1] = group end
+    table.sort(result, function(left, right)
+        return source_change_group_label(left):lower()
+            < source_change_group_label(right):lower()
+    end)
+    return result
+end
+
+local function source_change_group_set(value)
+    local result = {}
+    if type(value) == "table" then
+        for key, group in pairs(value) do
+            if type(key) == "string" and group == true then
+                result[key] = true
+            elseif type(group) == "string" then
+                result[group] = true
+            end
+        end
+    elseif type(value) == "string" and trim_text(value) ~= "" then
+        for group in value:gmatch("[^,，|]+") do
+            group = trim_text(group)
+            if group ~= "" then result[group] = true end
+        end
+    end
+    return result
+end
+
+local function source_change_group_array(groups)
+    local result = {}
+    for group in pairs(groups or {}) do result[#result + 1] = group end
+    table.sort(result)
+    return result
+end
+
+local function source_change_group_summary(groups)
+    local values = source_change_group_array(groups)
+    if #values == 0 then return _("All groups") end
+    local labels = {}
+    for _, group in ipairs(values) do
+        labels[#labels + 1] = source_change_group_label(group)
+    end
+    return table.concat(labels, ", ")
+end
+
+local function source_change_in_groups(source, selected)
+    if next(selected or {}) == nil then return true end
+    for _, group in ipairs(source_change_group_tokens(source)) do
+        if selected[group] then return true end
+    end
+    return false
+end
+
+local function source_change_read_bool(storage, key, default)
+    local value = storage:get_settings():readSetting(key)
+    if type(value) == "boolean" then return value end
+    if value ~= nil then
+        local text = tostring(value):lower()
+        if text == "true" or text == "1" then return true end
+        if text == "false" or text == "0" then return false end
+    end
+    return default
+end
+
+local function source_change_options(storage)
+    return {
+        check_author = source_change_read_bool(
+            storage, "change_source_check_author", true
+        ),
+        load_info = source_change_read_bool(
+            storage, "change_source_load_info", false
+        ),
+        load_toc = source_change_read_bool(
+            storage, "change_source_load_toc", false
+        ),
+    }
+end
+
+local function source_change_save_options(storage, options)
+    local settings = storage:get_settings()
+    settings:saveSetting("change_source_check_author", options.check_author == true)
+    settings:saveSetting("change_source_load_info", options.load_info == true)
+    settings:saveSetting("change_source_load_toc", options.load_toc == true)
+    settings:flush()
+end
+
+local function source_change_load_groups(storage)
+    return source_change_group_set(
+        storage:get_settings():readSetting("change_source_groups")
+    )
+end
+
+local function source_change_save_groups(storage, groups)
+    local settings = storage:get_settings()
+    settings:saveSetting("change_source_groups", source_change_group_array(groups))
+    settings:flush()
+end
+
+local function source_change_options_summary(options)
+    local values = {}
+    if options.check_author then values[#values + 1] = _("Author") end
+    if options.load_info then values[#values + 1] = _("Info") end
+    if options.load_toc then values[#values + 1] = _("TOC count") end
+    if #values == 0 then return _("None") end
+    return table.concat(values, " · ")
+end
+
+local function source_change_truncate_utf8(value, max_bytes)
+    value = tostring(value or "")
+    max_bytes = tonumber(max_bytes) or #value
+    if #value <= max_bytes then return value end
+    local position = 1
+    local last = 0
+    while position <= #value do
+        local byte = value:byte(position)
+        local width = 1
+        if byte >= 0xc2 and byte <= 0xdf then
+            width = 2
+        elseif byte >= 0xe0 and byte <= 0xef then
+            width = 3
+        elseif byte >= 0xf0 and byte <= 0xf4 then
+            width = 4
+        end
+        if position + width - 1 > max_bytes then break end
+        last = position + width - 1
+        position = position + width
+    end
+    return value:sub(1, last) .. "…"
+end
+
+local function source_change_normalize(value)
+    value = trim_text(value):lower():gsub("%s+", "")
+    value = value:gsub("[，。！？：；、“”‘’（）【】《》〈〉—…·]", "")
+    return value:gsub("%p", "")
+end
+
+local function source_change_match(candidate, book, check_author)
+    if type(candidate) ~= "table" or trim_text(candidate.bookUrl) == "" then
+        return nil
+    end
+    local wanted_name = source_change_normalize(book and book.name)
+    local candidate_name = source_change_normalize(candidate.name)
+    if wanted_name == "" or candidate_name ~= wanted_name then return nil end
+    local score = 2
+    local wanted_author = source_change_normalize(book and book.author)
+    if check_author and wanted_author ~= "" then
+        local candidate_author = source_change_normalize(candidate.author)
+        if candidate_author == ""
+                or not candidate_author:find(wanted_author, 1, true) then
+            return nil
+        end
+        score = score + 1
+    elseif wanted_author ~= "" then
+        local candidate_author = source_change_normalize(candidate.author)
+        if candidate_author ~= ""
+                and candidate_author:find(wanted_author, 1, true) then
+            score = score + 1
+        end
+    end
+    return score
+end
+
+local function source_change_copy_candidate(candidate)
+    local result = {}
+    for key, value in pairs(candidate or {}) do
+        if type(value) == "string" or type(value) == "number"
+                or type(value) == "boolean" then
+            result[key] = value
+        elseif key == "variable" and type(value) == "table" then
+            result[key] = value
+        end
+    end
+    -- An unusually verbose intro should not make the change-source result
+    -- payload compete with the actual candidate list. The full introduction
+    -- is fetched again after the user selects this source.
+    if type(result.intro) == "string" and #result.intro > 4096 then
+        result.intro = source_change_truncate_utf8(result.intro, 4096)
+    end
+    return result
+end
+
+local function source_change_merge_info(book, info)
+    if type(info) ~= "table" then return end
+    for _, field in ipairs(BOOK_INFO_FIELDS) do
+        if info[field] ~= nil and trim_text(info[field]) ~= "" then
+            book[field] = info[field]
+        end
+    end
+    if trim_text(info.sourceVariable) ~= "" then
+        book.sourceVariable = info.sourceVariable
+    end
+    if type(info.variable) == "table" then book.variable = info.variable end
+end
+
+local function source_change_order(source, index)
+    local custom = tonumber(source and source.customOrder)
+    return custom or tonumber(index) or 0
+end
+
+local function source_change_is_current(state, source)
+    local source_url = trim_text(source and source.bookSourceUrl)
+    local source_name = trim_text(source and source.bookSourceName)
+    if state.current_url ~= "" and source_url ~= "" then
+        return source_url == state.current_url
+    end
+    return state.current_name ~= "" and source_name ~= ""
+        and source_name == state.current_name
+end
+
+local function source_change_visible(state, record)
+    local source = state.sources[record.source_index]
+    if not source or not source_change_in_groups(source, state.selected_groups) then
+        return false
+    end
+    local filter = source_change_normalize(state.source_filter)
+    if filter == "" then return true end
+    local source_name = source_change_normalize(source_display_name(source))
+    local book_name = source_change_normalize(record.book and record.book.name)
+    return source_name:find(filter, 1, true) ~= nil
+        or book_name:find(filter, 1, true) ~= nil
+end
+
+local function source_change_status(state)
+    if state.searching then
+        local progress = state.progress or {}
+        local current = display_text(progress.source_name or _("starting"))
+        local status = T(
+            _("Searching sources: %1/%2 · %3"),
+            tonumber(progress.done) or 0,
+            tonumber(progress.total) or state.source_count or 0,
+            current
+        )
+        if state.restart_after_search then
+            status = status .. " · " .. _("options pending")
+        end
+        return status
+    end
+    if state.search_error then
+        return _("Source search failed; tap Refresh to try again.")
+    end
+    return T(
+        _("%1 matches from %2 sources"),
+        #state.results,
+        tonumber(state.source_count) or 0
+    )
+end
+
 function Legado:showBookSourcePicker(book, book_index, parent_widget)
     local catalog = SourceCatalog:new(self.storage:get_state_root())
     local sources, err = catalog:list()
@@ -2857,77 +3197,250 @@ function Legado:showBookSourcePicker(book, book_index, parent_widget)
         self:showOperationResult(_("Cannot load sources:\n") .. tostring(err))
         return
     end
-    local current_url = trim_text(book and (book.origin
-        or book.bookSourceUrl or book.sourceUrl))
-    local current_name = trim_text(book and (book.originName
-        or book.sourceName))
-    local items = {}
-    for source_index, source in ipairs(sources) do
-        if source.enabled ~= false
+    local searchable = 0
+    for _, source in ipairs(sources) do
+        if type(source) == "table" and source.enabled ~= false
                 and tonumber(source.bookSourceType or 0) == 0
                 and type(source.searchUrl) == "string"
                 and trim_text(source.searchUrl) ~= "" then
-            local source_url = trim_text(source.bookSourceUrl)
-            local source_name = trim_text(source.bookSourceName)
-            local is_current = (current_url ~= "" and source_url == current_url)
-                or (current_url == "" and current_name ~= ""
-                    and source_name == current_name)
-            local labels = {}
-            if is_current then labels[#labels + 1] = _("Current") end
-            if source_has_login(source) then
-                labels[#labels + 1] = _("Login / actions")
-            end
-            local group = trim_text(source.bookSourceGroup)
-            if group ~= "" then labels[#labels + 1] = display_text(group) end
-            items[#items + 1] = {
-                text = display_text(source.bookSourceName or _("Unnamed source")),
-                mandatory = #labels > 0 and table.concat(labels, " · ") or nil,
-                source = source,
-                source_index = source_index,
-            }
+            searchable = searchable + 1
         end
     end
-    if #items == 0 then
+    if searchable == 0 then
         self:showOperationResult(_("No enabled text source with a search URL."))
         return
     end
+
+    local state = {
+        book = book,
+        book_index = book_index,
+        parent_widget = parent_widget,
+        sources = sources,
+        current_url = trim_text(book and (book.origin
+            or book.bookSourceUrl or book.sourceUrl)),
+        current_name = trim_text(book and (book.originName or book.sourceName)),
+        selected_groups = source_change_load_groups(self.storage),
+        source_filter = "",
+        options = source_change_options(self.storage),
+        results = {},
+        errors = {},
+        progress = { done = 0, total = searchable, source_name = "" },
+        source_count = searchable,
+        searching = false,
+        done = false,
+        auto_scroll_current = true,
+    }
+    self._book_source_change_state = state
+    self:showBookSourceChangeMenu(state)
+    self:startBookSourceSearch(state)
+end
+
+function Legado:showBookSourceChangeMenu(state)
+    local items = {
+        {
+            text = state.searching and _("Searching all sources…")
+                or _("Refresh source results"),
+            mandatory = source_change_status(state),
+            action = "refresh",
+            separator = true,
+        },
+        {
+            text = state.source_filter == "" and _("Filter source results")
+                or T(_("Filter: %1"), display_text(state.source_filter)),
+            mandatory = _("Source name or title filter"),
+            action = "filter",
+        },
+        {
+            text = _("Source groups"),
+            mandatory = source_change_group_summary(state.selected_groups),
+            action = "groups",
+        },
+        {
+            text = _("Change-source options"),
+            mandatory = source_change_options_summary(state.options),
+            action = "options",
+        },
+    }
+
+    local visible_count = 0
+    local current_item
+    local visible_results = {}
+    for record_index, record in ipairs(state.results or {}) do
+        if source_change_visible(state, record) then
+            visible_results[#visible_results + 1] = record
+        end
+    end
+    table.sort(visible_results, function(left, right)
+        if (left.match_score or 0) ~= (right.match_score or 0) then
+            return (left.match_score or 0) > (right.match_score or 0)
+        end
+        local left_source = state.sources[left.source_index] or {}
+        local right_source = state.sources[right.source_index] or {}
+        local left_order = source_change_order(left_source, left.source_index)
+        local right_order = source_change_order(right_source, right.source_index)
+        if left_order ~= right_order then return left_order < right_order end
+        if left.source_index ~= right.source_index then
+            return left.source_index < right.source_index
+        end
+        return source_display_name(left_source):lower()
+            < source_display_name(right_source):lower()
+    end)
+
+    for result_index, record in ipairs(visible_results) do
+        local source = state.sources[record.source_index]
+        local candidate = record.book or {}
+        local source_name = display_text(source_display_name(source))
+        local candidate_name = display_text(candidate.name or state.book.name)
+        local labels = {}
+        if source_change_is_current(state, source) then
+            labels[#labels + 1] = _("Current")
+        end
+        if source_has_login(source) then
+            labels[#labels + 1] = _("Login / actions")
+        end
+        local groups = source_change_group_tokens(source)
+        local group_labels = {}
+        for group_index, group in ipairs(groups) do
+            group_labels[#group_labels + 1] = source_change_group_label(group)
+        end
+        if #group_labels > 0 then
+            labels[#labels + 1] = table.concat(group_labels, "/")
+        end
+        local author = trim_text(candidate.author)
+        if author ~= "" then labels[#labels + 1] = display_text(author) end
+        if tonumber(candidate.chapter_count) then
+            labels[#labels + 1] = T(_("%1 chapters"), candidate.chapter_count)
+        elseif candidate.toc_probe_skipped then
+            labels[#labels + 1] = _("TOC count skipped for memory safety")
+        end
+        if candidate.enrichment_error then
+            labels[#labels + 1] = _("Info unavailable")
+        end
+        local item = {
+            text = source_name
+                .. (candidate_name ~= display_text(state.book.name)
+                    and ("\n" .. candidate_name) or ""),
+            mandatory = #labels > 0 and table.concat(labels, " · ") or nil,
+            source = source,
+            source_index = record.source_index,
+            book = candidate,
+            record = record,
+        }
+        items[#items + 1] = item
+        visible_count = visible_count + 1
+        if not current_item and source_change_is_current(state, source) then
+            current_item = #items
+        end
+    end
+
+    if state.done and visible_count == 0 then
+        if tonumber(state.source_count) == 0 then
+            items[#items + 1] = {
+                text = _("No enabled source in selected groups"),
+                mandatory = _("Choose All groups or select another group."),
+                dim = true,
+                action = "empty",
+            }
+        else
+            items[#items + 1] = {
+                text = _("No matching source results"),
+                mandatory = state.source_filter ~= ""
+                    and _("Clear the filter or choose another group.")
+                    or _("Try Refresh or change the author check."),
+                dim = true,
+                action = "empty",
+            }
+        end
+    end
+    if #state.errors > 0 then
+        table.insert(items, 5, {
+            text = T(_("Source errors (%1)"), #state.errors),
+            mandatory = _("Tap to inspect; other sources continue."),
+            action = "errors",
+        })
+        if current_item then current_item = current_item + 1 end
+    end
+    if current_item then items.current = current_item end
+
+    if state.menu then
+        state.menu.item_table = items
+        if current_item and state.auto_scroll_current then
+            state.menu.page = state.menu:getPageNumber(current_item)
+            state.auto_scroll_current = false
+        else
+            local page_count = math.max(1, state.menu:getPageNumber(#items))
+            state.menu.page = math.min(state.menu.page or 1, page_count)
+        end
+        state.menu:updateItems(nil, true)
+        return state.menu
+    end
+
     local source_menu
     source_menu = LegadoMenu:new{
-        title = T(_("Change source for %1"), display_text(book.name)),
+        title = T(_("Change source for %1"), display_text(state.book.name)),
         item_table = items,
         items_per_page = 12,
         onMenuSelect = function(menu, item)
-            -- Keep the source list below the search dialog/result/confirmation
-            -- so Cancel and Back return here instead of reopening the book
-            -- detail page from the beginning.
-            self:showBookSourceSearchDialog(
-                item.source, book, book_index, parent_widget, menu
+            if item.action == "refresh" then
+                if not state.searching then self:startBookSourceSearch(state) end
+                return
+            end
+            if item.action == "filter" then
+                self:showBookSourceFilterDialog(state)
+                return
+            end
+            if item.action == "groups" then
+                self:showBookSourceGroups(state)
+                return
+            end
+            if item.action == "options" then
+                self:showBookSourceOptions(state)
+                return
+            end
+            if item.action == "errors" then
+                self:showBookSourceErrors(state)
+                return
+            end
+            if not item.record or not item.source or not item.book then return end
+            if not state.done then
+                self:showOperationResult(_("Wait until source search finishes."))
+                return
+            end
+            if source_change_is_current(state, item.source) then
+                self:showOperationResult(_("This is already the current source."))
+                return
+            end
+            self:replaceBookSource(
+                state.book, state.book_index, item.source, item.book,
+                state.parent_widget, menu
             )
         end,
         onMenuHold = function(menu, item)
-            -- A source may require login before its search endpoint returns a
-            -- usable result (especially an aggregate source). Keep this list
-            -- alive while the generic Legado login/action flow runs above it.
-            if item and source_has_login(item.source) then
-                self:showSourceLogin(item.source)
+            if item and item.record and item.source then
+                if not state.done then
+                    self:showOperationResult(_("Wait until source search finishes."))
+                    return true
+                end
+                -- The Android adapter exposes source management from a result
+                -- row. Reuse the same generic source-actions implementation so
+                -- login, edit, enable/disable and delete stay source-agnostic.
+                self:showSourceActions(item.source, item.source_index, menu)
             end
             return true
         end,
     }
+    state.menu = source_menu
     UIManager:show(source_menu)
+    return source_menu
 end
 
-function Legado:showBookSourceSearchDialog(
-        source, book, book_index, parent_widget, source_picker)
+function Legado:showBookSourceFilterDialog(state)
     local dialog
     dialog = InputDialog:new{
-        title = T(_("Search in %1"), display_text(source.bookSourceName or _("source"))),
-        description = T(
-            _("Search for %1 on this source. You can edit the keyword."),
-            display_text(book.name)
-        ),
-        input = display_text(book.name),
-        input_hint = _("Search keyword"),
+        title = _("Filter source results"),
+        description = _("Filter the Android-style result list by source name or book title."),
+        input = state.source_filter,
+        input_hint = _("Source name"),
         buttons = {
             {
                 {
@@ -2936,19 +3449,12 @@ function Legado:showBookSourceSearchDialog(
                     callback = function() UIManager:close(dialog) end,
                 },
                 {
-                    text = _("Search"),
+                    text = _("Apply"),
                     is_enter_default = true,
                     callback = function()
-                        local keyword = trim_text(dialog:getInputValue())
-                        if keyword == "" then
-                            self:showOperationResult(_("Search keyword cannot be empty."))
-                            return
-                        end
+                        state.source_filter = trim_text(dialog:getInputValue())
                         UIManager:close(dialog)
-                        self:searchBookOnSource(
-                            source, book, book_index, parent_widget, keyword,
-                            source_picker
-                        )
+                        self:showBookSourceChangeMenu(state)
                     end,
                 },
             },
@@ -2958,69 +3464,401 @@ function Legado:showBookSourceSearchDialog(
     dialog:onShowKeyboard()
 end
 
-function Legado:searchBookOnSource(
-        source, book, book_index, parent_widget, keyword, source_picker)
-    keyword = trim_text(keyword or book.name)
-    self:runWorker(
-        T(_("Searching %1…"), display_text(source.bookSourceName or _("source"))),
-        function()
-            local Runtime = require("legado/runtime")
-            local books, err = Runtime.search_source(source, keyword, 1)
-            if not books then return nil, err or _("Search failed.") end
-            return books
-        end,
-        function(books)
-            if type(books) ~= "table" or #books == 0 then
-                self:showOperationResult(
-                    T(_("No matching book on %1."), display_text(source.bookSourceName or _("source"))),
-                    function()
-                        self:showBookSourceSearchDialog(
-                            source, book, book_index, parent_widget, source_picker
-                        )
-                    end
-                )
-                return
-            end
-            self:showSearchResults(source, books, function(candidate)
-                self:confirmBookSourceChange(
-                    book, book_index, source, candidate, parent_widget,
-                    source_picker
-                )
-            end)
-        end,
-        {
-            on_failure = function(error_message)
-                self:showOperationResult(
-                    _("Cannot search this source:\n") .. tostring(error_message),
-                    function()
-                        self:showBookSourceSearchDialog(
-                            source, book, book_index, parent_widget, source_picker
-                        )
-                    end
-                )
-            end,
+function Legado:showBookSourceGroups(state)
+    local groups = source_change_groups(state.sources)
+    local working = source_change_group_set(state.selected_groups)
+    local group_menu
+    local function render()
+        local items = {
+            {
+                text = _("Apply source-group filter"),
+                mandatory = source_change_group_summary(working),
+                action = "apply",
+                separator = true,
+            },
+            {
+                text = _("All groups"),
+                mandatory = next(working) == nil and _("Selected") or nil,
+                group_value = "__all__",
+            },
         }
-    )
+        for group_index, group in ipairs(groups) do
+            items[#items + 1] = {
+                text = source_change_group_label(group),
+                mandatory = working[group] and _("Selected") or _("Not selected"),
+                group_value = group,
+            }
+        end
+        if group_menu then
+            group_menu.item_table = items
+            group_menu:updateItems(nil, true)
+        else
+            group_menu = LegadoMenu:new{
+                title = _("Source groups"),
+                item_table = items,
+                items_per_page = 12,
+                onMenuSelect = function(menu, item)
+                    if item.action == "apply" then
+                        local previous = table.concat(
+                            source_change_group_array(state.selected_groups), "\0"
+                        )
+                        state.selected_groups = source_change_group_set(working)
+                        local next_groups = table.concat(
+                            source_change_group_array(state.selected_groups), "\0"
+                        )
+                        source_change_save_groups(self.storage, state.selected_groups)
+                        UIManager:close(menu)
+                        self:showBookSourceChangeMenu(state)
+                        if previous ~= next_groups then
+                            if state.searching then
+                                state.restart_after_search = true
+                            else
+                                self:startBookSourceSearch(state)
+                            end
+                        end
+                        return
+                    end
+                    if item.group_value == "__all__" then
+                        working = {}
+                    elseif item.group_value then
+                        if next(working) == nil then
+                            working[item.group_value] = true
+                        elseif working[item.group_value] then
+                            working[item.group_value] = nil
+                        else
+                            working[item.group_value] = true
+                        end
+                    end
+                    render()
+                end,
+            }
+            UIManager:show(group_menu)
+        end
+    end
+    render()
 end
 
-function Legado:confirmBookSourceChange(
-        book, book_index, source, candidate, parent_widget, source_picker)
-    local source_name = display_text(source and source.bookSourceName or _("source"))
-    local candidate_name = display_text(candidate and candidate.name or book.name)
-    UIManager:show(ConfirmBox:new{
-        text = T(
-            _("Change source to %1?\n\nCurrent source: %2\nBook: %3"),
-            source_name,
-            display_text(book.originName or book.sourceName or _("Unknown")),
-            candidate_name
-        ),
-        ok_text = _("Change source"),
-        ok_callback = function()
-            self:replaceBookSource(
-                book, book_index, source, candidate, parent_widget, source_picker
+function Legado:showBookSourceOptions(state)
+    local working = {
+        check_author = state.options.check_author == true,
+        load_info = state.options.load_info == true,
+        load_toc = state.options.load_toc == true,
+    }
+    local options_menu
+    local function render()
+        local function option_item(text, key, mandatory)
+            local status = working[key] and _("Enabled") or _("Disabled")
+            if mandatory then status = status .. " · " .. mandatory end
+            return {
+                text = text,
+                mandatory = status,
+                option_key = key,
+            }
+        end
+        local items = {
+            {
+                text = _("Apply change-source options"),
+                mandatory = source_change_options_summary(working),
+                action = "apply",
+                separator = true,
+            },
+            option_item(_("Check author"), "check_author"),
+            option_item(_("Load book information"), "load_info"),
+            option_item(
+                _("Probe TOC chapter count"),
+                "load_toc",
+                _("slow; count only, no TOC kept")
+            ),
+        }
+        if options_menu then
+            options_menu.item_table = items
+            options_menu:updateItems(nil, true)
+        else
+            options_menu = LegadoMenu:new{
+                title = _("Change-source options"),
+                item_table = items,
+                items_per_page = 12,
+                onMenuSelect = function(menu, item)
+                    if item.action == "apply" then
+                        local changed = working.check_author ~= state.options.check_author
+                            or working.load_info ~= state.options.load_info
+                            or working.load_toc ~= state.options.load_toc
+                        state.options = working
+                        source_change_save_options(self.storage, state.options)
+                        UIManager:close(menu)
+                        self:showBookSourceChangeMenu(state)
+                        if changed then
+                            if state.searching then
+                                state.restart_after_search = true
+                            else
+                                self:startBookSourceSearch(state)
+                            end
+                        end
+                        return
+                    end
+                    if item.option_key then
+                        working[item.option_key] = not working[item.option_key]
+                        render()
+                    end
+                end,
+            }
+            UIManager:show(options_menu)
+        end
+    end
+    render()
+end
+
+function Legado:showBookSourceErrors(state)
+    local lines = { T(_("%1 source requests failed."), #state.errors) }
+    for index, error in ipairs(state.errors) do
+        if index > 12 then
+            lines[#lines + 1] = T(_("… and %1 more"), #state.errors - 12)
+            break
+        end
+        lines[#lines + 1] = display_text(error.source_name)
+            .. ": " .. display_text(error.message)
+    end
+    UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
+end
+
+function Legado:pollBookSourceChangeProgress(state, generation)
+    if not state.searching or state.generation ~= generation then return end
+    local raw = util.readFromFile(state.progress_path)
+    if raw and raw ~= "" then
+        local ok, progress = pcall(rapidjson.decode, raw)
+        if ok and type(progress) == "table"
+                and tostring(progress.generation) == tostring(generation) then
+            state.progress = progress
+            if type(progress.records) == "table" then
+                state.results = progress.records
+            end
+            if type(progress.errors) == "table" then
+                state.errors = progress.errors
+            end
+            self:showBookSourceChangeMenu(state)
+        end
+    end
+    UIManager:scheduleIn(0.5, function()
+        self:pollBookSourceChangeProgress(state, generation)
+    end)
+end
+
+function Legado:startBookSourceSearch(state)
+    if state.searching then return end
+    local search_sources = {}
+    local selected_groups = source_change_group_set(state.selected_groups)
+    for source_index, source in ipairs(state.sources or {}) do
+        if type(source) == "table" and source.enabled ~= false
+                and tonumber(source.bookSourceType or 0) == 0
+                and type(source.searchUrl) == "string"
+                and trim_text(source.searchUrl) ~= ""
+                and source_change_in_groups(source, selected_groups) then
+            search_sources[#search_sources + 1] = {
+                source = source,
+                source_index = source_index,
+            }
+        end
+    end
+    if #search_sources == 0 then
+        state.searching = false
+        state.done = true
+        state.search_error = nil
+        state.results = {}
+        state.errors = {}
+        state.progress = { done = 0, total = 0, source_name = "" }
+        state.source_count = 0
+        self:showBookSourceChangeMenu(state)
+        return
+    end
+
+    state.searching = true
+    state.done = false
+    state.search_error = nil
+    state.results = {}
+    state.errors = {}
+    state.progress = { done = 0, total = #search_sources, source_name = "" }
+    state.source_count = #search_sources
+    state.auto_scroll_current = true
+    state.generation = (state.generation or 0) + 1
+    local generation = state.generation
+    state.progress_path = self.storage:get_root()
+        .. "/source-change-progress-" .. tostring(generation) .. ".json"
+    os.remove(state.progress_path)
+    self:showBookSourceChangeMenu(state)
+
+    local keyword = trim_text(state.book and state.book.name)
+    local target_book = state.book
+    local options = {
+        check_author = state.options.check_author == true,
+        load_info = state.options.load_info == true,
+        load_toc = state.options.load_toc == true,
+    }
+    local progress_path = state.progress_path
+    self:runWorker(_("Searching all sources…"), function()
+        local Runtime = require("legado/runtime")
+        local worker_util = require("util")
+        local worker_json = require("rapidjson")
+        local output = {
+            records = {},
+            errors = {},
+            source_count = #search_sources,
+            no_match_count = 0,
+            toc_probe_count = 0,
+            toc_probe_skipped = 0,
+        }
+        local function write_progress(done, source_name)
+            pcall(function()
+                local encoded = worker_json.encode({
+                    generation = generation,
+                    done = done,
+                    total = #search_sources,
+                    source_name = source_name or "",
+                    found = #output.records,
+                    records = output.records,
+                    errors = output.errors,
+                    no_match_count = output.no_match_count,
+                })
+                worker_util.writeToFile(encoded, progress_path)
+            end)
+        end
+        local function add_record(source_entry, candidate, match_score)
+            if #output.records >= SOURCE_CHANGE_MAX_RESULTS then return false end
+            output.records[#output.records + 1] = {
+                source_index = source_entry.source_index,
+                book = candidate,
+                match_score = match_score,
+            }
+            return true
+        end
+        write_progress(0, "")
+        for position, source_entry in ipairs(search_sources) do
+            local source = source_entry.source
+            local source_name = source_display_name(source)
+            write_progress(position - 1, source_name)
+            local ok, books, search_error = pcall(
+                Runtime.search_source, source, keyword, 1, { timeout = 60000 }
             )
+            if not ok then
+                search_error = books
+                books = nil
+            end
+            if type(books) ~= "table" then
+                output.errors[#output.errors + 1] = {
+                    source_name = source_name,
+                    message = tostring(search_error or _("Search failed.")),
+                }
+            else
+                local matches = {}
+                local seen = {}
+                for _, candidate in ipairs(books) do
+                    local score = source_change_match(
+                        candidate, target_book, options.check_author
+                    )
+                    local url = trim_text(candidate and candidate.bookUrl)
+                    if score and url ~= "" and not seen[url] then
+                        seen[url] = true
+                        matches[#matches + 1] = {
+                            book = source_change_copy_candidate(candidate),
+                            score = score,
+                        }
+                    end
+                end
+                table.sort(matches, function(left, right)
+                    return left.score > right.score
+                end)
+                if #matches == 0 then
+                    output.no_match_count = output.no_match_count + 1
+                else
+                    local limit = math.min(
+                        #matches, SOURCE_CHANGE_MAX_CANDIDATES_PER_SOURCE
+                    )
+                    for match_index = 1, limit do
+                        local candidate = matches[match_index].book
+                        if options.load_toc
+                                and output.toc_probe_count < SOURCE_CHANGE_TOC_PROBE_LIMIT then
+                            local toc_result, toc_error = Runtime.chapter_list(
+                                source, candidate, { use_cached_info = true }
+                            )
+                            output.toc_probe_count = output.toc_probe_count + 1
+                            if type(toc_result) == "table" then
+                                source_change_merge_info(candidate, toc_result.info)
+                                if type(toc_result.chapters) == "table" then
+                                    candidate.chapter_count = #toc_result.chapters
+                                    candidate.totalChapterNum = #toc_result.chapters
+                                end
+                            elseif toc_error then
+                                candidate.enrichment_error = tostring(toc_error)
+                            end
+                            toc_result = nil
+                            collectgarbage("collect")
+                        elseif options.load_toc then
+                            candidate.toc_probe_skipped = true
+                            output.toc_probe_skipped = output.toc_probe_skipped + 1
+                        elseif options.load_info then
+                            local info, info_error = Runtime.book_info(source, candidate)
+                            if type(info) == "table" then
+                                source_change_merge_info(candidate, info)
+                            elseif info_error then
+                                candidate.enrichment_error = tostring(info_error)
+                            end
+                        end
+                        if type(candidate.intro) == "string" and #candidate.intro > 4096 then
+                            candidate.intro = source_change_truncate_utf8(
+                                candidate.intro, 4096
+                            )
+                        end
+                        if not add_record(
+                                source_entry, candidate, matches[match_index].score) then
+                            break
+                        end
+                    end
+                end
+            end
+            books = nil
+            collectgarbage("collect")
+            write_progress(position, source_name)
+        end
+        write_progress(#search_sources, _("completed"))
+        return output
+    end, function(result)
+        if state.generation ~= generation then return end
+        state.searching = false
+        state.done = true
+        state.results = type(result) == "table" and result.records or {}
+        state.errors = type(result) == "table" and result.errors or {}
+        state.source_count = type(result) == "table" and result.source_count
+            or #search_sources
+        state.progress = {
+            done = state.source_count,
+            total = state.source_count,
+            source_name = _("completed"),
+        }
+        os.remove(progress_path)
+        self:showBookSourceChangeMenu(state)
+        if state.restart_after_search then
+            state.restart_after_search = false
+            self:startBookSourceSearch(state)
+        end
+    end, {
+        invisible = true,
+        on_failure = function(error_message)
+            if state.generation ~= generation then return end
+            state.searching = false
+            state.done = true
+            state.search_error = tostring(error_message)
+            os.remove(progress_path)
+            self:showBookSourceChangeMenu(state)
+        end,
+        on_cancel = function()
+            if state.generation ~= generation then return end
+            state.searching = false
+            state.done = true
+            state.search_error = _("Source search was cancelled.")
+            os.remove(progress_path)
+            self:showBookSourceChangeMenu(state)
         end,
     })
+    self:pollBookSourceChangeProgress(state, generation)
 end
 
 function Legado:replaceBookSource(
@@ -3043,16 +3881,20 @@ function Legado:replaceBookSource(
             return nil, _("Book is no longer in the bookshelf.")
         end
 
-        -- Fetch the new TOC before saving the final shelf record. This is used
-        -- only to map progress and refresh the chapter count; a temporary TOC
-        -- failure must not discard a successfully selected source.
+        -- Fetch the new TOC before saving the final shelf record. Android's
+        -- change-source callback receives the candidate and its TOC together;
+        -- requiring the same proof here prevents a source with a broken TOC
+        -- from replacing a readable shelf entry.
         local toc_result, toc_error = Runtime.chapter_list(source, updated, {
             use_cached_info = true,
         })
-        if type(toc_result) == "table" then
-            updated = merge_book_info(updated, toc_result.info, source)
-            apply_replacement_progress(updated, toc_result.chapters, old_progress)
+        if type(toc_result) ~= "table"
+                or type(toc_result.chapters) ~= "table"
+                or #toc_result.chapters == 0 then
+            return nil, toc_error or _("Chapter list is empty.")
         end
+        updated = merge_book_info(updated, toc_result.info, source)
+        apply_replacement_progress(updated, toc_result.chapters, old_progress)
 
         local saved, save_err = catalog:update_book(source_index, updated)
         if not saved then return nil, save_err end
@@ -3075,38 +3917,32 @@ function Legado:replaceBookSource(
 
         local mapped_progress
         local reader_session_saved = false
-        if type(toc_result) == "table" then
-            mapped_progress = match_replacement_chapter(
-                toc_result.chapters, old_progress
+        mapped_progress = match_replacement_chapter(
+            toc_result.chapters, old_progress
+        )
+        if mapped_progress then
+            storage:save_last_chapter(updated, {
+                index = mapped_progress.index,
+                name = mapped_progress.name,
+                position = old_progress and old_progress.position,
+            })
+        end
+        if #toc_result.chapters > 0 then
+            reader_session_saved = storage:save_reader_session(
+                updated,
+                source,
+                toc_result.chapters,
+                mapped_progress and mapped_progress.index or 1,
+                true
             )
-            if mapped_progress then
-                storage:save_last_chapter(updated, {
-                    index = mapped_progress.index,
-                    name = mapped_progress.name,
-                    position = old_progress and old_progress.position,
-                })
-            end
-            if type(toc_result.chapters) == "table"
-                    and #toc_result.chapters > 0 then
-                reader_session_saved = storage:save_reader_session(
-                    updated,
-                    source,
-                    toc_result.chapters,
-                    mapped_progress and mapped_progress.index or 1,
-                    true
-                )
-            end
         end
         return {
             book = updated,
             source_index = source_index,
-            chapter_count = type(toc_result) == "table"
-                    and type(toc_result.chapters) == "table"
-                and #toc_result.chapters or 0,
+            chapter_count = #toc_result.chapters,
             progress = mapped_progress,
             cache_removed = cache_removed,
             reader_session_saved = reader_session_saved,
-            chapter_error = toc_result and nil or toc_error,
         }
     end, function(result)
         if source_picker then

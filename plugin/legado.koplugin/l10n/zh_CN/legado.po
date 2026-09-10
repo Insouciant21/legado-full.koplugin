@@ -3,7 +3,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: legado 0.1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-11 01:05+0800\n"
+"POT-Creation-Date: 2026-09-11 02:50+0800\n"
 "PO-Revision-Date: 2026-09-11 00:00+0800\n"
 "Last-Translator: Legado contributors\n"
 "Language-Team: Chinese\n"
@@ -13,7 +13,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: plugin/legado.koplugin/_meta.lua:59 plugin/legado.koplugin/main.lua:114
+#: plugin/legado.koplugin/_meta.lua:59 plugin/legado.koplugin/main.lua:115
 msgid "Legado"
 msgstr "Legado"
 
@@ -21,246 +21,320 @@ msgstr "Legado"
 msgid "Read Legado text novels in KOReader"
 msgstr "在 KOReader 中阅读 Legado 文本小说"
 
-#: plugin/legado.koplugin/main.lua:206
+#: plugin/legado.koplugin/legado/book_detail.lua:84
+msgid "%1: %2"
+msgstr "%1：%2"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:93
+msgid "No cover"
+msgstr "无封面"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:119
+#: plugin/legado.koplugin/main.lua:4114
+msgid "Book details"
+msgstr "书籍详情"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:164
+#: plugin/legado.koplugin/main.lua:2388 plugin/legado.koplugin/main.lua:4060
+msgid "Unnamed book"
+msgstr "未命名书籍"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:173
+msgid "Unknown author"
+msgstr "未知作者"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:181
+msgid "Source"
+msgstr "书源"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:182
+msgid "Kind"
+msgstr "分类"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:183
+msgid "Last chapter"
+msgstr "最新章节"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:184
+msgid "Updated"
+msgstr "更新时间"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:185
+msgid "Word count"
+msgstr "字数"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:186
+msgid "Progress"
+msgstr "进度"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:210
+msgid "No introduction available."
+msgstr "暂无简介。"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:240
+msgid "Introduction"
+msgstr "简介"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:254
+msgid "Continue reading"
+msgstr "继续阅读"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:259
+msgid "Chapter list"
+msgstr "目录"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:266
+msgid "Change source"
+msgstr "换源"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:271
+msgid "Refresh book information"
+msgstr "刷新书籍信息"
+
+#: plugin/legado.koplugin/legado/book_detail.lua:278
+msgid "Close"
+msgstr "关闭"
+
+#: plugin/legado.koplugin/main.lua:216
 msgid "Legado: show status"
 msgstr "Legado：显示状态"
 
-#: plugin/legado.koplugin/main.lua:212
+#: plugin/legado.koplugin/main.lua:222
 msgid "Legado: open bookshelf"
 msgstr "Legado：打开书架"
 
-#: plugin/legado.koplugin/main.lua:218
+#: plugin/legado.koplugin/main.lua:228
 msgid "Legado: open chapter list"
 msgstr "Legado：打开目录"
 
-#: plugin/legado.koplugin/main.lua:224
+#: plugin/legado.koplugin/main.lua:234
 msgid "Legado: next chapter"
 msgstr "Legado：下一章"
 
-#: plugin/legado.koplugin/main.lua:230
+#: plugin/legado.koplugin/main.lua:240
 msgid "Legado: previous chapter"
 msgstr "Legado：上一章"
 
-#: plugin/legado.koplugin/main.lua:250 plugin/legado.koplugin/main.lua:2552
+#: plugin/legado.koplugin/main.lua:260 plugin/legado.koplugin/main.lua:2603
 msgid "Legado bookshelf"
 msgstr "Legado 书架"
 
-#: plugin/legado.koplugin/main.lua:258
+#: plugin/legado.koplugin/main.lua:268
 msgid "Legado chapter list"
 msgstr "Legado 目录"
 
-#: plugin/legado.koplugin/main.lua:265
+#: plugin/legado.koplugin/main.lua:275
 msgid "Legado next chapter"
 msgstr "Legado 下一章"
 
-#: plugin/legado.koplugin/main.lua:272
+#: plugin/legado.koplugin/main.lua:282
 msgid "Legado previous chapter"
 msgstr "Legado 上一章"
 
-#: plugin/legado.koplugin/main.lua:291
+#: plugin/legado.koplugin/main.lua:301
 msgid "Open bookshelf"
 msgstr "打开书架"
 
-#: plugin/legado.koplugin/main.lua:297
+#: plugin/legado.koplugin/main.lua:307
 msgid "Source settings"
 msgstr "书源设置"
 
-#: plugin/legado.koplugin/main.lua:301
+#: plugin/legado.koplugin/main.lua:311
 msgid "Backup & restore"
 msgstr "备份与恢复"
 
-#: plugin/legado.koplugin/main.lua:305
+#: plugin/legado.koplugin/main.lua:315
 msgid "Diagnostics"
 msgstr "诊断"
 
-#: plugin/legado.koplugin/main.lua:312 plugin/legado.koplugin/main.lua:2479
+#: plugin/legado.koplugin/main.lua:322 plugin/legado.koplugin/main.lua:2530
 msgid "Reading"
 msgstr "在读"
 
-#: plugin/legado.koplugin/main.lua:322
+#: plugin/legado.koplugin/main.lua:332
 msgid "Open current chapter list"
 msgstr "打开当前目录"
 
-#: plugin/legado.koplugin/main.lua:328
+#: plugin/legado.koplugin/main.lua:338
 msgid "Next chapter"
 msgstr "下一章"
 
-#: plugin/legado.koplugin/main.lua:334
+#: plugin/legado.koplugin/main.lua:344
 msgid "Previous chapter"
 msgstr "上一章"
 
-#: plugin/legado.koplugin/main.lua:340 plugin/legado.koplugin/main.lua:1024
+#: plugin/legado.koplugin/main.lua:350 plugin/legado.koplugin/main.lua:1034
 msgid "Prefetch next %1 chapters"
 msgstr "预载后续 %1 章"
 
-#: plugin/legado.koplugin/main.lua:351 plugin/legado.koplugin/main.lua:1515
+#: plugin/legado.koplugin/main.lua:361 plugin/legado.koplugin/main.lua:1531
 msgid "Source list"
 msgstr "书源列表"
 
-#: plugin/legado.koplugin/main.lua:357 plugin/legado.koplugin/main.lua:1438
+#: plugin/legado.koplugin/main.lua:367 plugin/legado.koplugin/main.lua:1454
 msgid "Add source"
 msgstr "添加书源"
 
-#: plugin/legado.koplugin/main.lua:361
+#: plugin/legado.koplugin/main.lua:371
 msgid "Search text sources"
 msgstr "搜索文本书源"
 
-#: plugin/legado.koplugin/main.lua:372
+#: plugin/legado.koplugin/main.lua:382
 msgid "Enter source JSON"
 msgstr "输入书源 JSON"
 
-#: plugin/legado.koplugin/main.lua:378
+#: plugin/legado.koplugin/main.lua:388
 msgid "Import source JSON file"
 msgstr "导入书源 JSON 文件"
 
-#: plugin/legado.koplugin/main.lua:389
+#: plugin/legado.koplugin/main.lua:399
 msgid "Import sources, bookshelf and reading history"
 msgstr "导入书源、书架和阅读记录"
 
-#: plugin/legado.koplugin/main.lua:400
+#: plugin/legado.koplugin/main.lua:410
 msgid "Show local status"
 msgstr "查看本地状态"
 
-#: plugin/legado.koplugin/main.lua:406
+#: plugin/legado.koplugin/main.lua:416
 msgid "Source compatibility status"
 msgstr "书源兼容性状态"
 
-#: plugin/legado.koplugin/main.lua:412
+#: plugin/legado.koplugin/main.lua:422
 msgid "Data directory"
 msgstr "数据目录"
 
-#: plugin/legado.koplugin/main.lua:511
+#: plugin/legado.koplugin/main.lua:521
 msgid "Cannot open downloaded file:\n"
 msgstr "无法打开已下载文件：\n"
 
-#: plugin/legado.koplugin/main.lua:589 plugin/legado.koplugin/main.lua:622
-#: plugin/legado.koplugin/main.lua:2414 plugin/legado.koplugin/main.lua:3230
+#: plugin/legado.koplugin/main.lua:599 plugin/legado.koplugin/main.lua:632
+#: plugin/legado.koplugin/main.lua:2465 plugin/legado.koplugin/main.lua:4420
 msgid "Unknown error."
 msgstr "未知错误。"
 
-#: plugin/legado.koplugin/main.lua:604
+#: plugin/legado.koplugin/main.lua:614
 msgid "Worker failed."
 msgstr "后台任务失败。"
 
-#: plugin/legado.koplugin/main.lua:612
+#: plugin/legado.koplugin/main.lua:622
 msgid "Worker returned no data."
 msgstr "后台任务没有返回数据。"
 
-#: plugin/legado.koplugin/main.lua:618
+#: plugin/legado.koplugin/main.lua:628
 msgid "Operation returned invalid data."
 msgstr "操作返回了无效数据。"
 
-#: plugin/legado.koplugin/main.lua:754
+#: plugin/legado.koplugin/main.lua:764
 msgid "Reading session is missing."
 msgstr "阅读会话不存在。"
 
-#: plugin/legado.koplugin/main.lua:784
+#: plugin/legado.koplugin/main.lua:794
 msgid "Book source for reading session not found."
 msgstr "找不到阅读会话对应的书源。"
 
-#: plugin/legado.koplugin/main.lua:948
+#: plugin/legado.koplugin/main.lua:958
 msgid "Prefetch failed."
 msgstr "预载失败。"
 
-#: plugin/legado.koplugin/main.lua:960
+#: plugin/legado.koplugin/main.lua:970
 msgid "Cannot save prefetched chapter."
 msgstr "无法保存预载章节。"
 
-#: plugin/legado.koplugin/main.lua:1007
+#: plugin/legado.koplugin/main.lua:1017
 msgid "Prefetch cancelled."
 msgstr "预载已取消。"
 
-#: plugin/legado.koplugin/main.lua:1025 plugin/legado.koplugin/main.lua:2239
+#: plugin/legado.koplugin/main.lua:1035 plugin/legado.koplugin/main.lua:2290
+#: plugin/legado.koplugin/main.lua:3296
 msgid "Current"
 msgstr "当前"
 
-#: plugin/legado.koplugin/main.lua:1031
+#: plugin/legado.koplugin/main.lua:1041
 msgid "Prefetch chapter count"
 msgstr "预载章节数"
 
-#: plugin/legado.koplugin/main.lua:1038
+#: plugin/legado.koplugin/main.lua:1048
 msgid "Prefetch count set to %1 chapters."
 msgstr "预载章节数已设为 %1 章。"
 
-#: plugin/legado.koplugin/main.lua:1069 plugin/legado.koplugin/main.lua:1233
+#: plugin/legado.koplugin/main.lua:1079 plugin/legado.koplugin/main.lua:1243
 msgid "The current document is not a Legado chapter."
 msgstr "当前文档不是 Legado 章节。"
 
-#: plugin/legado.koplugin/main.lua:1127 plugin/legado.koplugin/main.lua:2916
+#: plugin/legado.koplugin/main.lua:1137 plugin/legado.koplugin/main.lua:4106
 msgid "Cannot match the reading session source:\n"
 msgstr "无法匹配阅读会话中的书源：\n"
 
-#: plugin/legado.koplugin/main.lua:1167 plugin/legado.koplugin/main.lua:1220
+#: plugin/legado.koplugin/main.lua:1177 plugin/legado.koplugin/main.lua:1230
 msgid "Cannot refresh the chapter list:\n"
 msgstr "无法刷新目录：\n"
 
-#: plugin/legado.koplugin/main.lua:1172
+#: plugin/legado.koplugin/main.lua:1182
 msgid "Refreshing chapter list…"
 msgstr "正在刷新目录…"
 
-#: plugin/legado.koplugin/main.lua:1181
+#: plugin/legado.koplugin/main.lua:1191
 msgid "Refreshed chapter list is empty."
 msgstr "刷新后的目录为空。"
 
-#: plugin/legado.koplugin/main.lua:1215
+#: plugin/legado.koplugin/main.lua:1225
 msgid "Chapter list refreshed; you are at the latest chapter."
 msgstr "目录已刷新；当前已是最新章节。"
 
-#: plugin/legado.koplugin/main.lua:1245
+#: plugin/legado.koplugin/main.lua:1255
 msgid "This is the first chapter."
 msgstr "当前已是第一章。"
 
-#: plugin/legado.koplugin/main.lua:1253
+#: plugin/legado.koplugin/main.lua:1263
 msgid "This is the latest chapter."
 msgstr "当前已是最新章节。"
 
-#: plugin/legado.koplugin/main.lua:1266 plugin/legado.koplugin/main.lua:1268
-#: plugin/legado.koplugin/main.lua:1732 plugin/legado.koplugin/main.lua:2440
-#: plugin/legado.koplugin/main.lua:2737
+#: plugin/legado.koplugin/main.lua:1276 plugin/legado.koplugin/main.lua:1278
+#: plugin/legado.koplugin/main.lua:1783 plugin/legado.koplugin/main.lua:2491
 msgid "Unnamed source"
 msgstr "未命名书源"
 
-#: plugin/legado.koplugin/main.lua:1274
+#: plugin/legado.koplugin/main.lua:1284
 msgid "Text"
 msgstr "文本"
 
-#: plugin/legado.koplugin/main.lua:1276
+#: plugin/legado.koplugin/main.lua:1286
 msgid "Type %1"
 msgstr "类型 %1"
 
-#: plugin/legado.koplugin/main.lua:1311
+#: plugin/legado.koplugin/main.lua:1327
 msgid "Source JSON must contain an object."
 msgstr "书源 JSON 必须包含一个对象。"
 
-#: plugin/legado.koplugin/main.lua:1316
+#: plugin/legado.koplugin/main.lua:1332
 msgid "Source is missing bookSourceName."
 msgstr "书源缺少 bookSourceName。"
 
-#: plugin/legado.koplugin/main.lua:1319
+#: plugin/legado.koplugin/main.lua:1335
 msgid "Source is missing bookSourceUrl."
 msgstr "书源缺少 bookSourceUrl。"
 
-#: plugin/legado.koplugin/main.lua:1327
+#: plugin/legado.koplugin/main.lua:1343
 msgid "Source JSON is invalid: "
 msgstr "书源 JSON 无效："
 
-#: plugin/legado.koplugin/main.lua:1341 plugin/legado.koplugin/main.lua:1354
+#: plugin/legado.koplugin/main.lua:1357 plugin/legado.koplugin/main.lua:1370
 msgid "Source %1: "
 msgstr "书源 %1："
 
-#: plugin/legado.koplugin/main.lua:1346
+#: plugin/legado.koplugin/main.lua:1362
 msgid "Source JSON must contain one source object."
 msgstr "书源 JSON 必须包含一个书源对象。"
 
-#: plugin/legado.koplugin/main.lua:1349
+#: plugin/legado.koplugin/main.lua:1365
 msgid "Source JSON contains no sources."
 msgstr "书源 JSON 不包含任何书源。"
 
-#: plugin/legado.koplugin/main.lua:1407
+#: plugin/legado.koplugin/main.lua:1423
 msgid "Saving source list…"
 msgstr "正在保存书源列表…"
 
-#: plugin/legado.koplugin/main.lua:1412
+#: plugin/legado.koplugin/main.lua:1428
 #, lua-format
 msgid ""
 "Source list saved.\n"
@@ -273,393 +347,404 @@ msgstr ""
 "替换：%s\n"
 "总数：%s"
 
-#: plugin/legado.koplugin/main.lua:1422
+#: plugin/legado.koplugin/main.lua:1438
 msgid "Cannot save source list:\n"
 msgstr "无法保存书源列表：\n"
 
-#: plugin/legado.koplugin/main.lua:1439
+#: plugin/legado.koplugin/main.lua:1455
 msgid "Paste one source object or an array of source objects in JSON."
 msgstr "请粘贴一个书源对象或书源对象数组（JSON）。"
 
-#: plugin/legado.koplugin/main.lua:1445 plugin/legado.koplugin/main.lua:1671
-#: plugin/legado.koplugin/main.lua:1790 plugin/legado.koplugin/main.lua:1885
-#: plugin/legado.koplugin/main.lua:2188 plugin/legado.koplugin/main.lua:2822
-#: plugin/legado.koplugin/main.lua:3083
+#: plugin/legado.koplugin/main.lua:1461 plugin/legado.koplugin/main.lua:1722
+#: plugin/legado.koplugin/main.lua:1841 plugin/legado.koplugin/main.lua:1936
+#: plugin/legado.koplugin/main.lua:2239 plugin/legado.koplugin/main.lua:3447
+#: plugin/legado.koplugin/main.lua:4012 plugin/legado.koplugin/main.lua:4273
 msgid "Cancel"
 msgstr "取消"
 
-#: plugin/legado.koplugin/main.lua:1452 plugin/legado.koplugin/main.lua:1678
+#: plugin/legado.koplugin/main.lua:1468 plugin/legado.koplugin/main.lua:1729
 msgid "Save"
 msgstr "保存"
 
-#: plugin/legado.koplugin/main.lua:1469
+#: plugin/legado.koplugin/main.lua:1485
 msgid "Choose a source JSON file"
 msgstr "选择书源 JSON 文件"
 
-#: plugin/legado.koplugin/main.lua:1479
+#: plugin/legado.koplugin/main.lua:1495
 msgid "Cannot open source file:\n"
 msgstr "无法打开书源文件：\n"
 
-#: plugin/legado.koplugin/main.lua:1494
+#: plugin/legado.koplugin/main.lua:1510
 msgid "Cannot load source list:\n"
 msgstr "无法加载书源列表：\n"
 
-#: plugin/legado.koplugin/main.lua:1500
+#: plugin/legado.koplugin/main.lua:1516 plugin/legado.koplugin/main.lua:3550
 msgid "Disabled"
 msgstr "已禁用"
 
-#: plugin/legado.koplugin/main.lua:1500
+#: plugin/legado.koplugin/main.lua:1516 plugin/legado.koplugin/main.lua:3550
 msgid "Enabled"
 msgstr "已启用"
 
-#: plugin/legado.koplugin/main.lua:1510
+#: plugin/legado.koplugin/main.lua:1526
 msgid "The source list is empty. Add a source or import an Android backup."
 msgstr "书源列表为空。请添加书源或导入 Android 备份。"
 
-#: plugin/legado.koplugin/main.lua:1533
+#: plugin/legado.koplugin/main.lua:1549 plugin/legado.koplugin/main.lua:3299
 msgid "Login / actions"
 msgstr "登录 / 操作"
 
-#: plugin/legado.koplugin/main.lua:1542
+#: plugin/legado.koplugin/main.lua:1558
 msgid "Search with this source"
 msgstr "使用此书源搜索"
 
-#: plugin/legado.koplugin/main.lua:1552
+#: plugin/legado.koplugin/main.lua:1568
 msgid "Browse discovery"
 msgstr "浏览发现"
 
-#: plugin/legado.koplugin/main.lua:1560
+#: plugin/legado.koplugin/main.lua:1576
+msgid "Move source to top"
+msgstr "将书源移到顶部"
+
+#: plugin/legado.koplugin/main.lua:1582
+msgid "Move source to bottom"
+msgstr "将书源移到底部"
+
+#: plugin/legado.koplugin/main.lua:1588
 msgid "Edit source"
 msgstr "修改书源"
 
-#: plugin/legado.koplugin/main.lua:1566
+#: plugin/legado.koplugin/main.lua:1594
 msgid "Enable source"
 msgstr "启用书源"
 
-#: plugin/legado.koplugin/main.lua:1566
+#: plugin/legado.koplugin/main.lua:1594
 msgid "Disable source"
 msgstr "禁用书源"
 
-#: plugin/legado.koplugin/main.lua:1570 plugin/legado.koplugin/main.lua:1688
+#: plugin/legado.koplugin/main.lua:1598 plugin/legado.koplugin/main.lua:1739
 msgid "Updating source…"
 msgstr "正在更新书源…"
 
-#: plugin/legado.koplugin/main.lua:1571
+#: plugin/legado.koplugin/main.lua:1599
 msgid "Source enabled."
 msgstr "书源已启用。"
 
-#: plugin/legado.koplugin/main.lua:1571
+#: plugin/legado.koplugin/main.lua:1599
 msgid "Source disabled."
 msgstr "书源已禁用。"
 
-#: plugin/legado.koplugin/main.lua:1576
+#: plugin/legado.koplugin/main.lua:1604
 msgid "Delete source"
 msgstr "删除书源"
 
-#: plugin/legado.koplugin/main.lua:1584
+#: plugin/legado.koplugin/main.lua:1612
 msgid "Source actions: %1"
 msgstr "书源操作：%1"
 
-#: plugin/legado.koplugin/main.lua:1618
+#: plugin/legado.koplugin/main.lua:1646 plugin/legado.koplugin/main.lua:1669
 msgid "Source operation failed:\n"
 msgstr "书源操作失败：\n"
 
-#: plugin/legado.koplugin/main.lua:1629
+#: plugin/legado.koplugin/main.lua:1656
+msgid "Reordering source…"
+msgstr "正在调整书源顺序…"
+
+#: plugin/legado.koplugin/main.lua:1663
+msgid "Source order updated."
+msgstr "书源顺序已更新。"
+
+#: plugin/legado.koplugin/main.lua:1680
 msgid "Delete source %1?"
 msgstr "删除书源 %1？"
 
-#: plugin/legado.koplugin/main.lua:1630
+#: plugin/legado.koplugin/main.lua:1681
 msgid "Delete"
 msgstr "删除"
 
-#: plugin/legado.koplugin/main.lua:1632
+#: plugin/legado.koplugin/main.lua:1683
 msgid "Deleting source…"
 msgstr "正在删除书源…"
 
-#: plugin/legado.koplugin/main.lua:1639
+#: plugin/legado.koplugin/main.lua:1690
 msgid "Source deleted."
 msgstr "书源已删除。"
 
-#: plugin/legado.koplugin/main.lua:1645
+#: plugin/legado.koplugin/main.lua:1696
 msgid "Cannot delete source:\n"
 msgstr "无法删除书源：\n"
 
-#: plugin/legado.koplugin/main.lua:1659
+#: plugin/legado.koplugin/main.lua:1710
 msgid "Cannot encode source JSON:\n"
 msgstr "无法编码书源 JSON：\n"
 
-#: plugin/legado.koplugin/main.lua:1664
+#: plugin/legado.koplugin/main.lua:1715
 msgid "Edit source: %1"
 msgstr "修改书源：%1"
 
-#: plugin/legado.koplugin/main.lua:1665
+#: plugin/legado.koplugin/main.lua:1716
 msgid "Edit the complete source object as JSON."
 msgstr "以 JSON 修改完整书源对象。"
 
-#: plugin/legado.koplugin/main.lua:1684
+#: plugin/legado.koplugin/main.lua:1735
 msgid "Invalid source JSON:\n"
 msgstr "无效的书源 JSON：\n"
 
-#: plugin/legado.koplugin/main.lua:1697
+#: plugin/legado.koplugin/main.lua:1748
 msgid "Source updated."
 msgstr "书源已更新。"
 
-#: plugin/legado.koplugin/main.lua:1703
+#: plugin/legado.koplugin/main.lua:1754
 msgid "Cannot update source:\n"
 msgstr "无法更新书源：\n"
 
-#: plugin/legado.koplugin/main.lua:1723 plugin/legado.koplugin/main.lua:2430
-#: plugin/legado.koplugin/main.lua:2727
+#: plugin/legado.koplugin/main.lua:1774 plugin/legado.koplugin/main.lua:2481
+#: plugin/legado.koplugin/main.lua:3197
 msgid "Cannot load sources:\n"
 msgstr "无法加载书源：\n"
 
-#: plugin/legado.koplugin/main.lua:1739
+#: plugin/legado.koplugin/main.lua:1790
 msgid "No enabled text source with login or source actions."
 msgstr "没有启用的、包含登录或书源操作的文本书源。"
 
-#: plugin/legado.koplugin/main.lua:1744
+#: plugin/legado.koplugin/main.lua:1795
 msgid "Choose a source to log in"
 msgstr "选择要登录的书源"
 
-#: plugin/legado.koplugin/main.lua:1783
+#: plugin/legado.koplugin/main.lua:1834
 msgid "Login data for %1"
 msgstr "%1 的登录数据"
 
-#: plugin/legado.koplugin/main.lua:1783 plugin/legado.koplugin/main.lua:1880
-#: plugin/legado.koplugin/main.lua:1994 plugin/legado.koplugin/main.lua:2817
+#: plugin/legado.koplugin/main.lua:1834 plugin/legado.koplugin/main.lua:1931
+#: plugin/legado.koplugin/main.lua:2045 plugin/legado.koplugin/main.lua:4007
 msgid "text source"
 msgstr "文本书源"
 
-#: plugin/legado.koplugin/main.lua:1784
+#: plugin/legado.koplugin/main.lua:1835
 msgid "Enter the login fields as a JSON object."
 msgstr "请以 JSON 对象输入登录字段。"
 
-#: plugin/legado.koplugin/main.lua:1797
+#: plugin/legado.koplugin/main.lua:1848
 msgid "Continue"
 msgstr "继续"
 
-#: plugin/legado.koplugin/main.lua:1803
+#: plugin/legado.koplugin/main.lua:1854
 msgid "Enter a valid JSON object, for example {\"user\":\"name\"}."
 msgstr "请输入有效的 JSON 对象，例如 {\"user\":\"name\"}。"
 
-#: plugin/legado.koplugin/main.lua:1820
+#: plugin/legado.koplugin/main.lua:1871
 msgid "Cannot load saved login data:\n"
 msgstr "无法加载已保存的登录数据：\n"
 
-#: plugin/legado.koplugin/main.lua:1869
+#: plugin/legado.koplugin/main.lua:1920
 msgid "This source login form contains unsupported controls:"
 msgstr "此书源登录表单包含不支持的控件："
 
-#: plugin/legado.koplugin/main.lua:1880
+#: plugin/legado.koplugin/main.lua:1931
 msgid "Login to %1"
 msgstr "登录 %1"
 
-#: plugin/legado.koplugin/main.lua:1892
+#: plugin/legado.koplugin/main.lua:1943
 msgid "Actions"
 msgstr "操作"
 
-#: plugin/legado.koplugin/main.lua:1943
+#: plugin/legado.koplugin/main.lua:1994
 msgid "Loading login form…"
 msgstr "正在加载登录表单…"
 
-#: plugin/legado.koplugin/main.lua:1946
+#: plugin/legado.koplugin/main.lua:1997
 msgid "Cannot build login form."
 msgstr "无法构建登录表单。"
 
-#: plugin/legado.koplugin/main.lua:1954
+#: plugin/legado.koplugin/main.lua:2005
 msgid "Cannot build source login form:\n"
 msgstr "无法构建书源登录表单：\n"
 
-#: plugin/legado.koplugin/main.lua:1966 plugin/legado.koplugin/main.lua:1975
-#: plugin/legado.koplugin/main.lua:1989 plugin/legado.koplugin/main.lua:2377
-#: plugin/legado.koplugin/main.lua:2386 plugin/legado.koplugin/main.lua:2413
+#: plugin/legado.koplugin/main.lua:2017 plugin/legado.koplugin/main.lua:2026
+#: plugin/legado.koplugin/main.lua:2040 plugin/legado.koplugin/main.lua:2428
+#: plugin/legado.koplugin/main.lua:2437 plugin/legado.koplugin/main.lua:2464
 msgid "login"
 msgstr "登录"
 
-#: plugin/legado.koplugin/main.lua:1994
+#: plugin/legado.koplugin/main.lua:2045
 msgid "Actions for %1"
 msgstr "%1 的操作"
 
-#: plugin/legado.koplugin/main.lua:2065
+#: plugin/legado.koplugin/main.lua:2116
 msgid "Toast"
 msgstr "提示"
 
-#: plugin/legado.koplugin/main.lua:2065
+#: plugin/legado.koplugin/main.lua:2116
 msgid "Log"
 msgstr "日志"
 
-#: plugin/legado.koplugin/main.lua:2070
+#: plugin/legado.koplugin/main.lua:2121
 msgid "Source messages:"
 msgstr "书源消息："
 
-#: plugin/legado.koplugin/main.lua:2076
+#: plugin/legado.koplugin/main.lua:2127
 msgid "Select"
 msgstr "选择"
 
-#: plugin/legado.koplugin/main.lua:2077
+#: plugin/legado.koplugin/main.lua:2128
 msgid "Toggle"
 msgstr "切换"
 
-#: plugin/legado.koplugin/main.lua:2078
+#: plugin/legado.koplugin/main.lua:2129
 msgid "Enter text"
 msgstr "输入文本"
 
-#: plugin/legado.koplugin/main.lua:2079
+#: plugin/legado.koplugin/main.lua:2130
 msgid "Action"
 msgstr "操作"
 
-#: plugin/legado.koplugin/main.lua:2080
+#: plugin/legado.koplugin/main.lua:2131
 msgid "Header"
 msgstr "标题"
 
-#: plugin/legado.koplugin/main.lua:2081 plugin/legado.koplugin/main.lua:3088
+#: plugin/legado.koplugin/main.lua:2132 plugin/legado.koplugin/main.lua:4278
 msgid "Open"
 msgstr "打开"
 
-#: plugin/legado.koplugin/main.lua:2087
+#: plugin/legado.koplugin/main.lua:2138
 msgid "Unnamed discovery entry"
 msgstr "未命名发现项"
 
-#: plugin/legado.koplugin/main.lua:2091
+#: plugin/legado.koplugin/main.lua:2142
 msgid "Loading discovery entries…"
 msgstr "正在加载发现项…"
 
-#: plugin/legado.koplugin/main.lua:2094
+#: plugin/legado.koplugin/main.lua:2145
 msgid "Cannot load discovery entries."
 msgstr "无法加载发现项。"
 
-#: plugin/legado.koplugin/main.lua:2099
+#: plugin/legado.koplugin/main.lua:2150
 msgid "This source did not provide any discovery entries."
 msgstr "此书源未提供发现项。"
 
-#: plugin/legado.koplugin/main.lua:2116
+#: plugin/legado.koplugin/main.lua:2167
 msgid "Source messages"
 msgstr "书源消息"
 
-#: plugin/legado.koplugin/main.lua:2138
+#: plugin/legado.koplugin/main.lua:2189
 msgid "Discovery: %1"
 msgstr "发现：%1"
 
-#: plugin/legado.koplugin/main.lua:2162
+#: plugin/legado.koplugin/main.lua:2213
 msgid "This discovery entry is a header and has no action."
 msgstr "此发现项是标题，没有可执行操作。"
 
-#: plugin/legado.koplugin/main.lua:2173
+#: plugin/legado.koplugin/main.lua:2224
 msgid "Cannot load discovery entries:\n"
 msgstr "无法加载发现项：\n"
 
-#: plugin/legado.koplugin/main.lua:2184
+#: plugin/legado.koplugin/main.lua:2235
 msgid "Enter a value"
 msgstr "输入值"
 
-#: plugin/legado.koplugin/main.lua:2193
+#: plugin/legado.koplugin/main.lua:2244 plugin/legado.koplugin/main.lua:3452
 msgid "Apply"
 msgstr "应用"
 
-#: plugin/legado.koplugin/main.lua:2218
+#: plugin/legado.koplugin/main.lua:2269
 msgid "This discovery entry has no selectable values."
 msgstr "此发现项没有可选值。"
 
-#: plugin/legado.koplugin/main.lua:2257
+#: plugin/legado.koplugin/main.lua:2308
 msgid "Applying discovery setting: %1"
 msgstr "正在应用发现设置：%1"
 
-#: plugin/legado.koplugin/main.lua:2260
+#: plugin/legado.koplugin/main.lua:2311
 msgid "Discovery action failed."
 msgstr "发现操作失败。"
 
-#: plugin/legado.koplugin/main.lua:2263
+#: plugin/legado.koplugin/main.lua:2314
 msgid "Discovery setting saved."
 msgstr "发现设置已保存。"
 
-#: plugin/legado.koplugin/main.lua:2264 plugin/legado.koplugin/main.lua:2393
+#: plugin/legado.koplugin/main.lua:2315 plugin/legado.koplugin/main.lua:2444
 msgid "Action return value:"
 msgstr "操作返回值："
 
-#: plugin/legado.koplugin/main.lua:2277
+#: plugin/legado.koplugin/main.lua:2328
 msgid "Discovery action failed:\n"
 msgstr "发现操作失败：\n"
 
-#: plugin/legado.koplugin/main.lua:2286
+#: plugin/legado.koplugin/main.lua:2337
 msgid "Loading discovery page %1…"
 msgstr "正在加载发现页 %1…"
 
-#: plugin/legado.koplugin/main.lua:2290
+#: plugin/legado.koplugin/main.lua:2341
 msgid "Discovery request failed."
 msgstr "发现请求失败。"
 
-#: plugin/legado.koplugin/main.lua:2297
+#: plugin/legado.koplugin/main.lua:2348
 msgid "No books found in this discovery page."
 msgstr "此发现页没有找到书籍。"
 
-#: plugin/legado.koplugin/main.lua:2308
+#: plugin/legado.koplugin/main.lua:2359
 msgid "Cannot load discovery page:\n"
 msgstr "无法加载发现页：\n"
 
-#: plugin/legado.koplugin/main.lua:2321
+#: plugin/legado.koplugin/main.lua:2372
 msgid "Change discovery setting"
 msgstr "更改发现设置"
 
-#: plugin/legado.koplugin/main.lua:2322
+#: plugin/legado.koplugin/main.lua:2373
 msgid "Back to discovery"
 msgstr "返回发现"
 
-#: plugin/legado.koplugin/main.lua:2327
+#: plugin/legado.koplugin/main.lua:2378
 msgid "Next discovery page (%1)"
 msgstr "下一页发现（%1）"
 
-#: plugin/legado.koplugin/main.lua:2328
+#: plugin/legado.koplugin/main.lua:2379
 msgid "Load more"
 msgstr "加载更多"
 
-#: plugin/legado.koplugin/main.lua:2337 plugin/legado.koplugin/main.lua:2870
-#: plugin/legado.koplugin/legado/book_detail.lua:152
-msgid "Unnamed book"
-msgstr "未命名书籍"
-
-#: plugin/legado.koplugin/main.lua:2344
+#: plugin/legado.koplugin/main.lua:2395
 msgid "Discovery results: %1 · page %2"
 msgstr "发现结果：%1 · 第 %2 页"
 
-#: plugin/legado.koplugin/main.lua:2377
+#: plugin/legado.koplugin/main.lua:2428
 msgid "Running source action: %1"
 msgstr "正在执行书源操作：%1"
 
-#: plugin/legado.koplugin/main.lua:2380
+#: plugin/legado.koplugin/main.lua:2431
 msgid "Source login failed."
 msgstr "书源登录失败。"
 
-#: plugin/legado.koplugin/main.lua:2385
+#: plugin/legado.koplugin/main.lua:2436
 #, lua-format
 msgid "Source action completed: %s"
 msgstr "书源操作已完成：%s"
 
-#: plugin/legado.koplugin/main.lua:2389
+#: plugin/legado.koplugin/main.lua:2440
 #, lua-format
 msgid "Cookies saved: %s"
 msgstr "Cookie 已保存：%s"
 
-#: plugin/legado.koplugin/main.lua:2394
+#: plugin/legado.koplugin/main.lua:2445
 msgid "Login check return value:"
 msgstr "登录检查返回值："
 
-#: plugin/legado.koplugin/main.lua:2397
+#: plugin/legado.koplugin/main.lua:2448
 msgid "Login check passed."
 msgstr "登录检查通过。"
 
-#: plugin/legado.koplugin/main.lua:2400
+#: plugin/legado.koplugin/main.lua:2451
 msgid "Login data saved."
 msgstr "登录数据已保存。"
 
-#: plugin/legado.koplugin/main.lua:2403
+#: plugin/legado.koplugin/main.lua:2454
 msgid "Source variables saved."
 msgstr "书源变量已保存。"
 
-#: plugin/legado.koplugin/main.lua:2406
+#: plugin/legado.koplugin/main.lua:2457
 msgid "Tap to continue with Actions."
 msgstr "点击继续进行操作。"
 
-#: plugin/legado.koplugin/main.lua:2412
+#: plugin/legado.koplugin/main.lua:2463
 #, lua-format
 msgid ""
 "Source action failed: %s\n"
@@ -670,283 +755,420 @@ msgstr ""
 "\n"
 "%s"
 
-#: plugin/legado.koplugin/main.lua:2447 plugin/legado.koplugin/main.lua:2744
+#: plugin/legado.koplugin/main.lua:2498 plugin/legado.koplugin/main.lua:3210
 msgid "No enabled text source with a search URL."
 msgstr "没有启用的、包含搜索地址的文本书源。"
 
-#: plugin/legado.koplugin/main.lua:2452
+#: plugin/legado.koplugin/main.lua:2503
 msgid "Choose a text source"
 msgstr "选择文本书源"
 
-#: plugin/legado.koplugin/main.lua:2467
+#: plugin/legado.koplugin/main.lua:2518
 msgid "Cannot load bookshelf:\n"
 msgstr "无法加载书架：\n"
 
-#: plugin/legado.koplugin/main.lua:2471
+#: plugin/legado.koplugin/main.lua:2522
 msgid ""
 "Bookshelf is empty. Import an Android backup or search and download a book."
 msgstr "书架为空。请导入 Android 备份，或搜索并下载书籍。"
 
-#: plugin/legado.koplugin/main.lua:2480
+#: plugin/legado.koplugin/main.lua:2531
 msgid "Read"
 msgstr "已读"
 
-#: plugin/legado.koplugin/main.lua:2481
+#: plugin/legado.koplugin/main.lua:2532
 msgid "Unread"
 msgstr "未读"
 
-#: plugin/legado.koplugin/main.lua:2482
+#: plugin/legado.koplugin/main.lua:2533
 msgid "All books"
 msgstr "全部"
 
-#: plugin/legado.koplugin/main.lua:2494
+#: plugin/legado.koplugin/main.lua:2545
 msgid "%1 books"
 msgstr "%1 本书"
 
-#: plugin/legado.koplugin/main.lua:2501
+#: plugin/legado.koplugin/main.lua:2552
 msgid "Legado bookshelf categories"
 msgstr "Legado 书架分类"
 
-#: plugin/legado.koplugin/main.lua:2520
+#: plugin/legado.koplugin/main.lua:2571
 msgid "Change bookshelf category"
 msgstr "更改书架分类"
 
-#: plugin/legado.koplugin/main.lua:2521
+#: plugin/legado.koplugin/main.lua:2572
 msgid "Categories"
 msgstr "分类"
 
-#: plugin/legado.koplugin/main.lua:2532 plugin/legado.koplugin/main.lua:2597
-#: plugin/legado.koplugin/main.lua:3268 plugin/legado.koplugin/main.lua:3296
+#: plugin/legado.koplugin/main.lua:2583 plugin/legado.koplugin/main.lua:2728
+#: plugin/legado.koplugin/main.lua:2762 plugin/legado.koplugin/main.lua:4458
+#: plugin/legado.koplugin/main.lua:4486
 msgid "Chapter %1"
 msgstr "第 %1 章"
 
-#: plugin/legado.koplugin/main.lua:2546
+#: plugin/legado.koplugin/main.lua:2597
 msgid "No books in this category"
 msgstr "此分类中没有书籍"
 
-#: plugin/legado.koplugin/main.lua:2547
+#: plugin/legado.koplugin/main.lua:2598
 msgid "Empty"
 msgstr "空"
 
-#: plugin/legado.koplugin/main.lua:2571
+#: plugin/legado.koplugin/main.lua:2622
 msgid "Cannot match book source:\n"
 msgstr "无法匹配书籍的书源：\n"
 
-#: plugin/legado.koplugin/main.lua:2598
+#: plugin/legado.koplugin/main.lua:2763
 msgid "Not started"
 msgstr "未开始"
 
-#: plugin/legado.koplugin/main.lua:2612 plugin/legado.koplugin/main.lua:2619
-#: plugin/legado.koplugin/main.lua:2656
+#: plugin/legado.koplugin/main.lua:2777 plugin/legado.koplugin/main.lua:2784
+#: plugin/legado.koplugin/main.lua:2822
 msgid "Cannot match book source."
 msgstr "无法匹配书籍的书源。"
 
-#: plugin/legado.koplugin/main.lua:2660
+#: plugin/legado.koplugin/main.lua:2826
 msgid "Loading book information…"
 msgstr "正在加载书籍信息…"
 
-#: plugin/legado.koplugin/main.lua:2663
+#: plugin/legado.koplugin/main.lua:2829
 msgid "Book information request failed."
 msgstr "书籍信息请求失败。"
 
-#: plugin/legado.koplugin/main.lua:2705
+#: plugin/legado.koplugin/main.lua:2871
 msgid "Downloading cover…"
 msgstr "正在下载封面…"
 
-#: plugin/legado.koplugin/main.lua:2708
+#: plugin/legado.koplugin/main.lua:2874
 msgid "Cover download failed."
 msgstr "封面下载失败。"
 
-#: plugin/legado.koplugin/main.lua:2749
+#: plugin/legado.koplugin/main.lua:2933
+msgid "Ungrouped"
+msgstr "未分组"
+
+#: plugin/legado.koplugin/main.lua:2983 plugin/legado.koplugin/main.lua:3480
+msgid "All groups"
+msgstr "全部分组"
+
+#: plugin/legado.koplugin/main.lua:3046
+msgid "Author"
+msgstr "作者"
+
+#: plugin/legado.koplugin/main.lua:3047
+msgid "Info"
+msgstr "信息"
+
+#: plugin/legado.koplugin/main.lua:3048
+msgid "TOC count"
+msgstr "目录数"
+
+#: plugin/legado.koplugin/main.lua:3049
+msgid "None"
+msgstr "无"
+
+#: plugin/legado.koplugin/main.lua:3171
+msgid "starting"
+msgstr "准备中"
+
+#: plugin/legado.koplugin/main.lua:3173
+msgid "Searching sources: %1/%2 · %3"
+msgstr "正在搜索书源：%1/%2 · %3"
+
+#: plugin/legado.koplugin/main.lua:3179
+msgid "options pending"
+msgstr "选项待应用"
+
+#: plugin/legado.koplugin/main.lua:3184
+msgid "Source search failed; tap Refresh to try again."
+msgstr "书源搜索失败；点击“刷新搜索结果”重试。"
+
+#: plugin/legado.koplugin/main.lua:3187
+msgid "%1 matches from %2 sources"
+msgstr "在 %2 个书源中找到 %1 个结果"
+
+#: plugin/legado.koplugin/main.lua:3241 plugin/legado.koplugin/main.lua:3697
+msgid "Searching all sources…"
+msgstr "正在搜索全部书源…"
+
+#: plugin/legado.koplugin/main.lua:3242
+msgid "Refresh source results"
+msgstr "刷新搜索结果"
+
+#: plugin/legado.koplugin/main.lua:3248 plugin/legado.koplugin/main.lua:3440
+msgid "Filter source results"
+msgstr "筛选换源结果"
+
+#: plugin/legado.koplugin/main.lua:3249
+msgid "Filter: %1"
+msgstr "筛选：%1"
+
+#: plugin/legado.koplugin/main.lua:3250
+msgid "Source name or title filter"
+msgstr "按书源名或书名筛选"
+
+#: plugin/legado.koplugin/main.lua:3254 plugin/legado.koplugin/main.lua:3497
+msgid "Source groups"
+msgstr "书源分组"
+
+#: plugin/legado.koplugin/main.lua:3259 plugin/legado.koplugin/main.lua:3578
+msgid "Change-source options"
+msgstr "换源选项"
+
+#: plugin/legado.koplugin/main.lua:3312
+msgid "%1 chapters"
+msgstr "%1 章"
+
+#: plugin/legado.koplugin/main.lua:3314
+msgid "TOC count skipped for memory safety"
+msgstr "为节省内存未探测目录数"
+
+#: plugin/legado.koplugin/main.lua:3317
+msgid "Info unavailable"
+msgstr "信息不可用"
+
+#: plugin/legado.koplugin/main.lua:3339
+msgid "No enabled source in selected groups"
+msgstr "所选分组中没有启用的书源"
+
+#: plugin/legado.koplugin/main.lua:3340
+msgid "Choose All groups or select another group."
+msgstr "请选择“全部分组”或其他分组。"
+
+#: plugin/legado.koplugin/main.lua:3346
+msgid "No matching source results"
+msgstr "没有匹配的换源结果"
+
+#: plugin/legado.koplugin/main.lua:3348
+msgid "Clear the filter or choose another group."
+msgstr "清除筛选条件或选择其他分组。"
+
+#: plugin/legado.koplugin/main.lua:3349
+msgid "Try Refresh or change the author check."
+msgstr "请刷新，或调整作者匹配选项。"
+
+#: plugin/legado.koplugin/main.lua:3357
+msgid "Source errors (%1)"
+msgstr "书源错误（%1）"
+
+#: plugin/legado.koplugin/main.lua:3358
+msgid "Tap to inspect; other sources continue."
+msgstr "点击查看详情；其他书源仍会继续搜索。"
+
+#: plugin/legado.koplugin/main.lua:3380
 msgid "Change source for %1"
 msgstr "为 %1 换源"
 
-#: plugin/legado.koplugin/main.lua:2762
-msgid "Searching %1…"
-msgstr "正在从 %1 搜索…"
+#: plugin/legado.koplugin/main.lua:3406 plugin/legado.koplugin/main.lua:3421
+msgid "Wait until source search finishes."
+msgstr "请等待书源搜索完成。"
 
-#: plugin/legado.koplugin/main.lua:2762
-msgid "source"
-msgstr "书源"
+#: plugin/legado.koplugin/main.lua:3410
+msgid "This is already the current source."
+msgstr "这已经是当前书源。"
 
-#: plugin/legado.koplugin/main.lua:2766 plugin/legado.koplugin/main.lua:2852
+#: plugin/legado.koplugin/main.lua:3441
+msgid "Filter the Android-style result list by source name or book title."
+msgstr "按书源名或书名筛选 Android 风格的结果列表。"
+
+#: plugin/legado.koplugin/main.lua:3443
+msgid "Source name"
+msgstr "书源名称"
+
+#: plugin/legado.koplugin/main.lua:3474
+msgid "Apply source-group filter"
+msgstr "应用书源分组筛选"
+
+#: plugin/legado.koplugin/main.lua:3481 plugin/legado.koplugin/main.lua:3488
+msgid "Selected"
+msgstr "已选"
+
+#: plugin/legado.koplugin/main.lua:3488
+msgid "Not selected"
+msgstr "未选"
+
+#: plugin/legado.koplugin/main.lua:3560
+msgid "Apply change-source options"
+msgstr "应用换源选项"
+
+#: plugin/legado.koplugin/main.lua:3565
+msgid "Check author"
+msgstr "检查作者"
+
+#: plugin/legado.koplugin/main.lua:3566
+msgid "Load book information"
+msgstr "加载书籍信息"
+
+#: plugin/legado.koplugin/main.lua:3568
+msgid "Probe TOC chapter count"
+msgstr "探测目录章节数"
+
+#: plugin/legado.koplugin/main.lua:3570
+msgid "slow; count only, no TOC kept"
+msgstr "较慢；仅保留章节数，不保留目录"
+
+#: plugin/legado.koplugin/main.lua:3612
+msgid "%1 source requests failed."
+msgstr "%1 个书源请求失败。"
+
+#: plugin/legado.koplugin/main.lua:3615
+msgid "… and %1 more"
+msgstr "……以及另外 %1 个"
+
+#: plugin/legado.koplugin/main.lua:3748 plugin/legado.koplugin/main.lua:4042
 msgid "Search failed."
 msgstr "搜索失败。"
 
-#: plugin/legado.koplugin/main.lua:2771
-msgid "No matching book on this source."
-msgstr "此书源未找到匹配书籍。"
+#: plugin/legado.koplugin/main.lua:3821 plugin/legado.koplugin/main.lua:3834
+msgid "completed"
+msgstr "完成"
 
-#: plugin/legado.koplugin/main.lua:2925
-#, lua-format
-msgid "No matching book on %1."
-msgstr "在 %1 中未找到匹配书籍。"
+#: plugin/legado.koplugin/main.lua:3856
+msgid "Source search was cancelled."
+msgstr "书源搜索已取消。"
 
-#: plugin/legado.koplugin/main.lua:2943
-msgid "Cannot search this source:\n"
-msgstr "无法搜索此书源：\n"
-
-#: plugin/legado.koplugin/main.lua:2783
-msgid "Changing book source…"
-msgstr "正在更换书源…"
-
-#: plugin/legado.koplugin/main.lua:2978
+#: plugin/legado.koplugin/main.lua:3868
 msgid "Selected source result is incomplete."
 msgstr "选中的书源结果信息不完整。"
 
-#: plugin/legado.koplugin/main.lua:2991
+#: plugin/legado.koplugin/main.lua:3875
+msgid "Changing book source…"
+msgstr "正在更换书源…"
+
+#: plugin/legado.koplugin/main.lua:3881
 msgid "Book is no longer in the bookshelf."
 msgstr "这本书已不在书架中。"
 
-#: plugin/legado.koplugin/main.lua:2961
-#, lua-format
-msgid "Change source to %1?\n\nCurrent source: %2\nBook: %3"
-msgstr "要更换为 %1 吗？\n\n当前书源：%2\n书籍：%3"
-
-#: plugin/legado.koplugin/main.lua:2808
-msgid "Cannot change source:\n"
-msgstr "无法更换书源：\n"
-
-#: plugin/legado.koplugin/main.lua:2817
-msgid "Search in %1"
-msgstr "在 %1 中搜索"
-
-#: plugin/legado.koplugin/main.lua:2878
-#, lua-format
-msgid "Search for %1 on this source. You can edit the keyword."
-msgstr "将在此书源搜索 %1；你可以修改关键词。"
-
-#: plugin/legado.koplugin/main.lua:2882
-msgid "Search keyword"
-msgstr "搜索关键词"
-
-#: plugin/legado.koplugin/main.lua:2829
-msgid "Search"
-msgstr "搜索"
-
-#: plugin/legado.koplugin/main.lua:2835
-msgid "Search keyword cannot be empty."
-msgstr "搜索关键词不能为空。"
-
-#: plugin/legado.koplugin/main.lua:2849
-msgid "Searching…"
-msgstr "正在搜索…"
-
-#: plugin/legado.koplugin/main.lua:2856
-msgid "No books found."
-msgstr "没有找到书籍。"
-
-#: plugin/legado.koplugin/main.lua:2877
-msgid "Search results"
-msgstr "搜索结果"
-
-#: plugin/legado.koplugin/main.lua:2895 plugin/legado.koplugin/main.lua:3060
-#: plugin/legado.koplugin/main.lua:3191
+#: plugin/legado.koplugin/main.lua:3894 plugin/legado.koplugin/main.lua:4085
+#: plugin/legado.koplugin/main.lua:4250 plugin/legado.koplugin/main.lua:4381
 msgid "Chapter list is empty."
 msgstr "目录为空。"
 
-#: plugin/legado.koplugin/main.lua:2924
-#: plugin/legado.koplugin/legado/book_detail.lua:32
-msgid "Book details"
-msgstr "书籍详情"
+#: plugin/legado.koplugin/main.lua:3998
+msgid "Cannot change source:\n"
+msgstr "无法更换书源：\n"
 
-#: plugin/legado.koplugin/main.lua:2925
+#: plugin/legado.koplugin/main.lua:4007
+msgid "Search in %1"
+msgstr "在 %1 中搜索"
+
+#: plugin/legado.koplugin/main.lua:4019
+msgid "Search"
+msgstr "搜索"
+
+#: plugin/legado.koplugin/main.lua:4025
+msgid "Search keyword cannot be empty."
+msgstr "搜索关键词不能为空。"
+
+#: plugin/legado.koplugin/main.lua:4039
+msgid "Searching…"
+msgstr "正在搜索…"
+
+#: plugin/legado.koplugin/main.lua:4046
+msgid "No books found."
+msgstr "没有找到书籍。"
+
+#: plugin/legado.koplugin/main.lua:4067
+msgid "Search results"
+msgstr "搜索结果"
+
+#: plugin/legado.koplugin/main.lua:4115
 msgid "Cover · introduction · source"
 msgstr "封面 · 简介 · 书源"
 
-#: plugin/legado.koplugin/main.lua:2931
+#: plugin/legado.koplugin/main.lua:4121
 msgid "Continue reading chapter %1"
 msgstr "继续阅读第 %1 章"
 
-#: plugin/legado.koplugin/main.lua:2939
+#: plugin/legado.koplugin/main.lua:4129
 msgid "Download entire book (%1 chapters)"
 msgstr "下载整本书（%1 章）"
 
-#: plugin/legado.koplugin/main.lua:2940
+#: plugin/legado.koplugin/main.lua:4130
 msgid "EPUB + TXT"
 msgstr "EPUB + TXT"
 
-#: plugin/legado.koplugin/main.lua:2944
+#: plugin/legado.koplugin/main.lua:4134
 msgid "Jump to chapter number"
 msgstr "跳转到章节编号"
 
-#: plugin/legado.koplugin/main.lua:2951
+#: plugin/legado.koplugin/main.lua:4141
 msgid "Refresh chapter list"
 msgstr "刷新目录"
 
-#: plugin/legado.koplugin/main.lua:2952
+#: plugin/legado.koplugin/main.lua:4142
 msgid "Network request"
 msgstr "网络请求"
 
-#: plugin/legado.koplugin/main.lua:2959
+#: plugin/legado.koplugin/main.lua:4149
 msgid "Downloaded"
 msgstr "已下载"
 
-#: plugin/legado.koplugin/main.lua:2960
+#: plugin/legado.koplugin/main.lua:4150
 msgid "VIP"
 msgstr "VIP"
 
-#: plugin/legado.koplugin/main.lua:2962
+#: plugin/legado.koplugin/main.lua:4152
 msgid "Unnamed chapter"
 msgstr "未命名章节"
 
-#: plugin/legado.koplugin/main.lua:2983
+#: plugin/legado.koplugin/main.lua:4173
 msgid "Chapters"
 msgstr "章节"
 
-#: plugin/legado.koplugin/main.lua:3048
+#: plugin/legado.koplugin/main.lua:4238
 msgid "Loading chapter list…"
 msgstr "正在加载目录…"
 
-#: plugin/legado.koplugin/main.lua:3056
+#: plugin/legado.koplugin/main.lua:4246
 msgid "Chapter list failed."
 msgstr "目录加载失败。"
 
-#: plugin/legado.koplugin/main.lua:3077
+#: plugin/legado.koplugin/main.lua:4267
 msgid "Jump to a chapter in %1"
 msgstr "跳转到 %1 中的章节"
 
-#: plugin/legado.koplugin/main.lua:3077
+#: plugin/legado.koplugin/main.lua:4267
 msgid "book"
 msgstr "书籍"
 
-#: plugin/legado.koplugin/main.lua:3079
+#: plugin/legado.koplugin/main.lua:4269
 msgid "Enter 1-%1"
 msgstr "输入 1-%1"
 
-#: plugin/legado.koplugin/main.lua:3093
+#: plugin/legado.koplugin/main.lua:4283
 msgid "Enter a whole number from 1 to %1."
 msgstr "请输入 1 到 %1 之间的整数。"
 
-#: plugin/legado.koplugin/main.lua:3146
+#: plugin/legado.koplugin/main.lua:4336
 msgid "Cannot download chapter:\n"
 msgstr "无法下载章节：\n"
 
-#: plugin/legado.koplugin/main.lua:3149
+#: plugin/legado.koplugin/main.lua:4339
 msgid "Downloading chapter…"
 msgstr "正在下载章节…"
 
-#: plugin/legado.koplugin/main.lua:3152 plugin/legado.koplugin/main.lua:3282
+#: plugin/legado.koplugin/main.lua:4342 plugin/legado.koplugin/main.lua:4472
 msgid "Chapter download failed."
 msgstr "章节下载失败。"
 
-#: plugin/legado.koplugin/main.lua:3195
+#: plugin/legado.koplugin/main.lua:4385
 msgid "This book has more than 5000 chapters; download it in smaller ranges."
 msgstr "此书超过 5000 章；请分段下载。"
 
-#: plugin/legado.koplugin/main.lua:3208
+#: plugin/legado.koplugin/main.lua:4398
 msgid "Downloading book (%1 chapters)"
 msgstr "正在下载整本书（%1 章）"
 
-#: plugin/legado.koplugin/main.lua:3209
+#: plugin/legado.koplugin/main.lua:4399
 msgid "Cached chapters are skipped. Tap to stop; completed chapters are kept."
 msgstr "已缓存章节会跳过。点击停止；已完成的章节会保留。"
 
-#: plugin/legado.koplugin/main.lua:3212
+#: plugin/legado.koplugin/main.lua:4402
 msgid "Stop downloading? Completed chapters will be kept."
 msgstr "停止下载？已完成的章节会保留。"
 
-#: plugin/legado.koplugin/main.lua:3229
+#: plugin/legado.koplugin/main.lua:4419
 #, lua-format
 msgid ""
 "Download stopped at chapter %s/%s.\n"
@@ -959,36 +1181,36 @@ msgstr ""
 "\n"
 "已完成的章节已保留，可以继续下载。"
 
-#: plugin/legado.koplugin/main.lua:3236 plugin/legado.koplugin/main.lua:3253
-#: plugin/legado.koplugin/main.lua:3286 plugin/legado.koplugin/main.lua:3312
+#: plugin/legado.koplugin/main.lua:4426 plugin/legado.koplugin/main.lua:4443
+#: plugin/legado.koplugin/main.lua:4476 plugin/legado.koplugin/main.lua:4502
 msgid "Download cancelled. Completed chapters were kept."
 msgstr "下载已取消。已完成的章节会保留。"
 
-#: plugin/legado.koplugin/main.lua:3241
+#: plugin/legado.koplugin/main.lua:4431
 msgid "Cannot save downloaded book:\n"
 msgstr "无法保存已下载的书籍：\n"
 
-#: plugin/legado.koplugin/main.lua:3279
+#: plugin/legado.koplugin/main.lua:4469
 msgid "Downloading chapter %1/%2…"
 msgstr "正在下载第 %1/%2 章…"
 
-#: plugin/legado.koplugin/main.lua:3324
+#: plugin/legado.koplugin/main.lua:4514
 msgid "Long-press an Android backup ZIP"
 msgstr "长按选择 Android 备份 ZIP"
 
-#: plugin/legado.koplugin/main.lua:3332
+#: plugin/legado.koplugin/main.lua:4522
 msgid "Importing backup…"
 msgstr "正在导入备份…"
 
-#: plugin/legado.koplugin/main.lua:3334
+#: plugin/legado.koplugin/main.lua:4524
 msgid "Backup import failed."
 msgstr "备份导入失败。"
 
-#: plugin/legado.koplugin/main.lua:3352
+#: plugin/legado.koplugin/main.lua:4542
 msgid "Reading history conversion:"
 msgstr "阅读记录转换："
 
-#: plugin/legado.koplugin/main.lua:3355
+#: plugin/legado.koplugin/main.lua:4545
 #, lua-format
 msgid ""
 "Imported Android data.\n"
@@ -1009,11 +1231,11 @@ msgstr ""
 "已续读书籍：%s\n"
 "已忽略的 Android 成员：%s%s"
 
-#: plugin/legado.koplugin/main.lua:3373
+#: plugin/legado.koplugin/main.lua:4563
 msgid "State:"
 msgstr "状态："
 
-#: plugin/legado.koplugin/main.lua:3376
+#: plugin/legado.koplugin/main.lua:4566
 #, lua-format
 msgid ""
 "Schema: %s\n"
@@ -1030,15 +1252,15 @@ msgstr ""
 "阅读记录：%s\n"
 "成员：%s%s"
 
-#: plugin/legado.koplugin/main.lua:3377
+#: plugin/legado.koplugin/main.lua:4567
 msgid "Unknown"
 msgstr "未知"
 
-#: plugin/legado.koplugin/main.lua:3408
+#: plugin/legado.koplugin/main.lua:4598
 msgid "Source report failed:\n"
 msgstr "书源报告失败：\n"
 
-#: plugin/legado.koplugin/main.lua:3412
+#: plugin/legado.koplugin/main.lua:4602
 #, lua-format
 msgid ""
 "Text sources: %s/%s\n"
@@ -1059,66 +1281,37 @@ msgstr ""
 "替换规则：%s\n"
 "模板：%s"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:76
-msgid "%1: %2"
-msgstr "%1：%2"
+#~ msgid "Searching %1…"
+#~ msgstr "正在从 %1 搜索…"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:85
-msgid "No cover"
-msgstr "无封面"
+#~ msgid "source"
+#~ msgstr "书源"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:161
-msgid "Unknown author"
-msgstr "未知作者"
+#~ msgid "No matching book on this source."
+#~ msgstr "此书源未找到匹配书籍。"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:169
-msgid "Source"
-msgstr "书源"
+#, lua-format
+#~ msgid "No matching book on %1."
+#~ msgstr "在 %1 中未找到匹配书籍。"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:170
-msgid "Kind"
-msgstr "分类"
+#~ msgid "Cannot search this source:\n"
+#~ msgstr "无法搜索此书源：\n"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:171
-msgid "Last chapter"
-msgstr "最新章节"
+#, lua-format
+#~ msgid ""
+#~ "Change source to %1?\n"
+#~ "\n"
+#~ "Current source: %2\n"
+#~ "Book: %3"
+#~ msgstr ""
+#~ "要更换为 %1 吗？\n"
+#~ "\n"
+#~ "当前书源：%2\n"
+#~ "书籍：%3"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:172
-msgid "Updated"
-msgstr "更新时间"
+#, lua-format
+#~ msgid "Search for %1 on this source. You can edit the keyword."
+#~ msgstr "将在此书源搜索 %1；你可以修改关键词。"
 
-#: plugin/legado.koplugin/legado/book_detail.lua:173
-msgid "Word count"
-msgstr "字数"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:174
-msgid "Progress"
-msgstr "进度"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:198
-msgid "No introduction available."
-msgstr "暂无简介。"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:216
-msgid "Introduction"
-msgstr "简介"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:230
-msgid "Continue reading"
-msgstr "继续阅读"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:235
-msgid "Chapter list"
-msgstr "目录"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:242
-msgid "Change source"
-msgstr "换源"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:247
-msgid "Refresh book information"
-msgstr "刷新书籍信息"
-
-#: plugin/legado.koplugin/legado/book_detail.lua:254
-msgid "Close"
-msgstr "关闭"
+#~ msgid "Search keyword"
+#~ msgstr "搜索关键词"

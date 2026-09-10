@@ -297,6 +297,58 @@ function SourceCatalog:remove_source(index)
     return self:replace_sources(updated)
 end
 
+function SourceCatalog:move_source(index, destination)
+    local sources, err = self:list()
+    if not sources then
+        return nil, err
+    end
+    if type(index) ~= "number" or index < 1 or index > #sources then
+        return nil, "book source index is out of range"
+    end
+    destination = tostring(destination or "")
+    if destination ~= "top" and destination ~= "bottom" then
+        return nil, "invalid source destination"
+    end
+    if #sources < 2 or (destination == "top" and index == 1)
+            or (destination == "bottom" and index == #sources) then
+        return true
+    end
+
+    -- Keep the imported array order authoritative. Android also stores a
+    -- customOrder, but older source packs often omit it; moving the actual
+    -- array entry makes the result deterministic on Kindle and survives a
+    -- later source export/import without requiring another ranking database.
+    local updated = {}
+    local moved = sources[index]
+    local min_order
+    local max_order
+    for _, source in ipairs(sources) do
+        local order = tonumber(source and source.customOrder)
+        if order then
+            min_order = min_order and math.min(min_order, order) or order
+            max_order = max_order and math.max(max_order, order) or order
+        end
+    end
+    if destination == "top" then
+        moved.customOrder = (min_order or 0) - 1
+    else
+        moved.customOrder = (max_order or (#sources - 1)) + 1
+    end
+    local position = 0
+    for current, source in ipairs(sources) do
+        if current ~= index then
+            position = position + 1
+            updated[position] = source
+        end
+    end
+    if destination == "top" then
+        table.insert(updated, 1, moved)
+    else
+        updated[#updated + 1] = moved
+    end
+    return self:replace_sources(updated)
+end
+
 function SourceCatalog:compatibility()
     local sources, err = self:list()
     if not sources then

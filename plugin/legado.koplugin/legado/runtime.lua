@@ -947,12 +947,12 @@ function Runtime.explore_action(source, kind, value)
     }
 end
 
-function Runtime.search_source(source, keyword, page)
+function Runtime.search_source(source, keyword, page, options)
     if tonumber(source.bookSourceType or 0) ~= 0 then
         return nil, "only text book sources are supported"
     end
-    local options = Network.url_options(source.searchUrl or "")
-    local charset = options and options.charset or "UTF-8"
+    local url_options = Network.url_options(source.searchUrl or "")
+    local charset = url_options and url_options.charset or "UTF-8"
     local context = context_for(source, {
         key = Network.url_encode(keyword or "", charset),
         keyRaw = keyword or "",
@@ -962,7 +962,20 @@ function Runtime.search_source(source, keyword, page)
     if not url or url == "" then
         return nil, err or "source has no searchUrl"
     end
-    local html, request_err = request_page(source, url, context)
+    local request_options = {}
+    if type(url_options) == "table" then
+        for key, value in pairs(url_options) do
+            request_options[key] = value
+        end
+    end
+    if type(options) == "table" then
+        for key, value in pairs(options) do
+            request_options[key] = value
+        end
+    end
+    local html, request_err = request_page(
+        source, url, context, request_options
+    )
     if not html then
         return nil, request_err
     end
@@ -1941,9 +1954,9 @@ local raw_chapter_content = Runtime.chapter_content
 local raw_book_sections = Runtime.book_sections
 local raw_book_content = Runtime.book_content
 
-Runtime.search_source = function(source, keyword, page)
+Runtime.search_source = function(source, keyword, page, options)
     return with_session(source, function()
-        return raw_search_source(source, keyword, page)
+        return raw_search_source(source, keyword, page, options)
     end)
 end
 

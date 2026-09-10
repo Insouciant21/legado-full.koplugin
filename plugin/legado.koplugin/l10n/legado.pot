@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: legado 0.1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-11 01:05+0800\n"
+"POT-Creation-Date: 2026-09-11 02:50+0800\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,7 +17,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: plugin/legado.koplugin/_meta.lua:59 plugin/legado.koplugin/main.lua:114
+#: plugin/legado.koplugin/_meta.lua:59 plugin/legado.koplugin/main.lua:115
 msgid "Legado"
 msgstr ""
 
@@ -25,246 +25,320 @@ msgstr ""
 msgid "Read Legado text novels in KOReader"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:206
+#: plugin/legado.koplugin/legado/book_detail.lua:84
+msgid "%1: %2"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:93
+msgid "No cover"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:119
+#: plugin/legado.koplugin/main.lua:4114
+msgid "Book details"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:164
+#: plugin/legado.koplugin/main.lua:2388 plugin/legado.koplugin/main.lua:4060
+msgid "Unnamed book"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:173
+msgid "Unknown author"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:181
+msgid "Source"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:182
+msgid "Kind"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:183
+msgid "Last chapter"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:184
+msgid "Updated"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:185
+msgid "Word count"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:186
+msgid "Progress"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:210
+msgid "No introduction available."
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:240
+msgid "Introduction"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:254
+msgid "Continue reading"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:259
+msgid "Chapter list"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:266
+msgid "Change source"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:271
+msgid "Refresh book information"
+msgstr ""
+
+#: plugin/legado.koplugin/legado/book_detail.lua:278
+msgid "Close"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:216
 msgid "Legado: show status"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:212
+#: plugin/legado.koplugin/main.lua:222
 msgid "Legado: open bookshelf"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:218
+#: plugin/legado.koplugin/main.lua:228
 msgid "Legado: open chapter list"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:224
+#: plugin/legado.koplugin/main.lua:234
 msgid "Legado: next chapter"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:230
+#: plugin/legado.koplugin/main.lua:240
 msgid "Legado: previous chapter"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:250 plugin/legado.koplugin/main.lua:2552
+#: plugin/legado.koplugin/main.lua:260 plugin/legado.koplugin/main.lua:2603
 msgid "Legado bookshelf"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:258
+#: plugin/legado.koplugin/main.lua:268
 msgid "Legado chapter list"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:265
+#: plugin/legado.koplugin/main.lua:275
 msgid "Legado next chapter"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:272
+#: plugin/legado.koplugin/main.lua:282
 msgid "Legado previous chapter"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:291
+#: plugin/legado.koplugin/main.lua:301
 msgid "Open bookshelf"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:297
+#: plugin/legado.koplugin/main.lua:307
 msgid "Source settings"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:301
+#: plugin/legado.koplugin/main.lua:311
 msgid "Backup & restore"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:305
+#: plugin/legado.koplugin/main.lua:315
 msgid "Diagnostics"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:312 plugin/legado.koplugin/main.lua:2479
+#: plugin/legado.koplugin/main.lua:322 plugin/legado.koplugin/main.lua:2530
 msgid "Reading"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:322
+#: plugin/legado.koplugin/main.lua:332
 msgid "Open current chapter list"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:328
+#: plugin/legado.koplugin/main.lua:338
 msgid "Next chapter"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:334
+#: plugin/legado.koplugin/main.lua:344
 msgid "Previous chapter"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:340 plugin/legado.koplugin/main.lua:1024
+#: plugin/legado.koplugin/main.lua:350 plugin/legado.koplugin/main.lua:1034
 msgid "Prefetch next %1 chapters"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:351 plugin/legado.koplugin/main.lua:1515
+#: plugin/legado.koplugin/main.lua:361 plugin/legado.koplugin/main.lua:1531
 msgid "Source list"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:357 plugin/legado.koplugin/main.lua:1438
+#: plugin/legado.koplugin/main.lua:367 plugin/legado.koplugin/main.lua:1454
 msgid "Add source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:361
+#: plugin/legado.koplugin/main.lua:371
 msgid "Search text sources"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:372
+#: plugin/legado.koplugin/main.lua:382
 msgid "Enter source JSON"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:378
+#: plugin/legado.koplugin/main.lua:388
 msgid "Import source JSON file"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:389
+#: plugin/legado.koplugin/main.lua:399
 msgid "Import sources, bookshelf and reading history"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:400
+#: plugin/legado.koplugin/main.lua:410
 msgid "Show local status"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:406
+#: plugin/legado.koplugin/main.lua:416
 msgid "Source compatibility status"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:412
+#: plugin/legado.koplugin/main.lua:422
 msgid "Data directory"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:511
+#: plugin/legado.koplugin/main.lua:521
 msgid "Cannot open downloaded file:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:589 plugin/legado.koplugin/main.lua:622
-#: plugin/legado.koplugin/main.lua:2414 plugin/legado.koplugin/main.lua:3230
+#: plugin/legado.koplugin/main.lua:599 plugin/legado.koplugin/main.lua:632
+#: plugin/legado.koplugin/main.lua:2465 plugin/legado.koplugin/main.lua:4420
 msgid "Unknown error."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:604
+#: plugin/legado.koplugin/main.lua:614
 msgid "Worker failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:612
+#: plugin/legado.koplugin/main.lua:622
 msgid "Worker returned no data."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:618
+#: plugin/legado.koplugin/main.lua:628
 msgid "Operation returned invalid data."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:754
+#: plugin/legado.koplugin/main.lua:764
 msgid "Reading session is missing."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:784
+#: plugin/legado.koplugin/main.lua:794
 msgid "Book source for reading session not found."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:948
+#: plugin/legado.koplugin/main.lua:958
 msgid "Prefetch failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:960
+#: plugin/legado.koplugin/main.lua:970
 msgid "Cannot save prefetched chapter."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1007
+#: plugin/legado.koplugin/main.lua:1017
 msgid "Prefetch cancelled."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1025 plugin/legado.koplugin/main.lua:2239
+#: plugin/legado.koplugin/main.lua:1035 plugin/legado.koplugin/main.lua:2290
+#: plugin/legado.koplugin/main.lua:3296
 msgid "Current"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1031
+#: plugin/legado.koplugin/main.lua:1041
 msgid "Prefetch chapter count"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1038
+#: plugin/legado.koplugin/main.lua:1048
 msgid "Prefetch count set to %1 chapters."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1069 plugin/legado.koplugin/main.lua:1233
+#: plugin/legado.koplugin/main.lua:1079 plugin/legado.koplugin/main.lua:1243
 msgid "The current document is not a Legado chapter."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1127 plugin/legado.koplugin/main.lua:2916
+#: plugin/legado.koplugin/main.lua:1137 plugin/legado.koplugin/main.lua:4106
 msgid "Cannot match the reading session source:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1167 plugin/legado.koplugin/main.lua:1220
+#: plugin/legado.koplugin/main.lua:1177 plugin/legado.koplugin/main.lua:1230
 msgid "Cannot refresh the chapter list:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1172
+#: plugin/legado.koplugin/main.lua:1182
 msgid "Refreshing chapter list…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1181
+#: plugin/legado.koplugin/main.lua:1191
 msgid "Refreshed chapter list is empty."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1215
+#: plugin/legado.koplugin/main.lua:1225
 msgid "Chapter list refreshed; you are at the latest chapter."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1245
+#: plugin/legado.koplugin/main.lua:1255
 msgid "This is the first chapter."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1253
+#: plugin/legado.koplugin/main.lua:1263
 msgid "This is the latest chapter."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1266 plugin/legado.koplugin/main.lua:1268
-#: plugin/legado.koplugin/main.lua:1732 plugin/legado.koplugin/main.lua:2440
-#: plugin/legado.koplugin/main.lua:2737
+#: plugin/legado.koplugin/main.lua:1276 plugin/legado.koplugin/main.lua:1278
+#: plugin/legado.koplugin/main.lua:1783 plugin/legado.koplugin/main.lua:2491
 msgid "Unnamed source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1274
+#: plugin/legado.koplugin/main.lua:1284
 msgid "Text"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1276
+#: plugin/legado.koplugin/main.lua:1286
 msgid "Type %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1311
+#: plugin/legado.koplugin/main.lua:1327
 msgid "Source JSON must contain an object."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1316
+#: plugin/legado.koplugin/main.lua:1332
 msgid "Source is missing bookSourceName."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1319
+#: plugin/legado.koplugin/main.lua:1335
 msgid "Source is missing bookSourceUrl."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1327
+#: plugin/legado.koplugin/main.lua:1343
 msgid "Source JSON is invalid: "
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1341 plugin/legado.koplugin/main.lua:1354
+#: plugin/legado.koplugin/main.lua:1357 plugin/legado.koplugin/main.lua:1370
 msgid "Source %1: "
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1346
+#: plugin/legado.koplugin/main.lua:1362
 msgid "Source JSON must contain one source object."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1349
+#: plugin/legado.koplugin/main.lua:1365
 msgid "Source JSON contains no sources."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1407
+#: plugin/legado.koplugin/main.lua:1423
 msgid "Saving source list…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1412
+#: plugin/legado.koplugin/main.lua:1428
 #, lua-format
 msgid ""
 "Source list saved.\n"
@@ -273,393 +347,404 @@ msgid ""
 "Total: %s"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1422
+#: plugin/legado.koplugin/main.lua:1438
 msgid "Cannot save source list:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1439
+#: plugin/legado.koplugin/main.lua:1455
 msgid "Paste one source object or an array of source objects in JSON."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1445 plugin/legado.koplugin/main.lua:1671
-#: plugin/legado.koplugin/main.lua:1790 plugin/legado.koplugin/main.lua:1885
-#: plugin/legado.koplugin/main.lua:2188 plugin/legado.koplugin/main.lua:2822
-#: plugin/legado.koplugin/main.lua:3083
+#: plugin/legado.koplugin/main.lua:1461 plugin/legado.koplugin/main.lua:1722
+#: plugin/legado.koplugin/main.lua:1841 plugin/legado.koplugin/main.lua:1936
+#: plugin/legado.koplugin/main.lua:2239 plugin/legado.koplugin/main.lua:3447
+#: plugin/legado.koplugin/main.lua:4012 plugin/legado.koplugin/main.lua:4273
 msgid "Cancel"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1452 plugin/legado.koplugin/main.lua:1678
+#: plugin/legado.koplugin/main.lua:1468 plugin/legado.koplugin/main.lua:1729
 msgid "Save"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1469
+#: plugin/legado.koplugin/main.lua:1485
 msgid "Choose a source JSON file"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1479
+#: plugin/legado.koplugin/main.lua:1495
 msgid "Cannot open source file:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1494
+#: plugin/legado.koplugin/main.lua:1510
 msgid "Cannot load source list:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1500
+#: plugin/legado.koplugin/main.lua:1516 plugin/legado.koplugin/main.lua:3550
 msgid "Disabled"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1500
+#: plugin/legado.koplugin/main.lua:1516 plugin/legado.koplugin/main.lua:3550
 msgid "Enabled"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1510
+#: plugin/legado.koplugin/main.lua:1526
 msgid "The source list is empty. Add a source or import an Android backup."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1533
+#: plugin/legado.koplugin/main.lua:1549 plugin/legado.koplugin/main.lua:3299
 msgid "Login / actions"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1542
+#: plugin/legado.koplugin/main.lua:1558
 msgid "Search with this source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1552
+#: plugin/legado.koplugin/main.lua:1568
 msgid "Browse discovery"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1560
+#: plugin/legado.koplugin/main.lua:1576
+msgid "Move source to top"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:1582
+msgid "Move source to bottom"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:1588
 msgid "Edit source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1566
+#: plugin/legado.koplugin/main.lua:1594
 msgid "Enable source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1566
+#: plugin/legado.koplugin/main.lua:1594
 msgid "Disable source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1570 plugin/legado.koplugin/main.lua:1688
+#: plugin/legado.koplugin/main.lua:1598 plugin/legado.koplugin/main.lua:1739
 msgid "Updating source…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1571
+#: plugin/legado.koplugin/main.lua:1599
 msgid "Source enabled."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1571
+#: plugin/legado.koplugin/main.lua:1599
 msgid "Source disabled."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1576
+#: plugin/legado.koplugin/main.lua:1604
 msgid "Delete source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1584
+#: plugin/legado.koplugin/main.lua:1612
 msgid "Source actions: %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1618
+#: plugin/legado.koplugin/main.lua:1646 plugin/legado.koplugin/main.lua:1669
 msgid "Source operation failed:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1629
+#: plugin/legado.koplugin/main.lua:1656
+msgid "Reordering source…"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:1663
+msgid "Source order updated."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:1680
 msgid "Delete source %1?"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1630
+#: plugin/legado.koplugin/main.lua:1681
 msgid "Delete"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1632
+#: plugin/legado.koplugin/main.lua:1683
 msgid "Deleting source…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1639
+#: plugin/legado.koplugin/main.lua:1690
 msgid "Source deleted."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1645
+#: plugin/legado.koplugin/main.lua:1696
 msgid "Cannot delete source:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1659
+#: plugin/legado.koplugin/main.lua:1710
 msgid "Cannot encode source JSON:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1664
+#: plugin/legado.koplugin/main.lua:1715
 msgid "Edit source: %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1665
+#: plugin/legado.koplugin/main.lua:1716
 msgid "Edit the complete source object as JSON."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1684
+#: plugin/legado.koplugin/main.lua:1735
 msgid "Invalid source JSON:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1697
+#: plugin/legado.koplugin/main.lua:1748
 msgid "Source updated."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1703
+#: plugin/legado.koplugin/main.lua:1754
 msgid "Cannot update source:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1723 plugin/legado.koplugin/main.lua:2430
-#: plugin/legado.koplugin/main.lua:2727
+#: plugin/legado.koplugin/main.lua:1774 plugin/legado.koplugin/main.lua:2481
+#: plugin/legado.koplugin/main.lua:3197
 msgid "Cannot load sources:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1739
+#: plugin/legado.koplugin/main.lua:1790
 msgid "No enabled text source with login or source actions."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1744
+#: plugin/legado.koplugin/main.lua:1795
 msgid "Choose a source to log in"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1783
+#: plugin/legado.koplugin/main.lua:1834
 msgid "Login data for %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1783 plugin/legado.koplugin/main.lua:1880
-#: plugin/legado.koplugin/main.lua:1994 plugin/legado.koplugin/main.lua:2817
+#: plugin/legado.koplugin/main.lua:1834 plugin/legado.koplugin/main.lua:1931
+#: plugin/legado.koplugin/main.lua:2045 plugin/legado.koplugin/main.lua:4007
 msgid "text source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1784
+#: plugin/legado.koplugin/main.lua:1835
 msgid "Enter the login fields as a JSON object."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1797
+#: plugin/legado.koplugin/main.lua:1848
 msgid "Continue"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1803
+#: plugin/legado.koplugin/main.lua:1854
 msgid "Enter a valid JSON object, for example {\"user\":\"name\"}."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1820
+#: plugin/legado.koplugin/main.lua:1871
 msgid "Cannot load saved login data:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1869
+#: plugin/legado.koplugin/main.lua:1920
 msgid "This source login form contains unsupported controls:"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1880
+#: plugin/legado.koplugin/main.lua:1931
 msgid "Login to %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1892
+#: plugin/legado.koplugin/main.lua:1943
 msgid "Actions"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1943
+#: plugin/legado.koplugin/main.lua:1994
 msgid "Loading login form…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1946
+#: plugin/legado.koplugin/main.lua:1997
 msgid "Cannot build login form."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1954
+#: plugin/legado.koplugin/main.lua:2005
 msgid "Cannot build source login form:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1966 plugin/legado.koplugin/main.lua:1975
-#: plugin/legado.koplugin/main.lua:1989 plugin/legado.koplugin/main.lua:2377
-#: plugin/legado.koplugin/main.lua:2386 plugin/legado.koplugin/main.lua:2413
+#: plugin/legado.koplugin/main.lua:2017 plugin/legado.koplugin/main.lua:2026
+#: plugin/legado.koplugin/main.lua:2040 plugin/legado.koplugin/main.lua:2428
+#: plugin/legado.koplugin/main.lua:2437 plugin/legado.koplugin/main.lua:2464
 msgid "login"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:1994
+#: plugin/legado.koplugin/main.lua:2045
 msgid "Actions for %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2065
+#: plugin/legado.koplugin/main.lua:2116
 msgid "Toast"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2065
+#: plugin/legado.koplugin/main.lua:2116
 msgid "Log"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2070
+#: plugin/legado.koplugin/main.lua:2121
 msgid "Source messages:"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2076
+#: plugin/legado.koplugin/main.lua:2127
 msgid "Select"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2077
+#: plugin/legado.koplugin/main.lua:2128
 msgid "Toggle"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2078
+#: plugin/legado.koplugin/main.lua:2129
 msgid "Enter text"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2079
+#: plugin/legado.koplugin/main.lua:2130
 msgid "Action"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2080
+#: plugin/legado.koplugin/main.lua:2131
 msgid "Header"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2081 plugin/legado.koplugin/main.lua:3088
+#: plugin/legado.koplugin/main.lua:2132 plugin/legado.koplugin/main.lua:4278
 msgid "Open"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2087
+#: plugin/legado.koplugin/main.lua:2138
 msgid "Unnamed discovery entry"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2091
+#: plugin/legado.koplugin/main.lua:2142
 msgid "Loading discovery entries…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2094
+#: plugin/legado.koplugin/main.lua:2145
 msgid "Cannot load discovery entries."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2099
+#: plugin/legado.koplugin/main.lua:2150
 msgid "This source did not provide any discovery entries."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2116
+#: plugin/legado.koplugin/main.lua:2167
 msgid "Source messages"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2138
+#: plugin/legado.koplugin/main.lua:2189
 msgid "Discovery: %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2162
+#: plugin/legado.koplugin/main.lua:2213
 msgid "This discovery entry is a header and has no action."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2173
+#: plugin/legado.koplugin/main.lua:2224
 msgid "Cannot load discovery entries:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2184
+#: plugin/legado.koplugin/main.lua:2235
 msgid "Enter a value"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2193
+#: plugin/legado.koplugin/main.lua:2244 plugin/legado.koplugin/main.lua:3452
 msgid "Apply"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2218
+#: plugin/legado.koplugin/main.lua:2269
 msgid "This discovery entry has no selectable values."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2257
+#: plugin/legado.koplugin/main.lua:2308
 msgid "Applying discovery setting: %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2260
+#: plugin/legado.koplugin/main.lua:2311
 msgid "Discovery action failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2263
+#: plugin/legado.koplugin/main.lua:2314
 msgid "Discovery setting saved."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2264 plugin/legado.koplugin/main.lua:2393
+#: plugin/legado.koplugin/main.lua:2315 plugin/legado.koplugin/main.lua:2444
 msgid "Action return value:"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2277
+#: plugin/legado.koplugin/main.lua:2328
 msgid "Discovery action failed:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2286
+#: plugin/legado.koplugin/main.lua:2337
 msgid "Loading discovery page %1…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2290
+#: plugin/legado.koplugin/main.lua:2341
 msgid "Discovery request failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2297
+#: plugin/legado.koplugin/main.lua:2348
 msgid "No books found in this discovery page."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2308
+#: plugin/legado.koplugin/main.lua:2359
 msgid "Cannot load discovery page:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2321
+#: plugin/legado.koplugin/main.lua:2372
 msgid "Change discovery setting"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2322
+#: plugin/legado.koplugin/main.lua:2373
 msgid "Back to discovery"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2327
+#: plugin/legado.koplugin/main.lua:2378
 msgid "Next discovery page (%1)"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2328
+#: plugin/legado.koplugin/main.lua:2379
 msgid "Load more"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2337 plugin/legado.koplugin/main.lua:2870
-#: plugin/legado.koplugin/legado/book_detail.lua:152
-msgid "Unnamed book"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2344
+#: plugin/legado.koplugin/main.lua:2395
 msgid "Discovery results: %1 · page %2"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2377
+#: plugin/legado.koplugin/main.lua:2428
 msgid "Running source action: %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2380
+#: plugin/legado.koplugin/main.lua:2431
 msgid "Source login failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2385
+#: plugin/legado.koplugin/main.lua:2436
 #, lua-format
 msgid "Source action completed: %s"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2389
+#: plugin/legado.koplugin/main.lua:2440
 #, lua-format
 msgid "Cookies saved: %s"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2394
+#: plugin/legado.koplugin/main.lua:2445
 msgid "Login check return value:"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2397
+#: plugin/legado.koplugin/main.lua:2448
 msgid "Login check passed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2400
+#: plugin/legado.koplugin/main.lua:2451
 msgid "Login data saved."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2403
+#: plugin/legado.koplugin/main.lua:2454
 msgid "Source variables saved."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2406
+#: plugin/legado.koplugin/main.lua:2457
 msgid "Tap to continue with Actions."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2412
+#: plugin/legado.koplugin/main.lua:2463
 #, lua-format
 msgid ""
 "Source action failed: %s\n"
@@ -667,283 +752,420 @@ msgid ""
 "%s"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2447 plugin/legado.koplugin/main.lua:2744
+#: plugin/legado.koplugin/main.lua:2498 plugin/legado.koplugin/main.lua:3210
 msgid "No enabled text source with a search URL."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2452
+#: plugin/legado.koplugin/main.lua:2503
 msgid "Choose a text source"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2467
+#: plugin/legado.koplugin/main.lua:2518
 msgid "Cannot load bookshelf:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2471
+#: plugin/legado.koplugin/main.lua:2522
 msgid ""
 "Bookshelf is empty. Import an Android backup or search and download a book."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2480
+#: plugin/legado.koplugin/main.lua:2531
 msgid "Read"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2481
+#: plugin/legado.koplugin/main.lua:2532
 msgid "Unread"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2482
+#: plugin/legado.koplugin/main.lua:2533
 msgid "All books"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2494
+#: plugin/legado.koplugin/main.lua:2545
 msgid "%1 books"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2501
+#: plugin/legado.koplugin/main.lua:2552
 msgid "Legado bookshelf categories"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2520
+#: plugin/legado.koplugin/main.lua:2571
 msgid "Change bookshelf category"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2521
+#: plugin/legado.koplugin/main.lua:2572
 msgid "Categories"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2532 plugin/legado.koplugin/main.lua:2597
-#: plugin/legado.koplugin/main.lua:3268 plugin/legado.koplugin/main.lua:3296
+#: plugin/legado.koplugin/main.lua:2583 plugin/legado.koplugin/main.lua:2728
+#: plugin/legado.koplugin/main.lua:2762 plugin/legado.koplugin/main.lua:4458
+#: plugin/legado.koplugin/main.lua:4486
 msgid "Chapter %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2546
+#: plugin/legado.koplugin/main.lua:2597
 msgid "No books in this category"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2547
+#: plugin/legado.koplugin/main.lua:2598
 msgid "Empty"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2571
+#: plugin/legado.koplugin/main.lua:2622
 msgid "Cannot match book source:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2598
+#: plugin/legado.koplugin/main.lua:2763
 msgid "Not started"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2612 plugin/legado.koplugin/main.lua:2619
-#: plugin/legado.koplugin/main.lua:2656
+#: plugin/legado.koplugin/main.lua:2777 plugin/legado.koplugin/main.lua:2784
+#: plugin/legado.koplugin/main.lua:2822
 msgid "Cannot match book source."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2660
+#: plugin/legado.koplugin/main.lua:2826
 msgid "Loading book information…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2663
+#: plugin/legado.koplugin/main.lua:2829
 msgid "Book information request failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2705
+#: plugin/legado.koplugin/main.lua:2871
 msgid "Downloading cover…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2708
+#: plugin/legado.koplugin/main.lua:2874
 msgid "Cover download failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2749
-msgid "Change source for %1"
+#: plugin/legado.koplugin/main.lua:2933
+msgid "Ungrouped"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2762
-msgid "Searching %1…"
+#: plugin/legado.koplugin/main.lua:2983 plugin/legado.koplugin/main.lua:3480
+msgid "All groups"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2762
-msgid "source"
+#: plugin/legado.koplugin/main.lua:3046
+msgid "Author"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:2766 plugin/legado.koplugin/main.lua:2852
-msgid "Search failed."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2771
-msgid "No matching book on this source."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2925
-#, lua-format
-msgid "No matching book on %1."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2943
-msgid "Cannot search this source:\n"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2783
-msgid "Changing book source…"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2978
-msgid "Selected source result is incomplete."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2991
-msgid "Book is no longer in the bookshelf."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2961
-#, lua-format
-msgid "Change source to %1?\n\nCurrent source: %2\nBook: %3"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2808
-msgid "Cannot change source:\n"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2817
-msgid "Search in %1"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2878
-#, lua-format
-msgid "Search for %1 on this source. You can edit the keyword."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2882
-msgid "Search keyword"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2829
-msgid "Search"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2835
-msgid "Search keyword cannot be empty."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2849
-msgid "Searching…"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2856
-msgid "No books found."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2877
-msgid "Search results"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2895 plugin/legado.koplugin/main.lua:3060
-#: plugin/legado.koplugin/main.lua:3191
-msgid "Chapter list is empty."
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2924
-#: plugin/legado.koplugin/legado/book_detail.lua:32
-msgid "Book details"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2925
-msgid "Cover · introduction · source"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2931
-msgid "Continue reading chapter %1"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2939
-msgid "Download entire book (%1 chapters)"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2940
-msgid "EPUB + TXT"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2944
-msgid "Jump to chapter number"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2951
-msgid "Refresh chapter list"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2952
-msgid "Network request"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2959
-msgid "Downloaded"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2960
-msgid "VIP"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2962
-msgid "Unnamed chapter"
-msgstr ""
-
-#: plugin/legado.koplugin/main.lua:2983
-msgid "Chapters"
+#: plugin/legado.koplugin/main.lua:3047
+msgid "Info"
 msgstr ""
 
 #: plugin/legado.koplugin/main.lua:3048
+msgid "TOC count"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3049
+msgid "None"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3171
+msgid "starting"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3173
+msgid "Searching sources: %1/%2 · %3"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3179
+msgid "options pending"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3184
+msgid "Source search failed; tap Refresh to try again."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3187
+msgid "%1 matches from %2 sources"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3241 plugin/legado.koplugin/main.lua:3697
+msgid "Searching all sources…"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3242
+msgid "Refresh source results"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3248 plugin/legado.koplugin/main.lua:3440
+msgid "Filter source results"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3249
+msgid "Filter: %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3250
+msgid "Source name or title filter"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3254 plugin/legado.koplugin/main.lua:3497
+msgid "Source groups"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3259 plugin/legado.koplugin/main.lua:3578
+msgid "Change-source options"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3312
+msgid "%1 chapters"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3314
+msgid "TOC count skipped for memory safety"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3317
+msgid "Info unavailable"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3339
+msgid "No enabled source in selected groups"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3340
+msgid "Choose All groups or select another group."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3346
+msgid "No matching source results"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3348
+msgid "Clear the filter or choose another group."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3349
+msgid "Try Refresh or change the author check."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3357
+msgid "Source errors (%1)"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3358
+msgid "Tap to inspect; other sources continue."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3380
+msgid "Change source for %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3406 plugin/legado.koplugin/main.lua:3421
+msgid "Wait until source search finishes."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3410
+msgid "This is already the current source."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3441
+msgid "Filter the Android-style result list by source name or book title."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3443
+msgid "Source name"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3474
+msgid "Apply source-group filter"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3481 plugin/legado.koplugin/main.lua:3488
+msgid "Selected"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3488
+msgid "Not selected"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3560
+msgid "Apply change-source options"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3565
+msgid "Check author"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3566
+msgid "Load book information"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3568
+msgid "Probe TOC chapter count"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3570
+msgid "slow; count only, no TOC kept"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3612
+msgid "%1 source requests failed."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3615
+msgid "… and %1 more"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3748 plugin/legado.koplugin/main.lua:4042
+msgid "Search failed."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3821 plugin/legado.koplugin/main.lua:3834
+msgid "completed"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3856
+msgid "Source search was cancelled."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3868
+msgid "Selected source result is incomplete."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3875
+msgid "Changing book source…"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3881
+msgid "Book is no longer in the bookshelf."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3894 plugin/legado.koplugin/main.lua:4085
+#: plugin/legado.koplugin/main.lua:4250 plugin/legado.koplugin/main.lua:4381
+msgid "Chapter list is empty."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3998
+msgid "Cannot change source:\n"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4007
+msgid "Search in %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4019
+msgid "Search"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4025
+msgid "Search keyword cannot be empty."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4039
+msgid "Searching…"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4046
+msgid "No books found."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4067
+msgid "Search results"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4115
+msgid "Cover · introduction · source"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4121
+msgid "Continue reading chapter %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4129
+msgid "Download entire book (%1 chapters)"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4130
+msgid "EPUB + TXT"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4134
+msgid "Jump to chapter number"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4141
+msgid "Refresh chapter list"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4142
+msgid "Network request"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4149
+msgid "Downloaded"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4150
+msgid "VIP"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4152
+msgid "Unnamed chapter"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4173
+msgid "Chapters"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:4238
 msgid "Loading chapter list…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3056
+#: plugin/legado.koplugin/main.lua:4246
 msgid "Chapter list failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3077
+#: plugin/legado.koplugin/main.lua:4267
 msgid "Jump to a chapter in %1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3077
+#: plugin/legado.koplugin/main.lua:4267
 msgid "book"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3079
+#: plugin/legado.koplugin/main.lua:4269
 msgid "Enter 1-%1"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3093
+#: plugin/legado.koplugin/main.lua:4283
 msgid "Enter a whole number from 1 to %1."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3146
+#: plugin/legado.koplugin/main.lua:4336
 msgid "Cannot download chapter:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3149
+#: plugin/legado.koplugin/main.lua:4339
 msgid "Downloading chapter…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3152 plugin/legado.koplugin/main.lua:3282
+#: plugin/legado.koplugin/main.lua:4342 plugin/legado.koplugin/main.lua:4472
 msgid "Chapter download failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3195
+#: plugin/legado.koplugin/main.lua:4385
 msgid "This book has more than 5000 chapters; download it in smaller ranges."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3208
+#: plugin/legado.koplugin/main.lua:4398
 msgid "Downloading book (%1 chapters)"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3209
+#: plugin/legado.koplugin/main.lua:4399
 msgid "Cached chapters are skipped. Tap to stop; completed chapters are kept."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3212
+#: plugin/legado.koplugin/main.lua:4402
 msgid "Stop downloading? Completed chapters will be kept."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3229
+#: plugin/legado.koplugin/main.lua:4419
 #, lua-format
 msgid ""
 "Download stopped at chapter %s/%s.\n"
@@ -952,36 +1174,36 @@ msgid ""
 "Completed chapters were kept and can be resumed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3236 plugin/legado.koplugin/main.lua:3253
-#: plugin/legado.koplugin/main.lua:3286 plugin/legado.koplugin/main.lua:3312
+#: plugin/legado.koplugin/main.lua:4426 plugin/legado.koplugin/main.lua:4443
+#: plugin/legado.koplugin/main.lua:4476 plugin/legado.koplugin/main.lua:4502
 msgid "Download cancelled. Completed chapters were kept."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3241
+#: plugin/legado.koplugin/main.lua:4431
 msgid "Cannot save downloaded book:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3279
+#: plugin/legado.koplugin/main.lua:4469
 msgid "Downloading chapter %1/%2…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3324
+#: plugin/legado.koplugin/main.lua:4514
 msgid "Long-press an Android backup ZIP"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3332
+#: plugin/legado.koplugin/main.lua:4522
 msgid "Importing backup…"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3334
+#: plugin/legado.koplugin/main.lua:4524
 msgid "Backup import failed."
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3352
+#: plugin/legado.koplugin/main.lua:4542
 msgid "Reading history conversion:"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3355
+#: plugin/legado.koplugin/main.lua:4545
 #, lua-format
 msgid ""
 "Imported Android data.\n"
@@ -994,11 +1216,11 @@ msgid ""
 "Ignored Android members: %s%s"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3373
+#: plugin/legado.koplugin/main.lua:4563
 msgid "State:"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3376
+#: plugin/legado.koplugin/main.lua:4566
 #, lua-format
 msgid ""
 "Schema: %s\n"
@@ -1009,15 +1231,15 @@ msgid ""
 "Members: %s%s"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3377
+#: plugin/legado.koplugin/main.lua:4567
 msgid "Unknown"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3408
+#: plugin/legado.koplugin/main.lua:4598
 msgid "Source report failed:\n"
 msgstr ""
 
-#: plugin/legado.koplugin/main.lua:3412
+#: plugin/legado.koplugin/main.lua:4602
 #, lua-format
 msgid ""
 "Text sources: %s/%s\n"
@@ -1028,68 +1250,4 @@ msgid ""
 "Regex rules: %s\n"
 "Replacements: %s\n"
 "Templates: %s"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:76
-msgid "%1: %2"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:85
-msgid "No cover"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:161
-msgid "Unknown author"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:169
-msgid "Source"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:170
-msgid "Kind"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:171
-msgid "Last chapter"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:172
-msgid "Updated"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:173
-msgid "Word count"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:174
-msgid "Progress"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:198
-msgid "No introduction available."
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:216
-msgid "Introduction"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:230
-msgid "Continue reading"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:235
-msgid "Chapter list"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:242
-msgid "Change source"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:247
-msgid "Refresh book information"
-msgstr ""
-
-#: plugin/legado.koplugin/legado/book_detail.lua:254
-msgid "Close"
 msgstr ""
