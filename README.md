@@ -52,6 +52,13 @@ RSS、搜索历史和其他未来成员都会被忽略；其中书架条目的 `
 运行 `make plugin-zip` 可生成可直接复制的 `dist/legado.koplugin.zip`；解压后目录名
 应保持为 `legado.koplugin`。
 
+插件界面使用 KOReader 的 gettext 实例，并在加载插件元数据时从
+`l10n/<locale>/legado.mo` 合并插件自己的目录。当前随仓库提供 `zh_CN` 翻译；KOReader
+使用其他语言时，如果没有对应目录则回退到 Lua 源文本（英文）。新增语言时复制
+`l10n/zh_CN/legado.po`，翻译 `msgstr` 后使用 `msgfmt` 生成同目录下的 `legado.mo`。
+`make l10n` 会校验并重新生成简体中文目录，`make plugin-zip` 会自动包含编译后的目录。
+书名、书源名称、搜索结果、正文和源返回的错误详情属于数据，不会被界面目录误翻译。
+
 ## KOReader 插件
 
 将 `plugin/legado.koplugin` 复制到 KOReader 的 `plugins/` 目录后重启 KOReader。

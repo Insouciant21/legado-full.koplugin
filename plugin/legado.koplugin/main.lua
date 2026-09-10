@@ -517,7 +517,7 @@ function Legado:runWorker(message, task, on_success, options)
         if options.on_failure then
             options.on_failure(error_message)
         else
-            self:showOperationResult(message .. "\n\n" .. tostring(error_message or "unknown error"))
+            self:showOperationResult(message .. "\n\n" .. tostring(error_message or _("Unknown error.")))
         end
     end
 
@@ -532,7 +532,7 @@ function Legado:runWorker(message, task, on_success, options)
             end
             return rapidjson.encode({
                 ok = false,
-                error = tostring(err or result or "worker failed"),
+                error = tostring(err or result or _("Worker failed.")),
             })
         end, trap_target, true)
         if not completed then
@@ -540,7 +540,7 @@ function Legado:runWorker(message, task, on_success, options)
             return
         end
         if not payload then
-            report_failure("worker returned no data")
+            report_failure(_("Worker returned no data."))
             return
         end
         local rapidjson = require("rapidjson")
@@ -550,7 +550,7 @@ function Legado:runWorker(message, task, on_success, options)
             return
         end
         if response.ok ~= true then
-            report_failure(response.error or "unknown error")
+            report_failure(response.error or _("Unknown error."))
             return
         end
         release_trap()
@@ -682,7 +682,7 @@ function Legado:invalidateReaderSourceCache()
 end
 
 function Legado:resolveReaderSource(session)
-    if type(session) ~= "table" then return nil, "reading session is missing" end
+    if type(session) ~= "table" then return nil, _("Reading session is missing.") end
     local source_url = tostring(session.source_url or "")
     local source_name = tostring(session.source_name or "")
     local cache_key = source_url .. "\0" .. source_name
@@ -712,7 +712,7 @@ function Legado:resolveReaderSource(session)
             return source
         end
     end
-    return nil, "book source for reading session not found"
+    return nil, _("Book source for reading session not found.")
 end
 
 function Legado:installReaderHooks()
@@ -876,7 +876,7 @@ function Legado:startReaderPrefetch()
         self:runWorker(false, function()
             local Runtime = require("legado/runtime")
             local content, err = Runtime.chapter_content(source, chapter, session.book)
-            if not content then return nil, err or "prefetch failed" end
+            if not content then return nil, err or _("Prefetch failed.") end
             return content
         end, function(content)
             if self._prefetch_generation ~= generation
@@ -888,7 +888,7 @@ function Legado:startReaderPrefetch()
             if not path then
                 self._prefetch_jobs[chapter_index] = nil
                 for _, waiter in ipairs(job.waiters) do
-                    waiter(nil, "cannot save prefetched chapter")
+                    waiter(nil, _("Cannot save prefetched chapter."))
                 end
                 finish()
                 return
@@ -935,7 +935,7 @@ function Legado:startReaderPrefetch()
                 if self._prefetch_jobs[chapter_index] == job then
                     self._prefetch_jobs[chapter_index] = nil
                     for _, waiter in ipairs(job.waiters) do
-                        waiter(nil, "prefetch cancelled")
+                        waiter(nil, _("Prefetch cancelled."))
                     end
                 end
                 finish()
@@ -1239,15 +1239,15 @@ end
 
 local function validate_source(source)
     if type(source) ~= "table" then
-        return nil, "source JSON must contain an object"
+        return nil, _("Source JSON must contain an object.")
     end
     local name = tostring(source.bookSourceName or "")
     local url = tostring(source.bookSourceUrl or "")
     if name == "" then
-        return nil, "source is missing bookSourceName"
+        return nil, _("Source is missing bookSourceName.")
     end
     if url == "" then
-        return nil, "source is missing bookSourceUrl"
+        return nil, _("Source is missing bookSourceUrl.")
     end
     return true
 end
@@ -1255,7 +1255,7 @@ end
 local function decode_source_json(raw, allow_array)
     local decoded_ok, decoded = pcall(rapidjson.decode, raw or "")
     if not decoded_ok or type(decoded) ~= "table" then
-        return nil, "source JSON is invalid: " .. tostring(decoded)
+        return nil, _("Source JSON is invalid: ") .. tostring(decoded)
     end
 
     local sources = {}
@@ -1269,20 +1269,20 @@ local function decode_source_json(raw, allow_array)
         for index, source in ipairs(decoded) do
             local valid, validation_err = validate_source(source)
             if not valid then
-                return nil, "source " .. tostring(index) .. ": " .. validation_err
+                return nil, T(_("Source %1: "), index) .. validation_err
             end
             sources[#sources + 1] = source
         end
     else
-        return nil, "source JSON must contain one source object"
+        return nil, _("Source JSON must contain one source object.")
     end
     if #sources == 0 then
-        return nil, "source JSON contains no sources"
+        return nil, _("Source JSON contains no sources.")
     end
     for index, source in ipairs(sources) do
         local valid, validation_err = validate_source(source)
         if not valid then
-            return nil, "source " .. tostring(index) .. ": " .. validation_err
+            return nil, T(_("Source %1: "), index) .. validation_err
         end
         if source.bookSourceType == nil then
             source.bookSourceType = 0
@@ -1874,7 +1874,7 @@ function Legado:showSourceLogin(source)
         self:runWorker(_("Loading login form…"), function()
             local Runtime = require("legado/runtime")
             local value, err = Runtime.login_ui(source)
-            if not value then error(err or "cannot build login form") end
+            if not value then error(err or _("Cannot build login form.")) end
             return value
         end, function(value)
             self:showSourceLoginControls(source, value)
@@ -1993,7 +1993,7 @@ local function append_source_notifications(lines, notifications)
         end
         message = tostring(message or "")
         if message ~= "" then
-            local prefix = operation == "toast" and "Toast" or "Log"
+            local prefix = operation == "toast" and _("Toast") or _("Log")
             messages[#messages + 1] = prefix .. ": " .. message
         end
     end
@@ -2022,7 +2022,7 @@ function Legado:showExploreKinds(source)
     self:runWorker(_("Loading discovery entries…"), function()
         local Runtime = require("legado/runtime")
         local kinds, err = Runtime.explore_kinds(source)
-        if not kinds then return nil, err or "cannot load discovery entries" end
+        if not kinds then return nil, err or _("Cannot load discovery entries.") end
         return kinds
     end, function(kinds)
         if type(kinds) ~= "table" or #kinds == 0 then
@@ -2188,7 +2188,7 @@ function Legado:runExploreAction(source, kind, value)
     self:runWorker(T(_("Applying discovery setting: %1"), explore_kind_title(kind)), function()
         local Runtime = require("legado/runtime")
         local result, err = Runtime.explore_action(source, kind, value)
-        if not result then return nil, err or "discovery action failed" end
+        if not result then return nil, err or _("Discovery action failed.") end
         return result
     end, function(result)
         local lines = { _("Discovery setting saved.") }
@@ -2218,7 +2218,7 @@ function Legado:exploreSource(source, kind, page)
         function()
             local Runtime = require("legado/runtime")
             local result, err = Runtime.explore_source(source, kind, page)
-            if not result then return nil, err or "discovery request failed" end
+            if not result then return nil, err or _("Discovery request failed.") end
             return result
         end,
         function(result)
@@ -2308,7 +2308,7 @@ function Legado:runSourceLogin(source, values, action, label, context)
     self:runWorker(T(_("Running source action: %1"), label or action or _("login")), function()
         local Runtime = require("legado/runtime")
         local result, err = Runtime.login_source(source, values, action)
-        if not result then error(err or "source login failed") end
+        if not result then error(err or _("Source login failed.")) end
         return result
     end, function(result)
         local lines = {
@@ -2342,7 +2342,7 @@ function Legado:runSourceLogin(source, values, action, label, context)
             show_result(string.format(
                 _("Source action failed: %s\n\n%s"),
                 display_text(label or action or _("login")),
-                tostring(error_message or "unknown error")
+                tostring(error_message or _("Unknown error."))
             ))
         end,
         on_cancel = function()
@@ -2546,7 +2546,7 @@ function Legado:searchSource(source, keyword)
     self:runWorker(_("Searching…"), function()
         local Runtime = require("legado/runtime")
         local books, err = Runtime.search_source(source, keyword, 1)
-        if not books then return nil, err or "search failed" end
+        if not books then return nil, err or _("Search failed.") end
         return books
     end, function(books)
         if type(books) ~= "table" or #books == 0 then
@@ -2734,7 +2734,7 @@ function Legado:showChapters(source, book)
         local result, err = Runtime.chapter_list(source, book, {
             use_cached_info = true,
         })
-        if not result then return nil, err or "chapter list failed" end
+        if not result then return nil, err or _("Chapter list failed.") end
         return result
     end, function(result)
         if type(result) ~= "table" then
@@ -2830,7 +2830,7 @@ function Legado:downloadChapter(source, book, chapter, chapters, options)
     self:runWorker(_("Downloading chapter…"), function()
         local Runtime = require("legado/runtime")
         local content, err = Runtime.chapter_content(source, chapter, book)
-        if not content then return nil, err or "chapter download failed" end
+        if not content then return nil, err or _("Chapter download failed.") end
         return content
     end, function(content)
         local filename, err = self.storage:write_chapter(book, chapter, content)
@@ -2908,7 +2908,7 @@ function Legado:downloadBook(source, book, chapters)
     local function fail(index, error_message)
         close_dialog(string.format(
             _("Download stopped at chapter %s/%s.\n%s\n\nCompleted chapters were kept and can be resumed."),
-            tostring(index), tostring(total), tostring(error_message or "unknown error")
+            tostring(index), tostring(total), tostring(error_message or _("Unknown error."))
         ))
     end
 
@@ -2946,7 +2946,7 @@ function Legado:downloadBook(source, book, chapters)
             if cached_content ~= nil then
                 state.sections[index] = {
                     index = index,
-                    title = chapter.name or ("Chapter " .. tostring(index)),
+                    title = chapter.name or T(_("Chapter %1"), index),
                     content = cached_content,
                 }
                 state.done = index
@@ -2960,7 +2960,7 @@ function Legado:downloadBook(source, book, chapters)
         self:runWorker(T(_("Downloading chapter %1/%2…"), index, total), function()
             local Runtime = require("legado/runtime")
             local content, err = Runtime.chapter_content(source, chapter, book)
-            if not content then return nil, err or "chapter download failed" end
+            if not content then return nil, err or _("Chapter download failed.") end
             return content
         end, function(content)
             if state.cancelled then
@@ -2974,7 +2974,7 @@ function Legado:downloadBook(source, book, chapters)
             end
             state.sections[index] = {
                 index = index,
-                title = chapter.name or ("Chapter " .. tostring(index)),
+                title = chapter.name or T(_("Chapter %1"), index),
                 content = content,
             }
             state.done = index
@@ -3012,7 +3012,7 @@ function Legado:chooseBackupFile()
         onConfirm = function(filename)
             self:runWorker(_("Importing backup…"), function()
                 local result, err = Backup.import_archive(filename, self.storage:get_state_root())
-                if not result then return nil, err or "backup import failed" end
+                if not result then return nil, err or _("Backup import failed.") end
                 -- Android's three read-record tables are kept as supported
                 -- state members, then converted to the Kindle-native progress
                 -- and history files without importing Android reader options.
@@ -3055,7 +3055,7 @@ function Legado:onLegadoShowStatus()
     UIManager:show(InfoMessage:new{
         text = string.format(
             _("Schema: %s\nSources: %s\nBooks: %s\nDynamic categories: All, Reading, Unread, Read\nRead records: %s\nMembers: %s%s"),
-            tostring(state.schema_version or "unknown"),
+            tostring(state.schema_version or _("Unknown")),
             tostring(state.sources or 0),
             tostring(state.books or 0),
             tostring(state.read_records or 0),
