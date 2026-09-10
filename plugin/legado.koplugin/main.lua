@@ -2407,6 +2407,7 @@ function Legado:showBookshelf()
 end
 
 local function bookshelf_category_label(category_id)
+    if category_id == "reading" then return _("Reading") end
     if category_id == "read" then return _("Read") end
     if category_id == "unread" then return _("Unread") end
     return _("All books")
@@ -3053,7 +3054,7 @@ function Legado:onLegadoShowStatus()
     local error_line = state.error and ("\n" .. _("State:") .. " " .. tostring(state.error)) or ""
     UIManager:show(InfoMessage:new{
         text = string.format(
-            _("Schema: %s\nSources: %s\nBooks: %s\nDynamic categories: All, Read, Unread\nRead records: %s\nMembers: %s%s"),
+            _("Schema: %s\nSources: %s\nBooks: %s\nDynamic categories: All, Reading, Unread, Read\nRead records: %s\nMembers: %s%s"),
             tostring(state.schema_version or "unknown"),
             tostring(state.sources or 0),
             tostring(state.books or 0),

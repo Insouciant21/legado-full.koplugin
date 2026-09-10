@@ -462,15 +462,52 @@ function Storage:invalidate_reading_record_cache()
     self.history_settings = nil
 end
 
-local function progress_has_reading(value)
+local function progress_index(value)
     if type(value) == "table" then
-        local index = tonumber(value.index)
-        if index and index >= 1 then return true end
-        local position = tonumber(value.position or value.pos)
-        return position ~= nil and position > 0
+        return tonumber(value.index or value.chapter_index or value.chapterIndex)
     end
-    local index = tonumber(value)
-    return index ~= nil and index >= 1
+    return tonumber(value)
+end
+
+local function progress_position(value)
+    if type(value) ~= "table" then return 0 end
+    return math.max(0, tonumber(value.position or value.pos) or 0)
+end
+
+local function classify_book(book, progress_entry, history_entry)
+    local total = tonumber(book.totalChapterNum) or 0
+    local chapter_index = tonumber(book.durChapterIndex)
+    local chapter_position = math.max(0, tonumber(book.durChapterPos) or 0)
+
+    -- Android stores durChapterIndex as zero-based. The Kindle progress file
+    -- is one-based, so a newer native entry replaces the imported bookshelf
+    -- position before the category is derived.
+    local saved_index = progress_index(progress_entry)
+    if saved_index then
+        chapter_index = saved_index - 1
+        chapter_position = progress_position(progress_entry)
+    end
+
+    -- Keep the same completion boundary as Legado's dynamic bookshelf group:
+    -- reaching the last known chapter means the book is finished. This also
+    -- handles one-chapter books and a source whose refreshed index overshoots
+    -- its previous total.
+    if total > 0 and chapter_index and chapter_index >= total - 1 then
+        return "read"
+    end
+
+    local started = chapter_index and chapter_index > 0
+        or chapter_position > 0
+    if not started and saved_index then
+        -- Opening chapter one without moving the reading position should not
+        -- turn an unread book into an in-progress book. A history record is
+        -- stronger evidence because it is written after an actual session.
+        started = saved_index > 1 or progress_position(progress_entry) > 0
+    end
+    if not started and history_entry ~= nil then
+        started = true
+    end
+    return started and "reading" or "unread"
 end
 
 function Storage:get_reading_status(books)
@@ -480,18 +517,14 @@ function Storage:get_reading_status(books)
     if type(history) ~= "table" then history = {} end
     local status = {}
     for index, book in ipairs(books or {}) do
-        local is_read = false
         if type(book) == "table" then
-            is_read = progress_has_reading(progress[book_key(book)])
-            if not is_read and book.name and tostring(book.name) ~= "" then
-                -- Imported readRecord*.json data is normalized by
-                -- import_reading_records() into this name/author index. It is
-                -- intentionally the only historical source used by the
-                -- dynamic bookshelf categories.
-                is_read = history[history_key(book.name, book.author)] ~= nil
-            end
+            local progress_entry = progress[book_key(book)]
+            local history_entry = book.name and tostring(book.name) ~= ""
+                and history[history_key(book.name, book.author)] or nil
+            status[index] = classify_book(book, progress_entry, history_entry)
+        else
+            status[index] = "unread"
         end
-        status[index] = is_read
     end
     return status
 end

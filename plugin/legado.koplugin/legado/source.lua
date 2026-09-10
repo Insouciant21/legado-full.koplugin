@@ -66,6 +66,7 @@ end
 
 local CATEGORY_IDS = {
     all = "all",
+    reading = "reading",
     read = "read",
     unread = "unread",
 }
@@ -75,8 +76,9 @@ function SourceCatalog:categories()
     -- the `group` bitmask are not part of the Kindle bookshelf model.
     return {
         { id = CATEGORY_IDS.all },
-        { id = CATEGORY_IDS.read },
+        { id = CATEGORY_IDS.reading },
         { id = CATEGORY_IDS.unread },
+        { id = CATEGORY_IDS.read },
     }
 end
 
@@ -85,10 +87,10 @@ function SourceCatalog:books_for_category(books, category_id, reading_status)
     if type(books) ~= "table" then return selected end
     for index, book in ipairs(books) do
         local include = category_id == CATEGORY_IDS.all
-        if category_id == CATEGORY_IDS.read then
-            include = reading_status and reading_status[index] == true
-        elseif category_id == CATEGORY_IDS.unread then
-            include = not (reading_status and reading_status[index] == true)
+        if category_id ~= CATEGORY_IDS.all then
+            local status = reading_status and reading_status[index]
+                or CATEGORY_IDS.unread
+            include = status == category_id
         end
         if include then
             selected[#selected + 1] = { book = book, index = index }

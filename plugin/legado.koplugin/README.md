@@ -52,11 +52,13 @@ stores statistics separately in `reading-history.lua`.
 The bookshelf is available directly from the KOReader main-menu page as
 `Legado bookshelf`; it is also available as `Legado → Open bookshelf`. The
 dispatcher action `Legado: open bookshelf` can be assigned to a gesture or key.
-The first screen contains only `All books`, `Read` and `Unread`. These are
-plugin-owned dynamic categories. `Read` is derived from the Kindle-native
-reading progress or the imported Android reading history; `Unread` contains
-books without either record. Android bookshelf groups and the book `group`
-bitmask are not imported or consulted.
+The first screen contains only `All books`, `Reading`, `Unread` and `Read`.
+These are plugin-owned dynamic categories. `Reading` means that a book has
+started progress but has not reached its last known chapter; `Read` means its
+current chapter is the last known chapter; `Unread` has no start evidence.
+The Kindle-native progress and imported Android reading history are combined.
+Android bookshelf groups and the book `group` bitmask are not imported or
+consulted.
 
 Selecting a book opens its source chapter list. The current reading session
 contains the book, source and chapter list. Its static TOC is stored separately

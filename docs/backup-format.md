@@ -27,10 +27,13 @@ book. Those fields belong to Android UI/classification state and are removed
 before the bytes are written to Kindle.
 
 `bookGroup.json`, when present in an Android archive, is ignored. The Kindle
-bookshelf has exactly three plugin-owned dynamic categories: `All`, `Read` and
-`Unread`. A book is `Read` when it has a Kindle-native reading progress entry
-or an imported Android reading-history entry; otherwise it is `Unread`.
-`All` contains every imported bookshelf entry.
+bookshelf has exactly four plugin-owned dynamic categories: `All`, `Reading`,
+`Unread` and `Read`. They are derived from the Legado book progress fields
+`durChapterIndex` and `totalChapterNum`, the Kindle-native progress entry and
+the imported Android reading history. A book at the last known chapter is
+`Read`; a book with start evidence but not at that boundary is `Reading`; a
+book without start evidence is `Unread`. `All` contains every imported
+bookshelf entry.
 
 The three `readRecord*.json` members are retained as raw JSON data. They are
 read by a separate import step, not by every bookshelf or chapter-list load.
