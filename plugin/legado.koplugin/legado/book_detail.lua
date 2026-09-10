@@ -307,6 +307,22 @@ function BookDetail:init()
     }
 end
 
+-- ButtonDialog normally invalidates only its movable popup rectangle.  The
+-- details page deliberately paints a full-screen surface, so leaving the
+-- default dirty rectangle in place can expose stale text from the menu below
+-- (for example, a bookshelf's "Page 2 of 2" footer).
+function BookDetail:onShow()
+    UIManager:setDirty(self, function()
+        return "full", Screen:getSize()
+    end)
+end
+
+function BookDetail:onCloseWidget()
+    UIManager:setDirty(nil, function()
+        return "full", Screen:getSize()
+    end)
+end
+
 function BookDetail:dispatch(action)
     local callback = self["on_" .. action]
     if self.on_close then self.on_close(self) end
