@@ -16,6 +16,7 @@ local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
 local Size = require("ui/size")
+local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
@@ -70,7 +71,10 @@ end
 
 local function clean_intro(value)
     local text = Content.process(value, { remove_same_title = false })
-    return truncate_utf8(text, 3200)
+    -- Keep a generous safety limit, but let the detail page's scroll area
+    -- decide how much is visible. The previous 3200-byte cut made ordinary
+    -- book introductions look incomplete before the user could scroll.
+    return truncate_utf8(text, 12000)
 end
 
 local function line(label, value, width)
@@ -201,14 +205,18 @@ function BookDetail:init()
     local intro = clean_intro(self.book.intro)
     if intro == "" then intro = _("No introduction available.") end
     local intro_width = title_width - 2 * Size.padding.default
+    local intro_height = math.floor(Screen:getHeight() * 0.34)
     local intro_body = TextBoxWidget:new{
         text = intro,
         width = intro_width,
-        height = math.floor(Screen:getHeight() * 0.20),
         height_adjust = true,
-        height_overflow_show_ellipsis = true,
         face = Font:getFace("x_smallinfofont"),
         alignment = "left",
+    }
+    local intro_scroll = ScrollableContainer:new{
+        dimen = Geom:new{ w = intro_width, h = intro_height },
+        show_parent = self,
+        intro_body,
     }
     local intro_panel = FrameContainer:new{
         padding = Size.padding.default,
@@ -222,7 +230,7 @@ function BookDetail:init()
                 padding = 0,
             },
             VerticalSpan:new{ width = Size.span.vertical_small },
-            intro_body,
+            intro_scroll,
         },
     }
     intro_panel.not_focusable = true

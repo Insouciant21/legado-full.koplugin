@@ -2577,15 +2577,16 @@ function Legado:showBookshelfBooks(catalog, books, category, reading_status, cat
             if item.empty_category or item.choose_category or not item.book then
                 return true
             end
-            UIManager:close(menu)
-            self:showBookDetail(item.book, item.book_index)
+            -- Keep the bookshelf underneath the detail page so Back/Close
+            -- returns to the exact category and scroll position.
+            self:showBookDetail(item.book, item.book_index, nil, menu)
             return true
         end,
     }
     UIManager:show(book_menu)
 end
 
-function Legado:showBookDetail(book, book_index, source_override)
+function Legado:showBookDetail(book, book_index, source_override, parent_widget)
     if type(book) ~= "table" then return end
     local source = source_override
     if not source then
@@ -2622,10 +2623,10 @@ function Legado:showBookDetail(book, book_index, source_override)
             self:showChapters(source, book)
         end,
         on_change_source = book_index and function()
-            self:showBookSourcePicker(book, book_index)
+            self:showBookSourcePicker(book, book_index, parent_widget)
         end or nil,
         on_refresh = source and function()
-            self:refreshBookDetail(book, book_index, source)
+            self:refreshBookDetail(book, book_index, source, nil, parent_widget)
         end or nil,
     }
     self._book_detail_widget = detail
@@ -2637,20 +2638,22 @@ function Legado:showBookDetail(book, book_index, source_override)
     if needs_info then
         UIManager:nextTick(function()
             if self._book_detail_widget == detail then
-                self:refreshBookDetail(book, book_index, source, detail)
+                self:refreshBookDetail(
+                    book, book_index, source, detail, parent_widget
+                )
             end
         end)
     elseif trim_text(book.coverUrl) ~= ""
             and not self.storage:find_cover_path(book) then
         UIManager:nextTick(function()
             if self._book_detail_widget == detail then
-                self:downloadBookCover(book, book_index, source, detail)
+                self:downloadBookCover(book, book_index, source, detail, parent_widget)
             end
         end)
     end
 end
 
-function Legado:refreshBookDetail(book, book_index, source, detail_widget)
+function Legado:refreshBookDetail(book, book_index, source, detail_widget, parent_widget)
     if not source then
         self:showOperationResult(_("Cannot match book source."))
         return
@@ -2694,11 +2697,11 @@ function Legado:refreshBookDetail(book, book_index, source, detail_widget)
             self._book_detail_widget = nil
             UIManager:close(detail_widget)
         end
-        self:showBookDetail(result.book, book_index, source)
+        self:showBookDetail(result.book, book_index, source, parent_widget)
     end)
 end
 
-function Legado:downloadBookCover(book, book_index, source, detail_widget)
+function Legado:downloadBookCover(book, book_index, source, detail_widget, parent_widget)
     if trim_text(book and book.coverUrl) == "" then return end
     local cover_base = self.storage:get_cover_base_path(book)
     self:runWorker(_("Downloading cover…"), function()
@@ -2711,7 +2714,7 @@ function Legado:downloadBookCover(book, book_index, source, detail_widget)
         if detail_widget and self._book_detail_widget == detail_widget then
             self._book_detail_widget = nil
             UIManager:close(detail_widget)
-            self:showBookDetail(book, book_index, source)
+            self:showBookDetail(book, book_index, source, parent_widget)
         end
     end, {
         invisible = true,
@@ -2719,7 +2722,7 @@ function Legado:downloadBookCover(book, book_index, source, detail_widget)
     })
 end
 
-function Legado:showBookSourcePicker(book, book_index)
+function Legado:showBookSourcePicker(book, book_index, parent_widget)
     local catalog = SourceCatalog:new(self.storage:get_state_root())
     local sources, err = catalog:list()
     if not sources then
@@ -2750,13 +2753,13 @@ function Legado:showBookSourcePicker(book, book_index)
         items_per_page = 12,
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
-            self:searchBookOnSource(item.source, book, book_index)
+            self:searchBookOnSource(item.source, book, book_index, parent_widget)
         end,
     }
     UIManager:show(source_menu)
 end
 
-function Legado:searchBookOnSource(source, book, book_index)
+function Legado:searchBookOnSource(source, book, book_index, parent_widget)
     self:runWorker(
         T(_("Searching %1…"), display_text(source.bookSourceName or _("source"))),
         function()
@@ -2771,13 +2774,15 @@ function Legado:searchBookOnSource(source, book, book_index)
                 return
             end
             self:showSearchResults(source, books, function(candidate)
-                self:replaceBookSource(book, book_index, source, candidate)
+                self:replaceBookSource(
+                    book, book_index, source, candidate, parent_widget
+                )
             end)
         end
     )
 end
 
-function Legado:replaceBookSource(book, book_index, source, candidate)
+function Legado:replaceBookSource(book, book_index, source, candidate, parent_widget)
     local updated = replace_book_source(book, candidate, source)
     self:runWorker(_("Changing book source…"), function()
         local catalog = SourceCatalog:new(self.storage:get_state_root())
@@ -2800,7 +2805,7 @@ function Legado:replaceBookSource(book, book_index, source, candidate)
         self._reader_session_cache = nil
         self._reader_session_cache_file = nil
         self:invalidateReaderSourceCache()
-        self:showBookDetail(updated, book_index, source)
+        self:showBookDetail(updated, book_index, source, parent_widget)
     end, {
         on_failure = function(error_message)
             self:showOperationResult(
@@ -2986,8 +2991,7 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
         onMenuSelect = function(menu, item)
             if item.detail then
                 local action_source = get_source()
-                UIManager:close(menu)
-                self:showBookDetail(display_book, nil, action_source)
+                self:showBookDetail(display_book, nil, action_source, menu)
                 return
             end
             if item.refresh then
