@@ -107,6 +107,14 @@ Selecting a source provides login/Actions, search, full JSON editing,
 enable/disable and delete. `Add source` accepts a source object or array from
 pasted JSON or a JSON file.
 
+Book details provide `Change source`: choose an enabled searchable text source,
+edit the search keyword, select and confirm a result. The plugin fetches the new
+TOC before committing the replacement, maps the old reading position by chapter
+title (then index), removes old source chapter/cover/session caches, and refreshes
+the detail and chapter-list parent. Long-press a source in this picker to open
+its generic login/Actions flow; cancelling or failing a search returns to the
+same picker.
+
 The rule layer covers common CSS/legacy selectors, JSONPath, XPath, regex,
 `@put/@get` variables, templates, pagination, replacements and Legado
 JavaScript. QuickJS maps generic `java.ajax`, response objects, Cookie/login

@@ -64,6 +64,79 @@ function SourceCatalog:books()
     return books
 end
 
+local function book_text(book, ...)
+    if type(book) ~= "table" then return "" end
+    for _, key in ipairs({...}) do
+        local value = book[key]
+        if value ~= nil and tostring(value) ~= "" then
+            return tostring(value)
+        end
+    end
+    return ""
+end
+
+local function same_book_name_author(left, right)
+    local left_name = book_text(left, "name", "bookName")
+    local right_name = book_text(right, "name", "bookName")
+    if left_name == "" or right_name == "" or left_name ~= right_name then
+        return false
+    end
+    local left_author = book_text(left, "author", "bookAuthor")
+    local right_author = book_text(right, "author", "bookAuthor")
+    return left_author == "" or right_author == ""
+        or left_author == right_author
+end
+
+function SourceCatalog:find_book_index(book)
+    local books, err = self:books()
+    if not books then return nil, err end
+    if type(book) ~= "table" then return nil, "book must be an object" end
+
+    -- Prefer source-independent IDs and exact URLs. This keeps the detail
+    -- page usable when it was opened from a chapter menu whose book table was
+    -- freshly enriched by bookInfo.
+    local id = book_text(book, "id", "bookId")
+    if id ~= "" then
+        for index, candidate in ipairs(books) do
+            if book_text(candidate, "id", "bookId") == id then
+                return index
+            end
+        end
+    end
+    local url = book_text(book, "bookUrl")
+    if url ~= "" then
+        for index, candidate in ipairs(books) do
+            if book_text(candidate, "bookUrl") == url then
+                return index
+            end
+        end
+    end
+
+    -- A source change gives the book a new bookUrl. Match the stable display
+    -- identity next, but keep origin in the first pass so duplicate titles
+    -- from different sources do not select the wrong shelf entry.
+    local origin = book_text(book, "origin", "bookSourceUrl", "sourceUrl")
+    for index, candidate in ipairs(books) do
+        if same_book_name_author(book, candidate)
+                and (origin == ""
+                    or book_text(candidate, "origin", "bookSourceUrl", "sourceUrl") == origin) then
+            return index
+        end
+    end
+
+    -- Finally accept a unique title/author match. This is needed for imported
+    -- bookInfo results that omit origin fields, but never guess between two
+    -- identical shelf entries.
+    local match
+    for index, candidate in ipairs(books) do
+        if same_book_name_author(book, candidate) then
+            if match then return nil, "multiple bookshelf entries match this book" end
+            match = index
+        end
+    end
+    return match, match and nil or "book is not in the bookshelf"
+end
+
 local CATEGORY_IDS = {
     all = "all",
     reading = "reading",

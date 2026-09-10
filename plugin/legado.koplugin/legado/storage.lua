@@ -145,7 +145,17 @@ end
 
 local function book_key(book)
     if type(book) ~= "table" then return tostring(book or "") end
-    return tostring(book.id or book.bookUrl or book.bookSourceUrl or book.name or "")
+    for _, value in ipairs({
+        book.id,
+        book.bookUrl,
+        book.bookSourceUrl,
+        book.name,
+    }) do
+        if value ~= nil and tostring(value) ~= "" then
+            return tostring(value)
+        end
+    end
+    return ""
 end
 
 function Storage:get_book_dir(book)
@@ -192,6 +202,36 @@ function Storage:remove_cover_variants(book, keep_path)
             os.remove(path)
         end
     end
+end
+
+function Storage:clear_book_cache(book)
+    -- A book directory is owned entirely by this plugin.  Source switching
+    -- must remove the old source's chapters, generated EPUB/TXT files, cover,
+    -- and identity marker together; otherwise a later switch back can mistake
+    -- an old chapter with the same numeric index for fresh content.
+    local book_dir = self:get_book_dir(book)
+    if lfs.attributes(book_dir, "mode") ~= "directory" then return 0 end
+    local removed = 0
+    for name in lfs.dir(book_dir) do
+        if name ~= "." and name ~= ".." then
+            local path = book_dir .. "/" .. name
+            if lfs.attributes(path, "mode") == "file" and os.remove(path) then
+                removed = removed + 1
+            end
+        end
+    end
+    self.readable_cache = {}
+    return removed
+end
+
+function Storage:invalidate_reader_session_cache()
+    -- Source switching writes the new session from a worker process. Drop
+    -- both the decoded values and LuaSettings handles held by the long-lived
+    -- UI object before it tries to display the refreshed chapter menu.
+    self.reader_session_settings = nil
+    self.reader_position_settings = nil
+    self.reader_session_static = nil
+    self.reader_session_load_attempted = false
 end
 
 function Storage:get_chapter_path(book, chapter)
@@ -827,12 +867,76 @@ function Storage:update_reader_session_index(current_index)
 end
 
 function Storage:get_last_chapter(book)
-    local books = self:get_progress_settings():readSetting("books") or {}
-    local value = books[book_key(book)]
-    if type(value) == "table" then value = value.index end
-    local index = tonumber(value)
+    local entry = self:get_progress_entry(book)
+    local index = type(entry) == "table" and tonumber(entry.index) or tonumber(entry)
     if index and index >= 1 then return math.floor(index) end
     return nil
+end
+
+function Storage:get_progress_entry(book)
+    local books = self:get_progress_settings():readSetting("books") or {}
+    local value = books[book_key(book)]
+    if type(value) ~= "table" then
+        local index = tonumber(value)
+        return index and { index = math.floor(index) } or nil
+    end
+    local result = {}
+    for key, child in pairs(value) do
+        if type(key) == "string"
+                and (type(child) == "string" or type(child) == "number"
+                    or type(child) == "boolean") then
+            result[key] = child
+        end
+    end
+    return result
+end
+
+function Storage:migrate_progress(old_book, new_book, entry)
+    if type(old_book) ~= "table" or type(new_book) ~= "table"
+            or type(entry) ~= "table" then
+        return false
+    end
+    local old_key = book_key(old_book)
+    local new_key = book_key(new_book)
+    if old_key == "" or new_key == "" or old_key == new_key then
+        return false
+    end
+    local settings = self:get_progress_settings()
+    local books = settings:readSetting("books") or {}
+    local copied = {}
+    for key, value in pairs(entry) do copied[key] = value end
+    books[new_key] = copied
+    -- There is only one bookshelf record for this logical book. Remove the
+    -- old key so a later source switch cannot revive stale progress.
+    books[old_key] = nil
+    settings:saveSetting("books", books)
+    settings:flush()
+    return true
+end
+
+function Storage:clear_reader_session_for_book(book)
+    if type(book) ~= "table" then return false end
+    local settings = self:get_reader_session_settings()
+    local stored = self.reader_session_static
+        or settings:readSetting("session")
+    if type(stored) ~= "table" or type(stored.book) ~= "table" then
+        return false
+    end
+    local stored_key = book_key(stored.book)
+    local current_key = book_key(book)
+    local same_name = tostring(stored.book.name or "") ~= ""
+        and tostring(stored.book.name or "") == tostring(book.name or "")
+        and tostring(stored.book.author or "") == tostring(book.author or "")
+    if stored_key ~= current_key and not same_name then return false end
+
+    settings:delSetting("session")
+    settings:flush()
+    local position = self:get_reader_position_settings()
+    position:delSetting("position")
+    position:flush()
+    self.reader_session_static = nil
+    self.reader_session_load_attempted = true
+    return true
 end
 
 function Storage:save_last_chapter(book, chapter)
@@ -840,11 +944,19 @@ function Storage:save_last_chapter(book, chapter)
     if not index or index < 1 then return false end
     local settings = self:get_progress_settings()
     local books = settings:readSetting("books") or {}
-    books[book_key(book)] = {
+    local key = book_key(book)
+    local previous = books[key]
+    local entry = {
         index = math.floor(index),
         title = chapter.name or "",
         updated_at = os.time(),
     }
+    local position = chapter and tonumber(chapter.position)
+    if position == nil and type(previous) == "table" then
+        position = tonumber(previous.position)
+    end
+    if position ~= nil then entry.position = math.max(0, position) end
+    books[key] = entry
     settings:saveSetting("books", books)
     settings:flush()
     return true

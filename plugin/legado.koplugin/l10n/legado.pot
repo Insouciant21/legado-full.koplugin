@@ -774,8 +774,30 @@ msgstr ""
 msgid "No matching book on this source."
 msgstr ""
 
+#: plugin/legado.koplugin/main.lua:2925
+#, lua-format
+msgid "No matching book on %1."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:2943
+msgid "Cannot search this source:\n"
+msgstr ""
+
 #: plugin/legado.koplugin/main.lua:2783
 msgid "Changing book source…"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:2978
+msgid "Selected source result is incomplete."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:2991
+msgid "Book is no longer in the bookshelf."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:2961
+#, lua-format
+msgid "Change source to %1?\n\nCurrent source: %2\nBook: %3"
 msgstr ""
 
 #: plugin/legado.koplugin/main.lua:2808
@@ -784,6 +806,15 @@ msgstr ""
 
 #: plugin/legado.koplugin/main.lua:2817
 msgid "Search in %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:2878
+#, lua-format
+msgid "Search for %1 on this source. You can edit the keyword."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:2882
+msgid "Search keyword"
 msgstr ""
 
 #: plugin/legado.koplugin/main.lua:2829

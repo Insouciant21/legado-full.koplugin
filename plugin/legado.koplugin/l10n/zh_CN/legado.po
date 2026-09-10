@@ -777,9 +777,31 @@ msgstr "搜索失败。"
 msgid "No matching book on this source."
 msgstr "此书源未找到匹配书籍。"
 
+#: plugin/legado.koplugin/main.lua:2925
+#, lua-format
+msgid "No matching book on %1."
+msgstr "在 %1 中未找到匹配书籍。"
+
+#: plugin/legado.koplugin/main.lua:2943
+msgid "Cannot search this source:\n"
+msgstr "无法搜索此书源：\n"
+
 #: plugin/legado.koplugin/main.lua:2783
 msgid "Changing book source…"
 msgstr "正在更换书源…"
+
+#: plugin/legado.koplugin/main.lua:2978
+msgid "Selected source result is incomplete."
+msgstr "选中的书源结果信息不完整。"
+
+#: plugin/legado.koplugin/main.lua:2991
+msgid "Book is no longer in the bookshelf."
+msgstr "这本书已不在书架中。"
+
+#: plugin/legado.koplugin/main.lua:2961
+#, lua-format
+msgid "Change source to %1?\n\nCurrent source: %2\nBook: %3"
+msgstr "要更换为 %1 吗？\n\n当前书源：%2\n书籍：%3"
 
 #: plugin/legado.koplugin/main.lua:2808
 msgid "Cannot change source:\n"
@@ -788,6 +810,15 @@ msgstr "无法更换书源：\n"
 #: plugin/legado.koplugin/main.lua:2817
 msgid "Search in %1"
 msgstr "在 %1 中搜索"
+
+#: plugin/legado.koplugin/main.lua:2878
+#, lua-format
+msgid "Search for %1 on this source. You can edit the keyword."
+msgstr "将在此书源搜索 %1；你可以修改关键词。"
+
+#: plugin/legado.koplugin/main.lua:2882
+msgid "Search keyword"
+msgstr "搜索关键词"
 
 #: plugin/legado.koplugin/main.lua:2829
 msgid "Search"
