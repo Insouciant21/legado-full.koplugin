@@ -14,7 +14,8 @@ from typing import Any
 from .backup import BackupBundle, IMPORT_MEMBERS, _validate_member_name
 
 
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
+LEGACY_STATE_SCHEMA_VERSION = 2
 STATE_FORMAT = "legado-imported-data"
 
 
@@ -38,10 +39,6 @@ class StateDirectory:
     def bookshelf_path(self) -> Path:
         return self.root / "bookshelf.json"
 
-    @property
-    def groups_path(self) -> Path:
-        return self.root / "bookGroup.json"
-
     def member_path(self, name: str) -> Path:
         if name not in IMPORT_MEMBERS:
             raise StateError(f"unsupported state member: {name}")
@@ -54,7 +51,10 @@ class StateDirectory:
             raise StateError(f"invalid state manifest: {exc}") from exc
         if not isinstance(data, dict):
             raise StateError("invalid state manifest")
-        if data.get("state_schema_version") != STATE_SCHEMA_VERSION:
+        if data.get("state_schema_version") not in {
+            STATE_SCHEMA_VERSION,
+            LEGACY_STATE_SCHEMA_VERSION,
+        }:
             raise StateError("unsupported state schema version")
         if data.get("format") != STATE_FORMAT:
             raise StateError("unsupported state format")
@@ -62,6 +62,7 @@ class StateDirectory:
 
     def load_bundle(self) -> BackupBundle:
         manifest = self.manifest()
+        legacy_v2 = manifest.get("state_schema_version") == LEGACY_STATE_SCHEMA_VERSION
         expected: dict[str, dict[str, Any]] = {}
         manifest_members = manifest.get("members")
         if not isinstance(manifest_members, list):
@@ -71,7 +72,9 @@ class StateDirectory:
                 raise StateError("state manifest has an invalid member entry")
             name = item["name"]
             _validate_member_name(name)
-            if name not in IMPORT_MEMBERS:
+            if name not in IMPORT_MEMBERS and not (
+                legacy_v2 and name == "bookGroup.json"
+            ):
                 raise StateError(f"state manifest contains an unsupported member: {name}")
             if name in expected:
                 raise StateError(f"duplicate state manifest member: {name}")
@@ -81,14 +84,16 @@ class StateDirectory:
                 raise StateError(f"state member size is invalid: {name}")
             expected[name] = item
 
-        if set(expected) != set(IMPORT_MEMBERS):
-            missing = sorted(set(IMPORT_MEMBERS) - set(expected))
-            extra = sorted(set(expected) - set(IMPORT_MEMBERS))
+        supported_expected = set(expected).intersection(IMPORT_MEMBERS)
+        if supported_expected != set(IMPORT_MEMBERS):
+            missing = sorted(set(IMPORT_MEMBERS) - supported_expected)
             if missing:
                 raise StateError(f"state manifest is missing members: {missing}")
-            raise StateError(f"state manifest contains extra members: {extra}")
+            raise StateError("state manifest contains extra members")
 
         allowed = set(IMPORT_MEMBERS) | {"manifest.json"}
+        if legacy_v2:
+            allowed.add("bookGroup.json")
         try:
             children = list(self.root.iterdir())
         except OSError as exc:
@@ -140,7 +145,7 @@ def _manifest_for(bundle: BackupBundle) -> dict[str, Any]:
 
 
 def import_bundle(bundle: BackupBundle, destination: str | os.PathLike[str]) -> StateDirectory:
-    """Materialize only the six supported import members at state root."""
+    """Materialize only the five supported import members at state root."""
 
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)

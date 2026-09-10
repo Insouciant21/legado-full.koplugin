@@ -4,7 +4,7 @@ The Kindle port deliberately has a narrow backup boundary.  An Android
 archive is an input source for the data the plugin can use:
 
 * book sources (including every source rule and login field);
-* the bookshelf and its groups;
+* the bookshelf;
 * Android reading-history records.
 
 Android reader preferences, themes, servers, RSS data, search history and
@@ -26,13 +26,12 @@ import zipfile
 IMPORT_MEMBERS: tuple[str, ...] = (
     "bookSource.json",
     "bookshelf.json",
-    "bookGroup.json",
     "readRecord.json",
     "readRecordDetail.json",
     "readRecordSession.json",
 )
 JSON_IMPORT_MEMBERS = frozenset(IMPORT_MEMBERS)
-CORE_MEMBERS = frozenset({"bookSource.json", "bookshelf.json", "bookGroup.json"})
+CORE_MEMBERS = frozenset({"bookSource.json", "bookshelf.json"})
 RECORD_MEMBERS = frozenset(
     {"readRecord.json", "readRecordDetail.json", "readRecordSession.json"}
 )
@@ -97,10 +96,15 @@ def _sanitize_bookshelf(value: Any) -> list[Any]:
     for book in value:
         if isinstance(book, dict):
             # readConfig is Android reader UI configuration (font, colors,
-            # margins, and related options), not bookshelf metadata. KOReader
-            # owns all of those settings and must never receive this object.
+            # margins, and related options). The group fields belong to
+            # Android's bookshelf classifier, not the Kindle model.
             sanitized.append(
-                {key: child for key, child in book.items() if key != "readConfig"}
+                {
+                    key: child
+                    for key, child in book.items()
+                    if key
+                    not in {"readConfig", "group", "groupId", "bookGroupId", "bookGroup"}
+                }
             )
         else:
             sanitized.append(book)
@@ -162,7 +166,7 @@ class BackupSummary:
 
 
 class BackupBundle:
-    """The sanitized import result for the six supported members."""
+    """The sanitized import result for the five supported members."""
 
     def __init__(
         self,
@@ -231,7 +235,6 @@ class BackupBundle:
     def summary(self) -> BackupSummary:
         sources = self.parsed_json["bookSource.json"]
         books = self.parsed_json["bookshelf.json"]
-        groups = self.parsed_json["bookGroup.json"]
         source_dicts = [source for source in sources if isinstance(source, dict)]
         infos = tuple(
             MemberInfo(
@@ -283,7 +286,6 @@ class BackupBundle:
             counts={
                 "book_sources": len(sources),
                 "bookshelf_books": len(books),
-                "book_groups": len(groups),
                 "read_records": _collection_count(
                     self.parsed_json["readRecord.json"]
                 ),

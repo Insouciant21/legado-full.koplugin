@@ -11,7 +11,7 @@ from legado_kindle.state import StateDirectory, StateError, import_bundle
 
 
 class BackupTests(unittest.TestCase):
-    def make_archive(self, directory: Path) -> Path:
+    def make_archive(self, directory: Path, include_group: bool = True) -> Path:
         path = directory / "sample.zip"
         source = {
             "bookSourceType": 0,
@@ -88,18 +88,29 @@ class BackupTests(unittest.TestCase):
                 )
             for filename, data in ignored.items():
                 archive.writestr(filename, data)
+            if include_group:
+                archive.writestr("bookGroup.json", b"not-json")
         return path
 
-    def test_import_boundary_keeps_sources_groups_records_and_strips_reader_config(self) -> None:
+    def test_import_boundary_keeps_sources_records_and_strips_reader_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             bundle = BackupBundle.load(self.make_archive(Path(temporary)))
             self.assertEqual(tuple(bundle.members), IMPORT_MEMBERS)
             self.assertEqual(set(bundle.parsed_json), set(IMPORT_MEMBERS))
+            self.assertIn("bookGroup.json", bundle.ignored_files)
             self.assertIn("readConfig.json", bundle.ignored_files)
             self.assertIn("config.xml", bundle.ignored_files)
             self.assertNotIn("readConfig", bundle.json("bookshelf.json")[0])
-            self.assertEqual(bundle.json("bookGroup.json")[0]["groupId"], 7)
+            self.assertNotIn("group", bundle.json("bookshelf.json")[0])
             self.assertEqual(len(bundle.json("readRecordSession.json")), 1)
+
+    def test_archive_without_book_groups_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = BackupBundle.load(
+                self.make_archive(Path(temporary), include_group=False)
+            )
+            self.assertNotIn("bookGroup.json", bundle.members)
+            self.assertEqual(tuple(bundle.members), IMPORT_MEMBERS)
 
     def test_summary_is_value_redacted_and_counts_rules_and_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -107,7 +118,6 @@ class BackupTests(unittest.TestCase):
             summary = archive.summary().as_dict()
             self.assertEqual(summary["counts"]["book_sources"], 1)
             self.assertEqual(summary["counts"]["bookshelf_books"], 1)
-            self.assertEqual(summary["counts"]["book_groups"], 1)
             self.assertEqual(summary["counts"]["read_records"], 1)
             self.assertEqual(summary["counts"]["read_record_details"], 1)
             self.assertEqual(summary["counts"]["read_record_sessions"], 1)
@@ -146,17 +156,15 @@ class BackupTests(unittest.TestCase):
             source = BackupBundle.load(self.make_archive(root))
             state = import_bundle(source, root / "state")
             self.assertIsInstance(state, StateDirectory)
-            self.assertEqual(state.manifest()["state_schema_version"], 2)
+            self.assertEqual(state.manifest()["state_schema_version"], 3)
             self.assertEqual(
                 {child.name for child in state.root.iterdir()},
                 set(IMPORT_MEMBERS) | {"manifest.json"},
             )
             self.assertFalse((state.root / "android").exists())
+            self.assertFalse((state.root / "bookGroup.json").exists())
             self.assertNotIn("readConfig", json.loads(state.bookshelf_path.read_text()))
-            self.assertEqual(
-                json.loads(state.groups_path.read_text())[0]["groupName"],
-                "fixture group",
-            )
+            self.assertNotIn("group", json.loads(state.bookshelf_path.read_text())[0])
             self.assertEqual(len(state.load_bundle().json("readRecord.json")), 1)
 
     def test_state_directory_rejects_tampered_member_and_android_settings(self) -> None:
@@ -171,6 +179,26 @@ class BackupTests(unittest.TestCase):
             (state.root / "readConfig.json").write_bytes(b"[]")
             with self.assertRaises(StateError):
                 state.load_bundle()
+
+    def test_legacy_v2_state_is_read_without_book_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = import_bundle(
+                BackupBundle.load(self.make_archive(root)), root / "state"
+            )
+            manifest = state.manifest()
+            manifest["state_schema_version"] = 2
+            group_data = b"[{\"groupId\":7}]"
+            (state.root / "bookGroup.json").write_bytes(group_data)
+            manifest["members"].append(
+                {"name": "bookGroup.json", "size": len(group_data), "kind": "json"}
+            )
+            state.manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+            )
+            loaded = state.load_bundle()
+            self.assertEqual(tuple(loaded.members), IMPORT_MEMBERS)
+            self.assertNotIn("bookGroup.json", loaded.members)
 
 
 if __name__ == "__main__":

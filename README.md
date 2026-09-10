@@ -3,7 +3,7 @@
 这是一个面向已越狱 Kindle Paperwhite 4 的 KOReader 插件项目，目标是：
 
 - 在 Kindle 本地执行文本小说书源；
-- 从 `legado-with-MD3` / Legado Android 备份导入书源、书架、书架分组和阅读记录；
+- 从 `legado-with-MD3` / Legado Android 备份导入书源、书架和阅读记录；
 - 使用 KOReader 负责最终阅读、字体、字号、排版和阅读界面；
 - 以插件能力补充连续章节、预载和连载目录刷新。
 
@@ -31,21 +31,21 @@ python3 -m legado_kindle source-report /path/to/backup.zip
 `source-report` 只输出每条书源使用了哪些规则能力，不输出书源名称、地址或规则值，
 便于在导入 Kindle 前发现使用 JavaScript/XPath 的书源。
 
-Android 备份中仅有以下 6 个成员会进入 Kindle 状态：
+Android 备份中仅有以下 5 个成员会进入 Kindle 状态：
 
 ```text
 bookSource.json
 bookshelf.json
-bookGroup.json
 readRecord.json
 readRecordDetail.json
 readRecordSession.json
 ```
 
-`readConfig.json`、书架条目中的 `readConfig`、主题、界面设置、服务端、RSS、搜索历史
-和其他未来成员都会被忽略；其中书架条目的 `readConfig` 会被剥离。书源 JSON 本身
+`bookGroup.json`、`readConfig.json`、书架条目中的 `readConfig` 和分类字段、主题、界面设置、服务端、
+RSS、搜索历史和其他未来成员都会被忽略；其中书架条目的 `readConfig` 会被剥离。书源 JSON 本身
 完整保留，因此聚合源需要的规则、分页、变量、登录和 JavaScript 字段不会因为导入
-边界而被硬编码替换。阅读记录会转换为 Kindle 端的阅读历史和续读章节；Android
+边界而被硬编码替换。阅读记录会转换为 Kindle 端的阅读历史和续读章节；书架只提供
+书籍元数据，分类完全根据 Kindle 阅读进度或导入的阅读记录动态计算；Android
 记录表本身没有章节索引，章节位置使用 `bookshelf.json` 的
 `durChapterIndex/durChapterTitle/durChapterTime`。
 
@@ -63,9 +63,9 @@ readRecordSession.json
 书源/数组或导入 JSON 文件。`Legado → Backup & restore` 只有 Android 备份导入入口，
 `Diagnostics` 提供状态和兼容性报告。
 
-打开书架后会先显示从 Android 备份导入的分组，包括“全部书籍”和 Legado 的内置动态
-分组；自定义正数分组按 Legado 的幂次二进制标记与书籍 `group` 字段匹配。选择分组后进入书籍列表，
-每本书会显示来源和已导入的续读章节。分组、书源和阅读历史都保存在插件自己的
+打开书架后只显示三个动态分类：“全部书籍”“已读”“未读”。其中“已读”表示存在
+Kindle 阅读进度或导入的 Android 阅读记录，“未读”表示两者都不存在。分类不读取
+Android 的 `bookGroup.json` 或书籍 `group` 字段；书源和阅读历史仍保存在插件自己的
 状态目录中，不依赖 Android UI 配置。
 
 选择章节后会建立轻量阅读会话：翻到章节末尾会直接打开下一章，不必退回书架；阅读器

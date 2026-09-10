@@ -2,16 +2,15 @@
 
 This document describes the subset of a Legado Android backup that the Kindle
 plugin imports. It is deliberately an import-only format: the Kindle plugin no
-longer exports or round-trips Android configuration.
+longer exports or round-trips Android configuration or bookshelf groups.
 
 ## Supported members
 
-The Android ZIP must contain these six top-level JSON members:
+The Android ZIP must contain these five top-level JSON members:
 
 ```text
 bookSource.json
 bookshelf.json
-bookGroup.json
 readRecord.json
 readRecordDetail.json
 readRecordSession.json
@@ -23,14 +22,15 @@ Kindle port. This is the compatibility boundary needed by ordinary and
 aggregate Legado sources.
 
 `bookshelf.json` is kept as book metadata and progress metadata, except for
-the optional `readConfig` object on each book. That object belongs to the
-Android reader UI and is removed before the bytes are written to Kindle.
+the optional `readConfig` object and Android bookshelf group fields on each
+book. Those fields belong to Android UI/classification state and are removed
+before the bytes are written to Kindle.
 
-`bookGroup.json` is retained so the Kindle bookshelf can show imported custom
-groups and Legado's built-in dynamic groups. Positive group IDs use Legado's
-power-of-two bit flags and are matched against a book's stored `group` value;
-negative built-in IDs are evaluated from generic book type, source, progress
-and update fields.
+`bookGroup.json`, when present in an Android archive, is ignored. The Kindle
+bookshelf has exactly three plugin-owned dynamic categories: `All`, `Read` and
+`Unread`. A book is `Read` when it has a Kindle-native reading progress entry
+or an imported Android reading-history entry; otherwise it is `Unread`.
+`All` contains every imported bookshelf entry.
 
 The three `readRecord*.json` members are retained as raw JSON data. They are
 read by a separate import step, not by every bookshelf or chapter-list load.
@@ -54,12 +54,12 @@ rssSources.json
 searchHistory.json
 ```
 
-Malformed ignored members do not prevent the six supported members from being
+Malformed ignored members do not prevent the five supported members from being
 imported. ZIP path traversal and duplicate supported members are still rejected.
 
 ## Kindle state layout
 
-The active state is version 2 and contains only the six supported members plus
+The active state is version 3 and contains only the five supported members plus
 the manifest:
 
 ```text
@@ -67,7 +67,6 @@ the manifest:
 ├── manifest.json
 ├── bookSource.json
 ├── bookshelf.json
-├── bookGroup.json
 ├── readRecord.json
 ├── readRecordDetail.json
 └── readRecordSession.json
@@ -100,17 +99,18 @@ KOReader's own document sidecars remain the authority for font, font size,
 layout, CSS, embedded-font handling, position, bookmarks and other reader UI
 state. The plugin does not copy Android reader settings into these sidecars.
 
-## Migration from the temporary v1 layout
+## Migration from older layouts
 
-Earlier development builds used:
+Earlier development builds used either:
 
 ```text
 <state>/manifest.json
 <state>/android/<all Android backup members>
 ```
 
-On the next plugin start, a v1 state is read only for the six supported
-members, normalized, and atomically replaced by the version-2 layout. The old
-`android/` directory is removed after activation so stale Android font/theme/
-reader settings cannot be reused. A failed activation restores the old
-directory before reporting the error.
+or a version-2 state with `bookGroup.json` at the state root. On the next
+plugin start, the useful source, bookshelf and reading-record members are read,
+normalized, and atomically replaced by the version-3 layout. The old
+`android/` directory and old `bookGroup.json` are removed after activation so
+stale Android font/theme/reader settings and classifications cannot be reused.
+A failed activation restores the old directory before reporting the error.

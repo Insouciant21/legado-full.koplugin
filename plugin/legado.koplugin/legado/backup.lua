@@ -2,7 +2,7 @@
 --
 -- This is intentionally an import-only boundary.  The Android archive is
 -- allowed to contain many settings, but the Kindle state keeps only the data
--- that this plugin can use: sources, bookshelf, groups and reading history.
+-- that this plugin can use: sources, bookshelf and reading history.
 -- KOReader owns every reading presentation option.
 
 local Archiver = require("ffi/archiver")
@@ -13,13 +13,12 @@ local util = require("util")
 
 local Backup = {}
 
-Backup.STATE_SCHEMA_VERSION = 2
+Backup.STATE_SCHEMA_VERSION = 3
 Backup.STATE_FORMAT = "legado-imported-data"
 
 Backup.IMPORT_MEMBERS = {
     "bookSource.json",
     "bookshelf.json",
-    "bookGroup.json",
     "readRecord.json",
     "readRecordDetail.json",
     "readRecordSession.json",
@@ -31,7 +30,7 @@ local record_members = {}
 for _, filename in ipairs(Backup.IMPORT_MEMBERS) do
     import_members[filename] = true
 end
-for _, filename in ipairs({ "bookSource.json", "bookshelf.json", "bookGroup.json" }) do
+for _, filename in ipairs({ "bookSource.json", "bookshelf.json" }) do
     core_members[filename] = true
 end
 for _, filename in ipairs({ "readRecord.json", "readRecordDetail.json", "readRecordSession.json" }) do
@@ -117,8 +116,11 @@ local function sanitize_bookshelf(value)
             local copy = {}
             for key, child in pairs(book) do
                 -- Android ReadConfig contains font, colors, spacing, CSS and
-                -- other UI state. It must not cross into KOReader.
-                if key ~= "readConfig" then
+                -- other UI state. The group fields belong to Android's
+                -- bookshelf classifier, which is not imported either.
+                if key ~= "readConfig" and key ~= "group"
+                        and key ~= "groupId" and key ~= "bookGroupId"
+                        and key ~= "bookGroup" then
                     copy[key] = child
                 end
             end
@@ -163,8 +165,6 @@ local function summary_for(bundle)
         and parsed["bookSource.json"] or {}
     local books = type(parsed["bookshelf.json"]) == "table"
         and parsed["bookshelf.json"] or {}
-    local groups = type(parsed["bookGroup.json"]) == "table"
-        and parsed["bookGroup.json"] or {}
     local counts = bundle.record_counts or {}
     if bundle.manifest and bundle.manifest.summary
             and type(bundle.manifest.summary.counts) == "table" then
@@ -180,7 +180,6 @@ local function summary_for(bundle)
         counts = {
             book_sources = #sources,
             bookshelf_books = #books,
-            book_groups = #groups,
             read_records = counts.read_records or 0,
             read_record_details = counts.read_record_details or 0,
             read_record_sessions = counts.read_record_sessions or 0,
@@ -241,7 +240,7 @@ function Backup.read_archive(filename)
             members[entry.path] = data
             if core_members[entry.path] then
                 -- Keep the sanitized bookshelf bytes as the state source of
-                -- truth; source and group bytes retain their complete schema.
+                -- truth; source bytes retain their complete schema.
                 if entry.path == "bookshelf.json" then
                     local encoded_ok, encoded = pcall(rapidjson.encode, value)
                     if not encoded_ok or type(encoded) ~= "string" then
@@ -416,13 +415,17 @@ function Backup.read_state(state_root)
     local manifest, err = read_manifest(state_root)
     if not manifest then return fail(err) end
 
-    -- v1 was the temporary migration format. Read its six useful members once
-    -- so Storage can compact it immediately; no old Android setting is kept.
+    -- v1 was the temporary migration format. Read its useful members once so
+    -- Storage can compact it immediately; no old Android setting is kept.
     if manifest.state_schema_version == 1
             and manifest.format == "legado-android-backup" then
         return read_legacy_state(state_root, manifest)
     end
-    if manifest.state_schema_version ~= Backup.STATE_SCHEMA_VERSION then
+    -- v2 was the previous active layout. It also contained bookGroup.json,
+    -- which is deliberately ignored while the state is compacted to v3.
+    local legacy_v2 = manifest.state_schema_version == 2
+        and manifest.format == Backup.STATE_FORMAT
+    if manifest.state_schema_version ~= Backup.STATE_SCHEMA_VERSION and not legacy_v2 then
         return fail("unsupported Legado state schema")
     end
     if manifest.format ~= Backup.STATE_FORMAT then
@@ -434,8 +437,10 @@ function Backup.read_state(state_root)
         return fail("state manifest has no member list")
     end
     for _, info in ipairs(manifest.members) do
+        local is_legacy_group = legacy_v2 and type(info) == "table"
+            and info.name == "bookGroup.json"
         if type(info) ~= "table" or not is_safe_member_name(info.name)
-                or not import_members[info.name] then
+                or (not import_members[info.name] and not is_legacy_group) then
             return fail("state manifest has an unsupported member")
         end
         if expected[info.name] ~= nil then
@@ -455,6 +460,7 @@ function Backup.read_state(state_root)
 
     local allowed = { ["manifest.json"] = true }
     for filename in pairs(import_members) do allowed[filename] = true end
+    if legacy_v2 then allowed["bookGroup.json"] = true end
     for filename in lfs.dir(state_root) do
         if filename ~= "." and filename ~= ".." and not allowed[filename] then
             return fail("state contains an unsupported member: " .. tostring(filename))
@@ -474,6 +480,14 @@ function Backup.read_state(state_root)
         if core_members[filename] then
             local value, parse_err = parse_json_member(filename, data)
             if parse_err then return fail(parse_err) end
+            if filename == "bookshelf.json" then
+                local encoded_ok, encoded = pcall(rapidjson.encode, value)
+                if not encoded_ok or type(encoded) ~= "string" then
+                    return fail("cannot normalize bookshelf.json")
+                end
+                data = encoded
+                members[filename] = data
+            end
             parsed_json[filename] = value
         end
     end
@@ -482,6 +496,7 @@ function Backup.read_state(state_root)
         parsed_json = parsed_json,
         record_counts = {},
         manifest = manifest,
+        legacy = legacy_v2,
     }
 end
 
@@ -491,12 +506,29 @@ function Backup.compact_legacy_state(state_root)
         -- No state yet is normal on a fresh installation.
         return true
     end
-    if manifest.state_schema_version ~= 1
-            or manifest.format ~= "legado-android-backup" then
+    local is_v1 = manifest.state_schema_version == 1
+        and manifest.format == "legado-android-backup"
+    local is_v2 = manifest.state_schema_version == 2
+        and manifest.format == Backup.STATE_FORMAT
+    local is_current = manifest.state_schema_version == Backup.STATE_SCHEMA_VERSION
+        and manifest.format == Backup.STATE_FORMAT
+    if not is_v1 and not is_v2 and not is_current then
         return true
     end
     local bundle, err = Backup.read_state(state_root)
     if not bundle then return nil, err end
+    if is_current then
+        -- v3 was briefly shipped with the old book group fields still present
+        -- in bookshelf.json. Re-materialize only when normalization changed
+        -- those bytes, so upgrading that intermediate state is idempotent.
+        local raw_books, raw_err = read_file(state_root .. "/bookshelf.json")
+        if not raw_books then return nil, raw_err end
+        if bundle.members["bookshelf.json"] ~= raw_books then
+            local result, materialize_err = Backup.materialize(bundle, state_root)
+            if not result then return nil, materialize_err end
+        end
+        return true
+    end
     local result, materialize_err = Backup.materialize(bundle, state_root)
     if not result then return nil, materialize_err end
     return true

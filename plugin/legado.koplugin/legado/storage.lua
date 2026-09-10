@@ -60,8 +60,9 @@ function Storage:new()
         object.settings:saveSetting("prefetch_count", math.max(5, math.min(10, math.floor(legacy_prefetch))))
         object.settings:flush()
     end
-    -- Compact the temporary v1 state once. This removes the old android/
-    -- directory, including Android UI settings that must never be reused.
+    -- Compact old state layouts once. This removes the old android/ directory
+    -- and the previous imported bookGroup.json, including Android UI settings
+    -- that must never be reused.
     local compacted, compact_error = Backup.compact_legacy_state(object.state_root)
     if not compacted then
         object.legacy_migration_error = compact_error
@@ -88,7 +89,6 @@ function Storage:read_state()
         sources = counts.book_sources or 0,
         books = counts.bookshelf_books or 0,
         members = summary.member_count or 0,
-        groups = counts.book_groups or 0,
         read_records = counts.read_records or 0,
         read_record_details = counts.read_record_details or 0,
         read_record_sessions = counts.read_record_sessions or 0,
@@ -451,6 +451,49 @@ function Storage:get_history_settings()
         self.history_settings = LuaSettings:open(self.history_path)
     end
     return self.history_settings
+end
+
+function Storage:invalidate_reading_record_cache()
+    -- Backup import is performed by a short-lived Storage instance so the
+    -- large record tables do not remain attached to the UI object. Drop any
+    -- settings handles cached by the long-lived instance before the next
+    -- dynamic bookshelf classification.
+    self.progress_settings = nil
+    self.history_settings = nil
+end
+
+local function progress_has_reading(value)
+    if type(value) == "table" then
+        local index = tonumber(value.index)
+        if index and index >= 1 then return true end
+        local position = tonumber(value.position or value.pos)
+        return position ~= nil and position > 0
+    end
+    local index = tonumber(value)
+    return index ~= nil and index >= 1
+end
+
+function Storage:get_reading_status(books)
+    local progress = self:get_progress_settings():readSetting("books") or {}
+    if type(progress) ~= "table" then progress = {} end
+    local history = self:get_history_settings():readSetting("books") or {}
+    if type(history) ~= "table" then history = {} end
+    local status = {}
+    for index, book in ipairs(books or {}) do
+        local is_read = false
+        if type(book) == "table" then
+            is_read = progress_has_reading(progress[book_key(book)])
+            if not is_read and book.name and tostring(book.name) ~= "" then
+                -- Imported readRecord*.json data is normalized by
+                -- import_reading_records() into this name/author index. It is
+                -- intentionally the only historical source used by the
+                -- dynamic bookshelf categories.
+                is_read = history[history_key(book.name, book.author)] ~= nil
+            end
+        end
+        status[index] = is_read
+    end
+    return status
 end
 
 function Storage:import_reading_records()

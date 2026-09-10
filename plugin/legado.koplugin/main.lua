@@ -2398,77 +2398,62 @@ function Legado:showBookshelf()
         self:showOperationResult(_("Cannot load bookshelf:\n") .. tostring(err))
         return
     end
-    local groups, group_err = catalog:groups()
-    if not groups then
-        self:showOperationResult(_("Cannot load bookshelf groups:\n") .. tostring(group_err))
-        return
-    end
     if #books == 0 then
         self:showOperationResult(_("Bookshelf is empty. Import an Android backup or search and download a book."))
         return
     end
-    self:showBookshelfGroups(catalog, books, groups)
+    local reading_status = self.storage:get_reading_status(books)
+    self:showBookshelfCategories(catalog, books, reading_status)
 end
 
-function Legado:showBookshelfGroups(catalog, books, groups)
-    local items = {
-        {
-            text = T(_("All books (%1)"), #books),
-            mandatory = _("Open bookshelf"),
-            group = nil,
-        },
-    }
-    for group_index, group in ipairs(groups) do
-        if type(group) == "table" and group.show ~= false then
-            local selected = catalog:books_for_group(books, group)
-            -- Match the Android bookshelf's visible-group behavior: an
-            -- empty dynamic group is not useful in the reading flow, and a
-            -- large backup often contains audio/video groups with no text
-            -- books. All books remains the explicit empty-safe entry above.
-            if #selected > 0 then
-                local name = display_text(group.groupName or group.name or group.title)
-                if name == "" then name = _("Unnamed group") end
-                items[#items + 1] = {
-                    text = name,
-                    mandatory = T(_("%1 books"), #selected),
-                    group = group,
-                }
-            end
-        end
+local function bookshelf_category_label(category_id)
+    if category_id == "read" then return _("Read") end
+    if category_id == "unread" then return _("Unread") end
+    return _("All books")
+end
+
+function Legado:showBookshelfCategories(catalog, books, reading_status)
+    local categories = catalog:categories()
+    local items = {}
+    for _, category in ipairs(categories) do
+        local selected = catalog:books_for_category(
+            books, category.id, reading_status
+        )
+        items[#items + 1] = {
+            text = bookshelf_category_label(category.id),
+            mandatory = T(_("%1 books"), #selected),
+            category = category,
+        }
     end
-    local group_menu
-    group_menu = LegadoMenu:new{
-        title = _("Legado bookshelf groups"),
+
+    local category_menu
+    category_menu = LegadoMenu:new{
+        title = _("Legado bookshelf categories"),
         item_table = items,
         items_per_page = 12,
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
-            self:showBookshelfBooks(catalog, books, item.group, groups)
+            self:showBookshelfBooks(
+                catalog, books, item.category, reading_status, categories
+            )
         end,
     }
-    UIManager:show(group_menu)
+    UIManager:show(category_menu)
 end
 
-function Legado:showBookshelfBooks(catalog, books, group, groups)
-    local entries
-    if group then
-        entries = catalog:books_for_group(books, group)
-    else
-        entries = {}
-        for index, book in ipairs(books) do
-            entries[#entries + 1] = { book = book, index = index }
-        end
-    end
+function Legado:showBookshelfBooks(catalog, books, category, reading_status, categories)
+    local category_id = category and category.id or "all"
+    local entries = catalog:books_for_category(books, category_id, reading_status)
     local items = {}
-    if groups and #groups > 0 then
+    if categories and #categories > 0 then
         items[#items + 1] = {
-            text = _("Change bookshelf group"),
-            mandatory = _("Groups"),
-            choose_group = true,
+            text = _("Change bookshelf category"),
+            mandatory = _("Categories"),
+            choose_category = true,
             separator = true,
         }
     end
-    for entry_index, entry in ipairs(entries) do
+    for _, entry in ipairs(entries) do
         local book = entry.book
         if type(book) == "table" and book.name and book.name ~= "" then
             local author = book.author and book.author ~= ""
@@ -2486,23 +2471,28 @@ function Legado:showBookshelfBooks(catalog, books, group, groups)
             }
         end
     end
-    if #items == 0 or (#items == 1 and items[1].choose_group) then
-        self:showOperationResult(_("This bookshelf group is empty."))
-        return
+    if #entries == 0 then
+        items[#items + 1] = {
+            text = _("No books in this category"),
+            mandatory = _("Empty"),
+            empty_category = true,
+            separator = true,
+        }
     end
     local title = _("Legado bookshelf")
-    if group then
-        title = title .. " · " .. display_text(group.groupName or group.name or group.title)
-    end
+    title = title .. " · " .. bookshelf_category_label(category_id)
     local book_menu
     book_menu = LegadoMenu:new{
         title = title,
         item_table = items,
         items_per_page = 12,
         onMenuSelect = function(menu, item)
-            if item.choose_group then
+            if item.empty_category then
+                return
+            end
+            if item.choose_category then
                 UIManager:close(menu)
-                self:showBookshelfGroups(catalog, books, groups)
+                self:showBookshelfCategories(catalog, books, reading_status)
                 return
             end
             UIManager:close(menu)
@@ -3031,6 +3021,7 @@ function Legado:chooseBackupFile()
                 result.reading_import_error = reading_err
                 return result
             end, function(result)
+                self.storage:invalidate_reading_record_cache()
                 self:invalidateReaderSourceCache()
                 self._reader_session_cache = nil
                 self._reader_session_cache_file = nil
@@ -3041,10 +3032,9 @@ function Legado:chooseBackupFile()
                     and ("\n" .. _("Reading history conversion:") .. " " .. tostring(result.reading_import_error))
                     or ""
                 self:showOperationResult(string.format(
-                    _("Imported Android data.\nSources: %s\nBooks: %s\nGroups: %s\nRead records: %s\nRead details: %s\nRead sessions: %s\nResumed books: %s\nIgnored Android settings: %s%s"),
+                    _("Imported Android data.\nSources: %s\nBooks: %s\nRead records: %s\nRead details: %s\nRead sessions: %s\nResumed books: %s\nIgnored Android members: %s%s"),
                     tostring(counts.book_sources or 0),
                     tostring(counts.bookshelf_books or 0),
-                    tostring(counts.book_groups or 0),
                     tostring(counts.read_records or records.read_records or 0),
                     tostring(counts.read_record_details or records.read_record_details or 0),
                     tostring(counts.read_record_sessions or records.read_record_sessions or 0),
@@ -3063,11 +3053,10 @@ function Legado:onLegadoShowStatus()
     local error_line = state.error and ("\n" .. _("State:") .. " " .. tostring(state.error)) or ""
     UIManager:show(InfoMessage:new{
         text = string.format(
-            _("Schema: %s\nSources: %s\nBooks: %s\nGroups: %s\nRead records: %s\nMembers: %s%s"),
+            _("Schema: %s\nSources: %s\nBooks: %s\nDynamic categories: All, Read, Unread\nRead records: %s\nMembers: %s%s"),
             tostring(state.schema_version or "unknown"),
             tostring(state.sources or 0),
             tostring(state.books or 0),
-            tostring(state.groups or 0),
             tostring(state.read_records or 0),
             tostring(state.members or 0),
             error_line

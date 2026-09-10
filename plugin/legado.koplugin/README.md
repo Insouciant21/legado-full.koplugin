@@ -31,11 +31,11 @@ koreader/
 ## Import boundary
 
 `Legado → Backup & restore` imports an Android backup ZIP. It does not export
-an archive. Only `bookSource.json`, `bookshelf.json`, `bookGroup.json`,
-`readRecord.json`, `readRecordDetail.json` and `readRecordSession.json` are
-stored. Android themes, reader settings, servers, RSS data, search history and
-other members are ignored. The `readConfig` object nested in a bookshelf book
-is also removed.
+an archive. Only `bookSource.json`, `bookshelf.json`, `readRecord.json`,
+`readRecordDetail.json` and `readRecordSession.json` are stored. Android
+themes, reader settings, servers, RSS data, search history, `bookGroup.json`
+and other members are ignored. The `readConfig` object and Android bookshelf
+group fields nested in a bookshelf book are also removed.
 
 Source definitions are kept complete, including aggregate-source rules,
 pagination, variables, JavaScript, login UI and login actions. No source name,
@@ -52,10 +52,11 @@ stores statistics separately in `reading-history.lua`.
 The bookshelf is available directly from the KOReader main-menu page as
 `Legado bookshelf`; it is also available as `Legado → Open bookshelf`. The
 dispatcher action `Legado: open bookshelf` can be assigned to a gesture or key.
-The first screen contains `All books` and imported Legado groups. Positive
-custom group IDs are matched as Legado's power-of-two flags against a book's
-stored group; negative built-in groups are derived from generic type, source,
-progress and update fields.
+The first screen contains only `All books`, `Read` and `Unread`. These are
+plugin-owned dynamic categories. `Read` is derived from the Kindle-native
+reading progress or the imported Android reading history; `Unread` contains
+books without either record. Android bookshelf groups and the book `group`
+bitmask are not imported or consulted.
 
 Selecting a book opens its source chapter list. The current reading session
 contains the book, source and chapter list. Its static TOC is stored separately

@@ -64,167 +64,33 @@ function SourceCatalog:books()
     return books
 end
 
-function SourceCatalog:groups()
-    if self.bundle == nil then
-        local sources, err = self:load()
-        if not sources then return nil, err end
-    end
-    local groups = self.bundle.parsed_json["bookGroup.json"]
-    if type(groups) ~= "table" then
-        return nil, "bookGroup.json is not an array"
-    end
-    return groups
+local CATEGORY_IDS = {
+    all = "all",
+    read = "read",
+    unread = "unread",
+}
+
+function SourceCatalog:categories()
+    -- Categories are deliberately plugin-owned. Android's bookGroup.json and
+    -- the `group` bitmask are not part of the Kindle bookshelf model.
+    return {
+        { id = CATEGORY_IDS.all },
+        { id = CATEGORY_IDS.read },
+        { id = CATEGORY_IDS.unread },
+    }
 end
 
-local function group_id(group)
-    if type(group) ~= "table" then return nil end
-    return tonumber(group.groupId or group.id or group.groupID)
-end
-
-local function value_has_id(value, wanted)
-    if value == nil or wanted == nil then return false end
-    if type(value) == "table" then
-        for _, child in pairs(value) do
-            if value_has_id(child, wanted) then return true end
-        end
-        return false
-    end
-    local numeric_value = tonumber(value)
-    local numeric_wanted = tonumber(wanted)
-    if numeric_value and numeric_wanted then
-        -- Legado stores custom group membership as a sum of power-of-two
-        -- group IDs (the same representation used by its SQLite `group &
-        -- groupId` query).  Arithmetic keeps this working for IDs above the
-        -- 32-bit range, where LuaJIT's bit library would truncate the value.
-        if numeric_wanted > 0 and numeric_value >= 0 then
-            return math.floor(numeric_value / numeric_wanted) % 2 == 1
-        end
-        return numeric_value == numeric_wanted
-    end
-    local text = tostring(value)
-    if text == tostring(wanted) then return true end
-    for token in text:gmatch("[^,%s;]+") do
-        if token == tostring(wanted) then return true end
-    end
-    return false
-end
-
-local function book_type(book)
-    return tonumber(book and book.type or 0) or 0
-end
-
--- BookType values are flags, not an enum.  Current Legado uses text=8,
--- updateError=16, audio=32, image=64 and local=256; older exports used a few
--- smaller enum-like values, so the individual group cases below retain those
--- fallbacks too.
-local TYPE_VIDEO = 4
-local TYPE_TEXT = 8
-local TYPE_UPDATE_ERROR = 16
-local TYPE_AUDIO = 32
-local TYPE_IMAGE = 64
-local TYPE_LOCAL = 256
-
-local function has_book_type(book, flag)
-    local kind = book_type(book)
-    if kind < 0 or flag <= 0 then return false end
-    return math.floor(kind / flag) % 2 == 1
-end
-
-local function is_local_book(book)
-    local origin = tostring(book and book.origin or ""):lower()
-    return has_book_type(book, TYPE_LOCAL)
-        or origin == "local"
-        or origin == "localbook"
-        or origin == "file"
-        or origin:sub(1, 8) == "loc_book"
-end
-
-local function is_text_book(book)
-    -- A missing/zero type is the old text representation.  Current Legado
-    -- uses the text flag, which also makes type 24 (text + update error) a
-    -- text book.
-    return book_type(book) == 0 or has_book_type(book, TYPE_TEXT)
-end
-
-local function has_started_reading(book)
-    return (tonumber(book and book.durChapterIndex) or 0) > 0
-        or (tonumber(book and book.durChapterPos) or 0) > 0
-end
-
-local function is_complete_book(book)
-    if book and book.canUpdate == false then return true end
-    local total = tonumber(book and book.totalChapterNum) or 0
-    local current = tonumber(book and book.durChapterIndex)
-    return total > 0 and current ~= nil and current + 1 >= total
-end
-
-local function has_custom_group(book)
-    local value = book and (book.group or book.groupId or book.bookGroupId)
-    if value == nil then return false end
-    if type(value) == "table" then
-        for _, child in pairs(value) do
-            if tonumber(child) and tonumber(child) > 0 then return true end
-        end
-        return false
-    end
-    local number = tonumber(value)
-    if number then return number > 0 end
-    for token in tostring(value):gmatch("[^,%s;]+") do
-        if tonumber(token) and tonumber(token) > 0 then return true end
-    end
-    return false
-end
-
-function SourceCatalog:book_matches_group(book, group)
-    if type(book) ~= "table" or type(group) ~= "table" then return false end
-    local wanted = group_id(group)
-    if wanted == nil then return false end
-
-    -- Legado's negative IDs are built-in dynamic groups. Positive IDs are
-    -- user groups and are matched against the book's stored group field.
-    if wanted >= 0 then
-        return value_has_id(book.group or book.groupId or book.bookGroupId, wanted)
-    elseif wanted == -1 then
-        return true
-    elseif wanted == -2 then
-        return is_local_book(book)
-    elseif wanted == -3 then
-        return has_book_type(book, TYPE_AUDIO) or book_type(book) == 1
-    elseif wanted == -4 then
-        return not is_local_book(book)
-            and not has_book_type(book, TYPE_AUDIO)
-            and not has_book_type(book, TYPE_VIDEO)
-            and not has_custom_group(book)
-    elseif wanted == -5 then
-        return is_local_book(book) and not has_custom_group(book)
-    elseif wanted == -6 then
-        return has_book_type(book, TYPE_VIDEO)
-    elseif wanted == -7 then
-        return has_book_type(book, TYPE_IMAGE) or book_type(book) == 2
-    elseif wanted == -8 then
-        return is_text_book(book)
-    elseif wanted == -11 then
-        return has_book_type(book, TYPE_UPDATE_ERROR)
-            or (tonumber(book.lastCheckCount) or 0) < 0
-    elseif wanted == -20 then
-        return has_started_reading(book) and not is_complete_book(book)
-    elseif wanted == -21 then
-        return not has_started_reading(book)
-    elseif wanted == -22 then
-        return has_started_reading(book)
-    elseif wanted == -23 then
-        return has_started_reading(book) and not is_complete_book(book)
-    elseif wanted == -24 then
-        return has_started_reading(book) and is_complete_book(book)
-    end
-    return false
-end
-
-function SourceCatalog:books_for_group(books, group)
+function SourceCatalog:books_for_category(books, category_id, reading_status)
     local selected = {}
     if type(books) ~= "table" then return selected end
     for index, book in ipairs(books) do
-        if self:book_matches_group(book, group) then
+        local include = category_id == CATEGORY_IDS.all
+        if category_id == CATEGORY_IDS.read then
+            include = reading_status and reading_status[index] == true
+        elseif category_id == CATEGORY_IDS.unread then
+            include = not (reading_status and reading_status[index] == true)
+        end
+        if include then
             selected[#selected + 1] = { book = book, index = index }
         end
     end
