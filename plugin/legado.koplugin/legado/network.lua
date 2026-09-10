@@ -745,24 +745,112 @@ function Network.merge_cookies(snapshot)
     end
 end
 
+local function append_url_options(value, options, encoded_options)
+    if options then
+        return value .. "," .. (encoded_options or rapidjson.encode(options))
+    end
+    return value
+end
+
+-- Resolve the common absolute/root-relative forms before splitting both URLs.
+-- This avoids even the small amount of URL-option scanning needed by the
+-- general path for every item in a large TOC.  If the suffix is not a single
+-- JSON options object, return nil and let the full resolver handle it.
+local fast_base_cache = {}
+local fast_base_cache_size = 0
+
+local function fast_base_parts(base_url)
+    local cached = fast_base_cache[base_url]
+    if cached then return cached.scheme, cached.origin end
+    local parts = {
+        scheme = base_url:match("^([%w][%w+.-]*):"),
+        origin = base_url:match("^([%w][%w+.-]*://[^/%?#]+)"),
+    }
+    if fast_base_cache_size >= 32 then
+        fast_base_cache = {}
+        fast_base_cache_size = 0
+    end
+    fast_base_cache[base_url] = parts
+    fast_base_cache_size = fast_base_cache_size + 1
+    return parts.scheme, parts.origin
+end
+
+local function fast_absolute(base_url, value)
+    -- Rules normally return already-trimmed href values. Avoid gsub-based
+    -- trimming on every chapter; malformed/whitespace-heavy values simply
+    -- fall through to split_url_options(), which retains the old behavior.
+    local raw_base = tostring(base_url or "")
+    local raw_value = tostring(value or "")
+    if raw_value == "" then return "" end
+
+    local clean_value = raw_value
+    local options
+    local encoded_options
+    local comma = raw_value:find(",", 1, true)
+    if comma then
+        local tail = raw_value:sub(comma + 1)
+        if tail:sub(1, 1) ~= "{" then
+            tail = tail:match("^%s*(.*)$")
+        end
+        options, encoded_options = cached_url_options(tail)
+        if not options then return nil end
+        clean_value = raw_value:sub(1, comma - 1)
+    end
+
+    local lowered_value_prefix = clean_value:sub(1, 8):lower()
+    if lowered_value_prefix:match("^https?://")
+            or clean_value:sub(1, 5):lower() == "data:" then
+        return append_url_options(clean_value, options, encoded_options)
+    end
+
+    local scheme, origin = fast_base_parts(raw_base)
+    local absolute
+    if scheme and clean_value:sub(1, 2) == "//" then
+        absolute = scheme .. ":" .. clean_value
+    elseif origin and clean_value:sub(1, 1) == "/" then
+        absolute = origin .. clean_value
+    end
+    if absolute then
+        return append_url_options(absolute, options, encoded_options)
+    end
+    return nil
+end
+
 function Network.absolute(base_url, value)
+    local fast = fast_absolute(base_url, value)
+    if fast ~= nil then
+        return fast
+    end
     local clean_base = split_url_options(base_url or "")
     local clean_value, options, encoded_options = split_url_options(value)
     if clean_value == "" then
         return ""
     end
-    if clean_value:lower():match("^data:") then
-        if options then
-            return clean_value .. "," .. (encoded_options or rapidjson.encode(options))
-        end
-        return clean_value
+
+    -- TOC pages very commonly expose root-relative chapter links.  LuaSocket's
+    -- RFC URL resolver is correct, but on the KPW4 it is expensive enough to
+    -- dominate a 2,500-item TOC (several milliseconds per link).  Handle the
+    -- unambiguous HTTP(S) cases directly and leave query/fragment/relative
+    -- path resolution to the standard resolver below.
+    local absolute
+    local scheme = clean_base:match("^([%w][%w+.-]*):")
+    local origin = clean_base:match("^([%w][%w+.-]*://[^/%?#]+)")
+    if clean_value:lower():match("^https?://") then
+        absolute = clean_value
+    elseif scheme and clean_value:sub(1, 2) == "//" then
+        absolute = scheme .. ":" .. clean_value
+    elseif origin and clean_value:sub(1, 1) == "/" then
+        absolute = origin .. clean_value
     end
-    local ok, absolute = pcall(socket_url.absolute, clean_base or "", clean_value)
-    if ok and absolute then
-        if options then
-            return absolute .. "," .. (encoded_options or rapidjson.encode(options))
-        end
-        return absolute
+    if absolute then
+        return append_url_options(absolute, options, encoded_options)
+    end
+    if clean_value:lower():match("^data:") then
+        return append_url_options(clean_value, options, encoded_options)
+    end
+    local ok, resolved = pcall(socket_url.absolute, clean_base or "", clean_value)
+    if ok and resolved then
+        return append_url_options(resolved, options, encoded_options)
     end
     return value
 end
