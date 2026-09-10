@@ -662,7 +662,14 @@ function Storage:save_reader_session(book, source, chapters, current_index, forc
     local index = tonumber(current_index) or 1
     index = math.max(1, math.min(#chapters, math.floor(index)))
 
-    local existing = self:load_reader_session()
+    -- During reader navigation the static session is already resident. Do
+    -- not reload the position settings just to discover that the TOC is
+    -- unchanged: the hot position is overwritten immediately below. The
+    -- fallback load is kept for the first open after a restart.
+    local existing = self.reader_session_static
+    if not existing and not self.reader_session_load_attempted then
+        existing = self:load_reader_session()
+    end
     local session_id = reader_session_id(book, source, chapters)
     if not force_static and existing and existing.session_id == session_id then
         -- The TOC has not changed. Only the hot position file needs updating.
@@ -682,12 +689,15 @@ function Storage:save_reader_session(book, source, chapters, current_index, forc
 end
 
 function Storage:update_reader_session_index(current_index)
-    local session = self:load_reader_session()
-    if not session then return false end
+    local stored = self.reader_session_static
+    if not stored and not self.reader_session_load_attempted then
+        stored = self:load_reader_session()
+    end
+    if not stored then return false end
     local index = tonumber(current_index)
     if not index then return false end
-    index = math.max(1, math.min(#session.chapters, math.floor(index)))
-    return self:_save_reader_position(session.session_id, index)
+    index = math.max(1, math.min(#stored.chapters, math.floor(index)))
+    return self:_save_reader_position(stored.session_id, index)
 end
 
 function Storage:get_last_chapter(book)

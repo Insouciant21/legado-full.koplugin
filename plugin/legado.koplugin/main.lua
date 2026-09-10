@@ -3,6 +3,7 @@ local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local Dispatcher = require("dispatcher")
 local DocSettings = require("docsettings")
+local Event = require("ui/event")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local InfoMessage = require("ui/widget/infomessage")
@@ -368,11 +369,13 @@ function Legado:preserveReaderSettings(filename, reader_session)
     if not reader_session and not self:getActiveReaderSession() then return false end
 
     -- ReaderConfig and ReaderFont keep the newest values in their live
-    -- modules until KOReader's SaveSettings event. Flush that event before
+    -- modules until KOReader's SaveSettings event. Update doc_settings before
     -- taking the snapshot, so a font/size change made immediately before a
-    -- chapter turn is included.
-    if type(self.ui.saveSettings) == "function" then
-        pcall(self.ui.saveSettings, self.ui)
+    -- chapter turn is included. The actual flush is already performed by
+    -- ReaderUI:switchDocument():onClose(); calling saveSettings() here too
+    -- would write the current chapter's metadata twice on every turn.
+    if type(self.ui.handleEvent) == "function" then
+        pcall(self.ui.handleEvent, self.ui, Event:new("SaveSettings"))
     end
 
     local source_data = self.ui.doc_settings.data
@@ -810,6 +813,11 @@ end
 function Legado:cancelReaderPrefetch()
     self._prefetch_generation = (self._prefetch_generation or 0) + 1
     self._prefetch_running = false
+    self._prefetch_stop_after = nil
+    -- A running Trapper job will unwind on its own. Dropping its entry makes
+    -- its eventual callback harmless, while the next foreground request can
+    -- start immediately without waiting for that subprocess.
+    self._prefetch_jobs = {}
 end
 
 function Legado:onCloseDocument()
@@ -838,6 +846,8 @@ function Legado:startReaderPrefetch()
     self._prefetch_generation = (self._prefetch_generation or 0) + 1
     local generation = self._prefetch_generation
     self._prefetch_running = true
+    self._prefetch_stop_after = nil
+    self._prefetch_jobs = {}
 
     local function finish()
         if self._prefetch_generation == generation then
@@ -857,18 +867,50 @@ function Legado:startReaderPrefetch()
             return
         end
         local chapter = session.chapters[chapter_index]
+        local job = {
+            generation = generation,
+            session = session,
+            waiters = {},
+        }
+        self._prefetch_jobs[chapter_index] = job
         self:runWorker(false, function()
             local Runtime = require("legado/runtime")
             local content, err = Runtime.chapter_content(source, chapter, session.book)
             if not content then return nil, err or "prefetch failed" end
             return content
         end, function(content)
-            if self._prefetch_generation ~= generation then
+            if self._prefetch_generation ~= generation
+                    or self._prefetch_jobs[chapter_index] ~= job then
                 finish()
                 return
             end
             local path = self.storage:write_chapter(session.book, chapter, content)
             if not path then
+                self._prefetch_jobs[chapter_index] = nil
+                for _, waiter in ipairs(job.waiters) do
+                    waiter(nil, "cannot save prefetched chapter")
+                end
+                finish()
+                return
+            end
+            self._prefetch_jobs[chapter_index] = nil
+            if #job.waiters > 0 then
+                -- The foreground transition owns this chapter now. Do not
+                -- continue filling later chapters while the old document is
+                -- being replaced; those jobs would only be invalidated by
+                -- onCloseDocument a moment later.
+                self._prefetch_generation = self._prefetch_generation + 1
+                self._prefetch_running = false
+                self._prefetch_stop_after = nil
+                self._prefetch_jobs = {}
+                for _, waiter in ipairs(job.waiters) do
+                    UIManager:nextTick(function()
+                        waiter(path)
+                    end)
+                end
+                return
+            end
+            if self._prefetch_stop_after == chapter_index then
                 finish()
                 return
             end
@@ -880,8 +922,24 @@ function Legado:startReaderPrefetch()
             -- Prefetch must never interrupt an otherwise usable reading
             -- session with an error dialog. The chapter remains uncached and
             -- normal foreground navigation can retry it later.
-            on_failure = finish,
-            on_cancel = finish,
+            on_failure = function(error_message)
+                if self._prefetch_jobs[chapter_index] == job then
+                    self._prefetch_jobs[chapter_index] = nil
+                    for _, waiter in ipairs(job.waiters) do
+                        waiter(nil, error_message)
+                    end
+                end
+                finish()
+            end,
+            on_cancel = function()
+                if self._prefetch_jobs[chapter_index] == job then
+                    self._prefetch_jobs[chapter_index] = nil
+                    for _, waiter in ipairs(job.waiters) do
+                        waiter(nil, "prefetch cancelled")
+                    end
+                end
+                finish()
+            end,
         })
     end
 
@@ -953,17 +1011,47 @@ function Legado:showReaderChapterList()
     return true
 end
 
-function Legado:openReaderChapter(session, target_index, seamless)
-    self:cancelReaderPrefetch()
+function Legado:openReaderChapter(session, target_index, seamless, already_deferred)
     local chapter = session.chapters[target_index]
     if not chapter then
         self._reader_transition_busy = false
         return false
     end
+    -- Chapter-list selections call this method directly, while dispatcher
+    -- navigation marks the transition before calling it. Normalize both
+    -- paths so a prefetch hand-off cannot leave a menu-triggered transition
+    -- waiting forever.
+    self._reader_transition_busy = true
     -- The position is known before a foreground download starts. Keeping it
     -- in the in-memory session lets ReaderReady identify the target in O(1)
     -- once the document is opened, including the uncached-chapter path.
     session.current_index = target_index
+    self._reader_transition_session = session
+    self._reader_transition_index = target_index
+
+    -- If the next chapter is already being prefetched, let that worker finish
+    -- and hand its cache file to the normal reader path. Cancelling it here
+    -- used to make a fast prefetch indistinguishable from a cache miss and
+    -- caused the same chapter to be downloaded a second time in the
+    -- foreground.
+    local prefetch_job = self._prefetch_jobs
+        and self._prefetch_jobs[target_index]
+    if prefetch_job and prefetch_job.session == session
+            and prefetch_job.generation == self._prefetch_generation then
+        if prefetch_job.waiting then return true end
+        prefetch_job.waiting = true
+        self._prefetch_stop_after = target_index
+        prefetch_job.waiters[#prefetch_job.waiters + 1] = function()
+            if self._reader_transition_busy
+                    and self._reader_transition_session == session
+                    and self._reader_transition_index == target_index then
+                self:openReaderChapter(session, target_index, seamless, true)
+            end
+        end
+        return true
+    end
+
+    self:cancelReaderPrefetch()
     local source, source_err = self:resolveReaderSource(session)
     if not source then
         self._reader_transition_busy = false
@@ -977,9 +1065,17 @@ function Legado:openReaderChapter(session, target_index, seamless)
         )
         self.storage:save_last_chapter(session.book, chapter)
         self._reader_transition_busy = false
-        UIManager:nextTick(function()
+        local open = function()
             self:openDownloadedFile(path, seamless, session)
-        end)
+        end
+        -- EndOfBook is itself delivered from a UI event. Its handler already
+        -- schedules one safe UI turn before reaching here; avoid adding a
+        -- second idle turn to every automatic cached chapter transition.
+        if already_deferred then
+            open()
+        else
+            UIManager:nextTick(open)
+        end
         return true
     end
 
@@ -1091,7 +1187,9 @@ function Legado:advanceReaderChapter(delta, supplied_session, seamless, already_
     -- Chapter navigation is part of one reading session, so avoid the normal
     -- file-open overlay and use KOReader's seamless document switch by
     -- default.  Callers can explicitly pass false when needed.
-    return self:openReaderChapter(session, target_index, seamless ~= false)
+    return self:openReaderChapter(
+        session, target_index, seamless ~= false, already_busy == true
+    )
 end
 
 local function source_display_name(source)
