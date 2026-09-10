@@ -9,6 +9,8 @@ local rapidjson = require("rapidjson")
 local Storage = {}
 Storage.__index = Storage
 
+local COVER_EXTENSIONS = { "jpg", "jpeg", "png", "webp", "gif", "svg" }
+
 local function default_state()
     return {
         schema_version = Backup.STATE_SCHEMA_VERSION,
@@ -150,6 +152,48 @@ function Storage:get_book_dir(book)
     return self.library_root .. "/" .. safe_name(book and book.name)
 end
 
+-- Covers are plugin cache files, not imported Android paths.  Keeping them
+-- beside the chapter cache makes the detail page work after an Android
+-- backup is copied to Kindle while still leaving KOReader's reader settings
+-- completely untouched.
+function Storage:get_cover_base_path(book)
+    return self:get_book_dir(book) .. "/cover"
+end
+
+function Storage:get_cache_identity(book)
+    if type(book) ~= "table" then return "" end
+    return tostring(book.origin or book.bookSourceUrl or book.sourceUrl or "")
+end
+
+function Storage:set_cache_identity(book)
+    local identity = self:get_cache_identity(book)
+    if identity == "" then return false end
+    local book_dir = self:get_book_dir(book)
+    util.makePath(book_dir)
+    return util.writeToFile(identity, book_dir .. "/.source") and true or false
+end
+
+function Storage:find_cover_path(book)
+    local base = self:get_cover_base_path(book)
+    for _, extension in ipairs(COVER_EXTENSIONS) do
+        local path = base .. "." .. extension
+        if lfs.attributes(path, "mode") == "file" then
+            return path
+        end
+    end
+    return nil
+end
+
+function Storage:remove_cover_variants(book, keep_path)
+    local base = self:get_cover_base_path(book)
+    for _, extension in ipairs(COVER_EXTENSIONS) do
+        local path = base .. "." .. extension
+        if path ~= keep_path and lfs.attributes(path, "mode") == "file" then
+            os.remove(path)
+        end
+    end
+end
+
 function Storage:get_chapter_path(book, chapter)
     local index = tonumber(chapter and chapter.index or 1) or 1
     return self:get_book_dir(book) .. "/"
@@ -168,6 +212,12 @@ end
 
 function Storage:chapter_exists(book, chapter)
     local path = self:get_chapter_path(book, chapter)
+    local marker = util.readFromFile(self:get_book_dir(book) .. "/.source")
+    local identity = self:get_cache_identity(book)
+    if type(marker) == "string" and marker ~= "" and identity ~= ""
+            and marker ~= identity then
+        return false, path
+    end
     if lfs.attributes(path, "mode") == "file" then
         return true, path
     end
@@ -823,6 +873,7 @@ function Storage:write_chapter(book, chapter, content)
     if not ok then
         return nil, "cannot save downloaded chapter"
     end
+    self:set_cache_identity(book)
     self.readable_cache[path] = true
     return path
 end

@@ -7,6 +7,7 @@ local Javascript = require("legado/javascript")
 local Session = require("legado/session")
 local Content = require("legado/content")
 local rapidjson = require("rapidjson")
+local util = require("util")
 
 local Runtime = {}
 local js_engine = Javascript:new()
@@ -1054,6 +1055,95 @@ function Runtime.book_info(source, book)
         info.sourceVariable = source_variable
     end
     return info
+end
+
+local function decode_hex(value)
+    local input = tostring(value or ""):gsub("%s+", "")
+    if #input == 0 or #input % 2 ~= 0 or not input:match("^[%x]+$") then
+        return nil, "cover response is not binary data"
+    end
+    local output = {}
+    for index = 1, #input, 2 do
+        output[#output + 1] = string.char(
+            tonumber(input:sub(index, index + 1), 16)
+        )
+    end
+    return table.concat(output)
+end
+
+local function cover_extension(bytes, url, headers)
+    if bytes:sub(1, 3) == "\255\216\255" then return "jpg" end
+    if bytes:sub(1, 8) == "\137PNG\r\n\026\n" then return "png" end
+    if bytes:sub(1, 6) == "GIF87a" or bytes:sub(1, 6) == "GIF89a" then
+        return "gif"
+    end
+    if bytes:sub(1, 4) == "RIFF" and bytes:sub(9, 12) == "WEBP" then
+        return "webp"
+    end
+    local sample = bytes:sub(1, 512):gsub("^\239\187\191", "")
+    if sample:lower():find("<svg", 1, true) then return "svg" end
+
+    local content_type = headers and (
+        headers["content-type"] or headers["Content-Type"]
+    )
+    content_type = tostring(content_type or ""):lower()
+    if content_type:find("png", 1, true) then return "png" end
+    if content_type:find("gif", 1, true) then return "gif" end
+    if content_type:find("webp", 1, true) then return "webp" end
+    if content_type:find("jpeg", 1, true) or content_type:find("jpg", 1, true) then
+        return "jpg"
+    end
+    if content_type:find("svg", 1, true) then return "svg" end
+    if content_type:find("text/html", 1, true) then return nil end
+
+    local extension = tostring(url or ""):match("%.([%a%d]+)[?#]?$")
+    extension = extension and extension:lower() or "jpg"
+    if extension ~= "jpg" and extension ~= "jpeg" and extension ~= "png"
+            and extension ~= "webp" and extension ~= "gif" and extension ~= "svg" then
+        extension = "jpg"
+    end
+    return extension
+end
+
+-- Download a cover in the worker process and write it directly to the plugin
+-- cache. Network.get intentionally represents binary responses as hex so
+-- they can cross the JavaScript boundary; decode them here before writing the
+-- image file. The UI thread therefore never carries a full-size cover string.
+function Runtime.download_cover(source, book, target_base_path)
+    local url = tostring(book and book.coverUrl or "")
+    if url == "" then return nil, "book has no cover URL" end
+    local hex, headers, code = Network.get(url, source, { type = "bin" })
+    if not hex then
+        return nil, headers or "cover download failed"
+    end
+    if code and tonumber(code) >= 400 then
+        return nil, "cover download returned HTTP " .. tostring(code)
+    end
+    local bytes, decode_err = decode_hex(hex)
+    if not bytes then return nil, decode_err end
+    local extension = cover_extension(bytes, url, headers)
+    if not extension then return nil, "cover response is not an image" end
+
+    target_base_path = tostring(target_base_path or "")
+    if target_base_path == "" then return nil, "cover cache path is empty" end
+    local parent = target_base_path:match("^(.*)/[^/]+$")
+    if parent then util.makePath(parent) end
+    local path = target_base_path .. "." .. extension
+    local temporary = path .. ".tmp"
+    local file, open_err = io.open(temporary, "wb")
+    if not file then return nil, tostring(open_err or "cannot open cover cache") end
+    local written, write_err = file:write(bytes)
+    file:close()
+    if not written then
+        os.remove(temporary)
+        return nil, tostring(write_err or "cannot write cover cache")
+    end
+    local renamed, rename_err = os.rename(temporary, path)
+    if not renamed then
+        os.remove(temporary)
+        return nil, tostring(rename_err or "cannot finalize cover cache")
+    end
+    return path
 end
 
 function Runtime.chapter_list(source, book, options)

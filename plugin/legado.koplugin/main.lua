@@ -96,6 +96,7 @@ local Content = require("legado/content")
 local EmojiFont = require("legado/font")
 local SourceCatalog = require("legado/source")
 local BrowserInput = require("legado/browser_input")
+local BookDetail = require("legado/book_detail")
 
 -- Every plugin Menu is a screen-sized page.  Menu's default is a popout,
 -- which gives a full-screen instance a rounded frame and installs an
@@ -121,6 +122,74 @@ end
 
 local function trim_text(value)
     return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local BOOK_INFO_FIELDS = {
+    "intro",
+    "kind",
+    "lastChapter",
+    "updateTime",
+    "coverUrl",
+    "wordCount",
+    "tocUrl",
+}
+
+local function merge_book_info(book, info, source)
+    local updated = {}
+    for key, value in pairs(book or {}) do updated[key] = value end
+    if type(info) == "table" then
+        for _, field in ipairs(BOOK_INFO_FIELDS) do
+            local value = info[field]
+            if value ~= nil and trim_text(value) ~= "" then
+                updated[field] = value
+            end
+        end
+        if trim_text(info.author) ~= "" then
+            updated.author = info.author
+        end
+        if trim_text(info.sourceVariable) ~= "" then
+            updated.sourceVariable = info.sourceVariable
+        end
+        if type(info.variable) == "table" then
+            updated.variable = info.variable
+        end
+    end
+    -- Keep the bookshelf identity stable even if a source normalizes the title
+    -- differently on its detail page. This also keeps existing chapter cache
+    -- paths and imported reading records attached to the same book.
+    updated.name = book and book.name or updated.name or ""
+    if source then
+        updated.origin = source.bookSourceUrl or updated.origin
+        updated.originName = source.bookSourceName or updated.originName
+        updated.bookSourceUrl = source.bookSourceUrl or updated.bookSourceUrl
+        updated.sourceUrl = source.bookSourceUrl or updated.sourceUrl
+        updated.sourceName = source.bookSourceName or updated.sourceName
+    end
+    return updated
+end
+
+local function replace_book_source(book, candidate, source)
+    local updated = {}
+    for key, value in pairs(book or {}) do updated[key] = value end
+    for _, field in ipairs({
+        "bookUrl", "tocUrl", "coverUrl", "intro", "kind",
+        "lastChapter", "updateTime", "wordCount",
+    }) do
+        updated[field] = candidate and candidate[field] or ""
+    end
+    -- Keep the title and author used by the existing bookshelf record. Source
+    -- search results may contain a site-specific spelling, but changing the
+    -- local identity would orphan imported progress and chapter cache files.
+    updated.name = book and book.name or candidate and candidate.name or ""
+    updated.author = book and book.author or candidate and candidate.author or ""
+    updated.origin = source and source.bookSourceUrl or updated.origin
+    updated.originName = source and source.bookSourceName or updated.originName
+    updated.bookSourceUrl = source and source.bookSourceUrl or updated.bookSourceUrl
+    updated.sourceUrl = source and source.bookSourceUrl or updated.sourceUrl
+    updated.sourceName = source and source.bookSourceName or updated.sourceName
+    updated.sourceVariable = candidate and candidate.sourceVariable or nil
+    updated.variable = candidate and candidate.variable or nil
+    return updated
 end
 
 function Legado:init()
@@ -2504,8 +2573,241 @@ function Legado:showBookshelfBooks(catalog, books, category, reading_status, cat
             end
             self:showChapters(source, item.book)
         end,
+        onMenuHold = function(menu, item)
+            if item.empty_category or item.choose_category or not item.book then
+                return true
+            end
+            UIManager:close(menu)
+            self:showBookDetail(item.book, item.book_index)
+            return true
+        end,
     }
     UIManager:show(book_menu)
+end
+
+function Legado:showBookDetail(book, book_index, source_override)
+    if type(book) ~= "table" then return end
+    local source = source_override
+    if not source then
+        local catalog = SourceCatalog:new(self.storage:get_state_root())
+        source = catalog:find_for_book(book)
+    end
+
+    local last_chapter = self.storage:get_last_chapter(book)
+    local progress = last_chapter and T(_("Chapter %1"), last_chapter)
+        or _("Not started")
+    local detail
+    detail = BookDetail:new{
+        book = book,
+        source = source,
+        cover_path = self.storage:find_cover_path(book),
+        progress_text = progress,
+        on_close = function(widget)
+            if self._book_detail_widget == widget then
+                self._book_detail_widget = nil
+            end
+        end,
+        on_read = function()
+            if not source then
+                self:showOperationResult(_("Cannot match book source."))
+                return
+            end
+            self:showChapters(source, book)
+        end,
+        on_chapters = function()
+            if not source then
+                self:showOperationResult(_("Cannot match book source."))
+                return
+            end
+            self:showChapters(source, book)
+        end,
+        on_change_source = book_index and function()
+            self:showBookSourcePicker(book, book_index)
+        end or nil,
+        on_refresh = source and function()
+            self:refreshBookDetail(book, book_index, source)
+        end or nil,
+    }
+    self._book_detail_widget = detail
+    UIManager:show(detail)
+
+    local needs_info = source and type(source.ruleBookInfo) == "table"
+        and (trim_text(book.intro) == ""
+            or trim_text(book.lastChapter) == "")
+    if needs_info then
+        UIManager:nextTick(function()
+            if self._book_detail_widget == detail then
+                self:refreshBookDetail(book, book_index, source, detail)
+            end
+        end)
+    elseif trim_text(book.coverUrl) ~= ""
+            and not self.storage:find_cover_path(book) then
+        UIManager:nextTick(function()
+            if self._book_detail_widget == detail then
+                self:downloadBookCover(book, book_index, source, detail)
+            end
+        end)
+    end
+end
+
+function Legado:refreshBookDetail(book, book_index, source, detail_widget)
+    if not source then
+        self:showOperationResult(_("Cannot match book source."))
+        return
+    end
+    local cover_base = self.storage:get_cover_base_path(book)
+    self:runWorker(_("Loading book information…"), function()
+        local Runtime = require("legado/runtime")
+        local info, info_err = Runtime.book_info(source, book)
+        if not info then return nil, info_err or _("Book information request failed.") end
+        local updated = merge_book_info(book, info, source)
+        local cover_path, cover_error
+        if trim_text(updated.coverUrl) ~= "" then
+            cover_path, cover_error = Runtime.download_cover(
+                source, updated, cover_base
+            )
+        end
+        if book_index then
+            local catalog = SourceCatalog:new(self.storage:get_state_root())
+            local saved, save_err = catalog:update_book(book_index, updated)
+            if not saved then return nil, save_err end
+        end
+        return {
+            book = updated,
+            cover_path = cover_path,
+            cover_error = cover_error,
+        }
+    end, function(result)
+        if result.cover_path then
+            self.storage:remove_cover_variants(result.book, result.cover_path)
+        end
+        self.storage:set_cache_identity(result.book)
+        self:invalidateReaderSourceCache()
+        local still_open = detail_widget
+            and self._book_detail_widget == detail_widget
+        if detail_widget and not still_open then
+            -- The user left the page while its automatic refresh was running.
+            -- Keep the refreshed metadata, but do not unexpectedly reopen it.
+            return
+        end
+        if still_open then
+            self._book_detail_widget = nil
+            UIManager:close(detail_widget)
+        end
+        self:showBookDetail(result.book, book_index, source)
+    end)
+end
+
+function Legado:downloadBookCover(book, book_index, source, detail_widget)
+    if trim_text(book and book.coverUrl) == "" then return end
+    local cover_base = self.storage:get_cover_base_path(book)
+    self:runWorker(_("Downloading cover…"), function()
+        local Runtime = require("legado/runtime")
+        local path, err = Runtime.download_cover(source, book, cover_base)
+        if not path then return nil, err or _("Cover download failed.") end
+        return path
+    end, function(path)
+        self.storage:remove_cover_variants(book, path)
+        if detail_widget and self._book_detail_widget == detail_widget then
+            self._book_detail_widget = nil
+            UIManager:close(detail_widget)
+            self:showBookDetail(book, book_index, source)
+        end
+    end, {
+        invisible = true,
+        on_failure = function() end,
+    })
+end
+
+function Legado:showBookSourcePicker(book, book_index)
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local sources, err = catalog:list()
+    if not sources then
+        self:showOperationResult(_("Cannot load sources:\n") .. tostring(err))
+        return
+    end
+    local items = {}
+    for _, source in ipairs(sources) do
+        if source.enabled ~= false
+                and tonumber(source.bookSourceType or 0) == 0
+                and type(source.searchUrl) == "string"
+                and trim_text(source.searchUrl) ~= "" then
+            items[#items + 1] = {
+                text = display_text(source.bookSourceName or _("Unnamed source")),
+                mandatory = display_text(source.bookSourceGroup),
+                source = source,
+            }
+        end
+    end
+    if #items == 0 then
+        self:showOperationResult(_("No enabled text source with a search URL."))
+        return
+    end
+    local source_menu
+    source_menu = LegadoMenu:new{
+        title = T(_("Change source for %1"), display_text(book.name)),
+        item_table = items,
+        items_per_page = 12,
+        onMenuSelect = function(menu, item)
+            UIManager:close(menu)
+            self:searchBookOnSource(item.source, book, book_index)
+        end,
+    }
+    UIManager:show(source_menu)
+end
+
+function Legado:searchBookOnSource(source, book, book_index)
+    self:runWorker(
+        T(_("Searching %1…"), display_text(source.bookSourceName or _("source"))),
+        function()
+            local Runtime = require("legado/runtime")
+            local books, err = Runtime.search_source(source, book.name, 1)
+            if not books then return nil, err or _("Search failed.") end
+            return books
+        end,
+        function(books)
+            if type(books) ~= "table" or #books == 0 then
+                self:showOperationResult(_("No matching book on this source."))
+                return
+            end
+            self:showSearchResults(source, books, function(candidate)
+                self:replaceBookSource(book, book_index, source, candidate)
+            end)
+        end
+    )
+end
+
+function Legado:replaceBookSource(book, book_index, source, candidate)
+    local updated = replace_book_source(book, candidate, source)
+    self:runWorker(_("Changing book source…"), function()
+        local catalog = SourceCatalog:new(self.storage:get_state_root())
+        local saved, save_err = catalog:update_book(book_index, updated)
+        if not saved then return nil, save_err end
+        -- Keep the user's current chapter as a best-effort starting point;
+        -- the new source will still validate it against its own TOC.
+        local storage = Storage:new()
+        local last = storage:get_last_chapter(book)
+        if last then
+            storage:save_last_chapter(updated, {
+                index = last,
+                name = candidate and candidate.lastChapter or "",
+            })
+        end
+        return true
+    end, function()
+        self.storage:set_cache_identity(updated)
+        self.storage:remove_cover_variants(updated)
+        self._reader_session_cache = nil
+        self._reader_session_cache_file = nil
+        self:invalidateReaderSourceCache()
+        self:showBookDetail(updated, book_index, source)
+    end, {
+        on_failure = function(error_message)
+            self:showOperationResult(
+                _("Cannot change source:\n") .. tostring(error_message)
+            )
+        end,
+    })
 end
 
 function Legado:showSearchDialog(source)
@@ -2557,7 +2859,7 @@ function Legado:searchSource(source, keyword)
     end)
 end
 
-function Legado:showSearchResults(source, books)
+function Legado:showSearchResults(source, books, on_select)
     local items = {}
     for index, book in ipairs(books) do
         if index > 100 then break end
@@ -2576,7 +2878,11 @@ function Legado:showSearchResults(source, books)
         items_per_page = 12,
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
-            self:showChapters(source, item.book)
+            if on_select then
+                on_select(item.book)
+            else
+                self:showChapters(source, item.book)
+            end
         end,
     }
     UIManager:show(result_menu)
@@ -2613,6 +2919,12 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
     end
     local items = {}
     local current_item_number
+    items[#items + 1] = {
+        text = _("Book details"),
+        mandatory = _("Cover · introduction · source"),
+        detail = true,
+        separator = true,
+    }
     if last_chapter then
         items[#items + 1] = {
             text = T(_("Continue reading chapter %1"), last_chapter),
@@ -2672,6 +2984,12 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
         item_table = items,
         items_per_page = 12,
         onMenuSelect = function(menu, item)
+            if item.detail then
+                local action_source = get_source()
+                UIManager:close(menu)
+                self:showBookDetail(display_book, nil, action_source)
+                return
+            end
             if item.refresh then
                 UIManager:close(menu)
                 self:refreshReaderSession(options.reader_session, false)
