@@ -560,6 +560,48 @@ local function chapter_key(chapter)
     return tostring(chapter.url or chapter.id or chapter.name or "")
 end
 
+local function same_reader_book(left, right)
+    if type(left) ~= "table" or type(right) ~= "table" then return false end
+    local left_url = trim_text(left.bookUrl or left.origin)
+    local right_url = trim_text(right.bookUrl or right.origin)
+    if left_url ~= "" and right_url ~= "" then
+        return left_url == right_url
+    end
+    local left_name = trim_text(left.name or left.bookName)
+    local right_name = trim_text(right.name or right.bookName)
+    if left_name == "" or right_name == "" or left_name ~= right_name then
+        return false
+    end
+    local left_author = trim_text(left.author or left.bookAuthor)
+    local right_author = trim_text(right.author or right.bookAuthor)
+    return left_author == "" or right_author == "" or left_author == right_author
+end
+
+function Legado:getCachedReaderSession(source, book)
+    local session = self._reader_session_cache
+    -- Do not parse the potentially megabyte-sized persistent TOC on the UI
+    -- thread just to decide whether this shortcut applies. A session already
+    -- used in this KOReader process is cheap to reuse; after a restart the
+    -- normal worker path loads the fresh list without an extra foreground
+    -- pause.
+    if type(session) ~= "table" or type(session.chapters) ~= "table"
+            or #session.chapters == 0 or not same_reader_book(session.book, book) then
+        return nil
+    end
+
+    local session_url = trim_text(session.source_url)
+    local source_url = trim_text(source and source.bookSourceUrl)
+    if session_url ~= "" and source_url ~= "" then
+        if session_url ~= source_url then return nil end
+    elseif trim_text(session.source_name) ~= ""
+            and trim_text(source and source.bookSourceName) ~= ""
+            and session.source_name ~= source.bookSourceName then
+        return nil
+    end
+    self._reader_session_cache = session
+    return session
+end
+
 local function normalize_path(path)
     path = tostring(path or "")
     -- DataStorage deliberately returns "." on Kindle.  The resulting
@@ -2582,9 +2624,27 @@ function Legado:showChapterMenu(source, display_book, chapters, options)
 end
 
 function Legado:showChapters(source, book)
+    local cached_session = self:getCachedReaderSession(source, book)
+    if cached_session then
+        self:showChapterMenu(
+            source,
+            cached_session.book or book,
+            cached_session.chapters,
+            {
+                current_index = cached_session.current_index,
+                reader_session = cached_session,
+            }
+        )
+        return
+    end
     self:runWorker(_("Loading chapter list…"), function()
         local Runtime = require("legado/runtime")
-        local result, err = Runtime.chapter_list(source, book)
+        -- Imported bookshelf entries already carry the resolved book/toc URLs.
+        -- Runtime only uses this shortcut for static bookInfo rules; dynamic
+        -- sources continue through the complete Legado bookInfo pipeline.
+        local result, err = Runtime.chapter_list(source, book, {
+            use_cached_info = true,
+        })
         if not result then return nil, err or "chapter list failed" end
         return result
     end, function(result)

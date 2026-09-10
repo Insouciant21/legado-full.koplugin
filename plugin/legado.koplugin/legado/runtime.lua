@@ -107,6 +107,67 @@ local function contains_dynamic_rule(value)
         or lowered:find("@webjs:", 1, true) ~= nil
 end
 
+local BOOK_INFO_FIELDS = {
+    "name",
+    "author",
+    "intro",
+    "kind",
+    "lastChapter",
+    "updateTime",
+    "coverUrl",
+    "wordCount",
+    "tocUrl",
+}
+
+local function contains_book_info_side_effect(value)
+    local lowered = tostring(value or ""):lower()
+    return contains_dynamic_rule(lowered)
+        or lowered:find("@put:", 1, true) ~= nil
+        or lowered:find("@get:", 1, true) ~= nil
+end
+
+local function can_use_cached_book_info(source, book)
+    if type(book) ~= "table"
+            or trim(book.bookUrl or "") == ""
+            or trim(book.tocUrl or "") == "" then
+        return false
+    end
+    local info_rule = source and source.ruleBookInfo
+    if type(info_rule) ~= "table" then
+        return true
+    end
+    -- An init rule can decode/replace the detail page or populate variables
+    -- consumed by the TOC rule. Do not bypass it, even when the exported book
+    -- happens to contain a usable tocUrl.
+    if trim(info_rule.init or "") ~= ""
+            or trim(info_rule.bookInfoInit or "") ~= "" then
+        return false
+    end
+    for _, name in ipairs(BOOK_INFO_FIELDS) do
+        if contains_book_info_side_effect(info_rule[name]) then
+            return false
+        end
+    end
+    return true
+end
+
+local function cached_book_info(source, book)
+    if not can_use_cached_book_info(source, book) then
+        return nil
+    end
+    local info = {}
+    for key, value in pairs(book) do
+        info[key] = value
+    end
+    info.bookUrl = book.bookUrl
+    info.tocUrl = Network.absolute(
+        book.bookUrl or (source and source.bookSourceUrl) or "",
+        book.tocUrl
+    )
+    info.sourceName = (source and source.bookSourceName) or book.sourceName or ""
+    return info
+end
+
 local function stringify(value)
     if value == nil then
         return ""
@@ -995,8 +1056,15 @@ function Runtime.book_info(source, book)
     return info
 end
 
-function Runtime.chapter_list(source, book)
-    local info, info_err = Runtime.book_info(source, book)
+function Runtime.chapter_list(source, book, options)
+    local info
+    if type(options) == "table" and options.use_cached_info then
+        info = cached_book_info(source, book)
+    end
+    local info_err
+    if not info then
+        info, info_err = Runtime.book_info(source, book)
+    end
     if not info then
         return nil, info_err
     end
@@ -1813,9 +1881,9 @@ Runtime.book_info = function(source, book)
     end)
 end
 
-Runtime.chapter_list = function(source, book)
+Runtime.chapter_list = function(source, book, options)
     return with_session(source, function()
-        return raw_chapter_list(source, book)
+        return raw_chapter_list(source, book, options)
     end)
 end
 

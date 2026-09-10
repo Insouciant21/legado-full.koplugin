@@ -846,6 +846,16 @@ local function css_all_descendants(element, result)
     return result
 end
 
+local function css_append_descendants(element, result, seen)
+    for _, child in ipairs(element and element.nodes or {}) do
+        if child.name and not seen[child] then
+            seen[child] = true
+            result[#result + 1] = child
+            css_append_descendants(child, result, seen)
+        end
+    end
+end
+
 local function css_node_text(element)
     return tostring(element and element:textonly() or "")
 end
@@ -1087,27 +1097,44 @@ css_select_query = function(root, selector)
     for _, step in ipairs(steps) do
         local candidates = {}
         local seen = {}
+        local combinator = step.combinator
+        local related
+        if combinator == " " or combinator == nil then
+            -- When a selector is applied to many sibling subjects (for
+            -- example `.section-list@li@a`), building one descendant array per
+            -- subject creates thousands of short-lived tables on the Kindle.
+            -- Gather the same descendants once, retaining document order and
+            -- the existing duplicate suppression semantics.
+            related = {}
+            for _, subject in ipairs(current) do
+                css_append_descendants(subject, related, seen)
+            end
+        end
         for _, subject in ipairs(current) do
-            local combinator = step.combinator
-            local related
             if combinator == ">" then
                 related = css_element_children(subject)
             elseif combinator == "+" then
                 related = css_next_siblings(subject, false)
             elseif combinator == "~" then
                 related = css_next_siblings(subject, true)
-            elseif combinator == " " then
-                related = css_all_descendants(subject)
+            elseif combinator == " " or combinator == nil then
+                -- The candidates for descendant combinators were collected
+                -- above in one pass over all current subjects.
+                if subject ~= current[1] then break end
             else
                 related = css_all_descendants(subject)
             end
+            if related then
             for _, candidate in ipairs(related) do
-                if not seen[candidate] then
+                -- `seen` is already populated by css_append_descendants for a
+                -- descendant step. The check remains for child/sibling paths.
+                if combinator == " " or combinator == nil or not seen[candidate] then
                     seen[candidate] = true
                     local matches, match_err = css_simple_matches(candidate, step.selector)
                     if match_err then return nil, match_err end
                     if matches then candidates[#candidates + 1] = candidate end
                 end
+            end
             end
         end
         current = candidates

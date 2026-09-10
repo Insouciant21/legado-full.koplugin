@@ -796,6 +796,13 @@ local function fast_absolute(base_url, value)
         if not options then return nil end
         clean_value = raw_value:sub(1, comma - 1)
     end
+    -- The general resolver trims both sides of a URL. Keep that behavior for
+    -- unusual whitespace-heavy hrefs; the fast path deliberately avoids a
+    -- gsub on every ordinary TOC item.
+    if clean_value:sub(1, 1):match("%s")
+            or clean_value:sub(-1):match("%s") then
+        return nil
+    end
 
     local lowered_value_prefix = clean_value:sub(1, 8):lower()
     if lowered_value_prefix:match("^https?://")
