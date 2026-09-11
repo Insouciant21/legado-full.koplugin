@@ -58,5 +58,5 @@ return {
     name = "legado",
     fullname = _("Legado"),
     description = _("Read Legado text novels in KOReader"),
-    version = "0.1.0",
+    version = "0.2.0",
 }

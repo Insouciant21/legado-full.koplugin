@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "legado-kindle"
-version = "0.1.0"
+version = "0.2.0"
 description = "Legado backup compatibility and KOReader integration groundwork"
 requires-python = ">=3.10"
 dependencies = []
@@ -14,4 +14,3 @@ legado-backup = "legado_kindle.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["legado_kindle*"]
-
