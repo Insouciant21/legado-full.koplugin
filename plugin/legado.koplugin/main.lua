@@ -135,6 +135,33 @@ local BOOK_INFO_FIELDS = {
     "tocUrl",
 }
 
+local function has_book_info_rule(source, field)
+    local rules = source and source.ruleBookInfo
+    if type(rules) ~= "table" then return false end
+    local value = rules[field]
+    if type(value) == "table" then
+        for _, child in pairs(value) do
+            if trim_text(child) ~= "" then return true end
+        end
+        return false
+    end
+    return trim_text(value) ~= ""
+end
+
+local function should_auto_refresh_book_detail(book, source)
+    if type(book) ~= "table" or type(source) ~= "table"
+            or type(source.ruleBookInfo) ~= "table" then
+        return false
+    end
+    -- A source may have a ruleBookInfo table for only the fields it supports.
+    -- Do not refresh forever merely because another optional field is empty.
+    local missing_intro = trim_text(book.intro) == ""
+        and has_book_info_rule(source, "intro")
+    local missing_last_chapter = trim_text(book.lastChapter) == ""
+        and has_book_info_rule(source, "lastChapter")
+    return missing_intro or missing_last_chapter
+end
+
 local function merge_book_info(book, info, source)
     local updated = {}
     for key, value in pairs(book or {}) do updated[key] = value end
@@ -2844,7 +2871,9 @@ local function refresh_parent_book_menu(parent_widget, old_book, new_book, index
     end
 end
 
-function Legado:showBookDetail(book, book_index, source_override, parent_widget)
+function Legado:showBookDetail(
+        book, book_index, source_override, parent_widget,
+        suppress_auto_refresh, suppress_cover_download)
     if type(book) ~= "table" then return end
     local source = source_override
     if not source then
@@ -2899,9 +2928,8 @@ function Legado:showBookDetail(book, book_index, source_override, parent_widget)
     self._book_detail_widget = detail
     UIManager:show(detail)
 
-    local needs_info = source and type(source.ruleBookInfo) == "table"
-        and (trim_text(book.intro) == ""
-            or trim_text(book.lastChapter) == "")
+    local needs_info = not suppress_auto_refresh
+        and should_auto_refresh_book_detail(book, source)
     if needs_info then
         UIManager:nextTick(function()
             if self._book_detail_widget == detail then
@@ -2910,7 +2938,8 @@ function Legado:showBookDetail(book, book_index, source_override, parent_widget)
                 )
             end
         end)
-    elseif trim_text(book.coverUrl) ~= ""
+    elseif not suppress_cover_download
+            and trim_text(book.coverUrl) ~= ""
             and not self.storage:find_cover_path(book) then
         UIManager:nextTick(function()
             if self._book_detail_widget == detail then
@@ -2964,7 +2993,14 @@ function Legado:refreshBookDetail(book, book_index, source, detail_widget, paren
             self._book_detail_widget = nil
             UIManager:close(detail_widget)
         end
-        self:showBookDetail(result.book, book_index, source, parent_widget)
+        -- A source can legally return an empty optional field.  This refresh
+        -- was already attempted, so never let the detail page immediately
+        -- schedule the same request again.  A later explicit refresh remains
+        -- available from the detail actions.
+        self:showBookDetail(
+            result.book, book_index, source, parent_widget,
+            true, result.cover_error ~= nil
+        )
     end)
 end
 

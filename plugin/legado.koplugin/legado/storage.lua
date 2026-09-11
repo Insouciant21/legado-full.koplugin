@@ -11,6 +11,28 @@ Storage.__index = Storage
 
 local COVER_EXTENSIONS = { "jpg", "jpeg", "png", "webp", "gif", "svg" }
 
+local function valid_cover_file(path, extension)
+    local file = io.open(path, "rb")
+    if not file then return false end
+    local bytes = file:read(512) or ""
+    file:close()
+    if extension == "jpg" or extension == "jpeg" then
+        return bytes:sub(1, 3) == "\255\216\255"
+    elseif extension == "png" then
+        return bytes:sub(1, 8) == "\137PNG\r\n\026\n"
+    elseif extension == "gif" then
+        return bytes:sub(1, 6) == "GIF87a"
+            or bytes:sub(1, 6) == "GIF89a"
+    elseif extension == "webp" then
+        return bytes:sub(1, 4) == "RIFF"
+            and bytes:sub(9, 12) == "WEBP"
+    elseif extension == "svg" then
+        local sample = bytes:gsub("^\239\187\191", ""):lower()
+        return sample:find("<svg", 1, true) ~= nil
+    end
+    return false
+end
+
 local function default_state()
     return {
         schema_version = Backup.STATE_SCHEMA_VERSION,
@@ -191,7 +213,12 @@ function Storage:find_cover_path(book)
     for _, extension in ipairs(COVER_EXTENSIONS) do
         local path = base .. "." .. extension
         if lfs.attributes(path, "mode") == "file" then
-            return path
+            if valid_cover_file(path, extension) then
+                return path
+            end
+            -- This is plugin-owned cache data. Remove a previously cached
+            -- HTML/error response so ImageWidget cannot keep reopening it.
+            os.remove(path)
         end
     end
     return nil

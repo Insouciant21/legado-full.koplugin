@@ -1197,7 +1197,7 @@ local function decode_hex(value)
     return table.concat(output)
 end
 
-local function cover_extension(bytes, url, headers)
+local function cover_extension(bytes)
     if bytes:sub(1, 3) == "\255\216\255" then return "jpg" end
     if bytes:sub(1, 8) == "\137PNG\r\n\026\n" then return "png" end
     if bytes:sub(1, 6) == "GIF87a" or bytes:sub(1, 6) == "GIF89a" then
@@ -1208,27 +1208,10 @@ local function cover_extension(bytes, url, headers)
     end
     local sample = bytes:sub(1, 512):gsub("^\239\187\191", "")
     if sample:lower():find("<svg", 1, true) then return "svg" end
-
-    local content_type = headers and (
-        headers["content-type"] or headers["Content-Type"]
-    )
-    content_type = tostring(content_type or ""):lower()
-    if content_type:find("png", 1, true) then return "png" end
-    if content_type:find("gif", 1, true) then return "gif" end
-    if content_type:find("webp", 1, true) then return "webp" end
-    if content_type:find("jpeg", 1, true) or content_type:find("jpg", 1, true) then
-        return "jpg"
-    end
-    if content_type:find("svg", 1, true) then return "svg" end
-    if content_type:find("text/html", 1, true) then return nil end
-
-    local extension = tostring(url or ""):match("%.([%a%d]+)[?#]?$")
-    extension = extension and extension:lower() or "jpg"
-    if extension ~= "jpg" and extension ~= "jpeg" and extension ~= "png"
-            and extension ~= "webp" and extension ~= "gif" and extension ~= "svg" then
-        extension = "jpg"
-    end
-    return extension
+    -- Never trust a URL suffix or a missing/misleading Content-Type header.
+    -- Error pages such as a HTML 404 for `empty.png` must not become an image
+    -- cache entry that KOReader tries to render on every detail refresh.
+    return nil
 end
 
 -- Download a cover in the worker process and write it directly to the plugin
@@ -1236,7 +1219,10 @@ end
 -- they can cross the JavaScript boundary; decode them here before writing the
 -- image file. The UI thread therefore never carries a full-size cover string.
 function Runtime.download_cover(source, book, target_base_path)
-    local url = tostring(book and book.coverUrl or "")
+    local url = trim(tostring(book and book.coverUrl or ""))
+    -- A selector may return several identical image URLs.  Network.get needs
+    -- one URL; use the first non-empty line and leave the source data intact.
+    url = trim(url:match("^[^\r\n]+") or "")
     if url == "" then return nil, "book has no cover URL" end
     local hex, headers, code = Network.get(url, source, { type = "bin" })
     if not hex then
@@ -1247,7 +1233,7 @@ function Runtime.download_cover(source, book, target_base_path)
     end
     local bytes, decode_err = decode_hex(hex)
     if not bytes then return nil, decode_err end
-    local extension = cover_extension(bytes, url, headers)
+    local extension = cover_extension(bytes)
     if not extension then return nil, "cover response is not an image" end
 
     target_base_path = tostring(target_base_path or "")
