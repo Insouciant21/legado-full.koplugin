@@ -694,29 +694,28 @@ local function same_reader_book(left, right)
     return left_author == "" or right_author == "" or left_author == right_author
 end
 
-function Legado:getCachedReaderSession(source, book)
-    local session = self._reader_session_cache
-    -- The persisted reader session is also the chapter-list cache. Load it
-    -- when a bookshelf/detail entry is opened after the UI cache was dropped
-    -- (for example after opening a different document or restarting KOReader)
-    -- so this path does not immediately repeat the source's network request.
-    -- Storage remembers the load attempt and keeps the decoded static TOC, so
-    -- repeated entries in the same UI session do not parse it again.
-    if type(session) ~= "table" then
-        session = self.storage:load_reader_session()
-    end
+local function reader_session_matches(session, source, book)
     if type(session) ~= "table" or type(session.chapters) ~= "table"
             or #session.chapters == 0 or not same_reader_book(session.book, book) then
-        return nil
+        return false
     end
-
     local session_url = trim_text(session.source_url)
     local source_url = trim_text(source and source.bookSourceUrl)
     if session_url ~= "" and source_url ~= "" then
-        if session_url ~= source_url then return nil end
+        return session_url == source_url
     elseif trim_text(session.source_name) ~= ""
-            and trim_text(source and source.bookSourceName) ~= ""
-            and session.source_name ~= source.bookSourceName then
+            and trim_text(source and source.bookSourceName) ~= "" then
+        return session.source_name == source.bookSourceName
+    end
+    return true
+end
+
+function Legado:getCachedReaderSession(source, book)
+    -- Keep the in-process session lookup synchronous: it only reuses a TOC
+    -- which is already resident. Persistent cache loading happens in the
+    -- showChapters worker so a large TOC never blocks the UI thread.
+    local session = self._reader_session_cache
+    if not reader_session_matches(session, source, book) then
         return nil
     end
     self._reader_session_cache = session
@@ -4564,6 +4563,21 @@ function Legado:showChapters(source, book)
         return
     end
     self:runWorker(_("Loading chapter list…"), function()
+        -- The static reader session is the persisted chapter-list cache. Read
+        -- it in the worker so a large TOC does not block the bookshelf UI.
+        local cache_storage = Storage:new()
+        local cached = cache_storage:load_reader_session()
+        if reader_session_matches(cached, source, book) then
+            return { cached_session = cached }
+        end
+        -- Do not keep another book's potentially large TOC alive while the
+        -- network path builds the requested one. load_reader_session() has
+        -- already marked the cache attempt, so save_reader_session() below
+        -- will not re-read the old file.
+        cached = nil
+        cache_storage.reader_session_static = nil
+        collectgarbage("collect")
+
         local Runtime = require("legado/runtime")
         -- Imported bookshelf entries already carry the resolved book/toc URLs.
         -- Runtime only uses this shortcut for static bookInfo rules; dynamic
@@ -4572,42 +4586,64 @@ function Legado:showChapters(source, book)
             use_cached_info = true,
         })
         if not result then return nil, err or _("Chapter list failed.") end
-        return result
+        if type(result.chapters) == "table" and #result.chapters > 0 then
+            -- Cache the TOC in the worker as soon as it has been fetched,
+            -- rather than waiting until the user opens a chapter. This makes
+            -- a later bookshelf entry local-first without serializing the
+            -- whole list again on the UI thread.
+            local display_book = result.info or book
+            local current_index = cache_storage:get_last_chapter(display_book)
+            local cache_index = current_index or 1
+            cache_storage:save_reader_session(
+                display_book, source, result.chapters, cache_index, true
+            )
+            return {
+                chapter_result = result,
+                current_index = current_index,
+                cache_index = cache_index,
+            }
+        end
+        return { chapter_result = result }
     end, function(result)
-        if type(result) ~= "table" or type(result.chapters) ~= "table"
-                or #result.chapters == 0 then
+        if type(result) ~= "table" then
             self:showOperationResult(_("Chapter list is empty."))
             return
         end
-        local display_book = result.info or book
-        -- Cache the TOC as soon as it has been fetched, rather than waiting
-        -- until the user opens a chapter. This makes a later bookshelf entry
-        -- local-first and gives the chapter menu the same explicit refresh
-        -- action as the in-reader directory.
-        local current_index = self.storage:get_last_chapter(display_book)
-        local cache_index = current_index or 1
-        local saved = self.storage:save_reader_session(
-            display_book, source, result.chapters, cache_index, true
-        )
-        local reader_session
-        if saved then
-            reader_session = self.storage:load_reader_session()
+        local cached = result.cached_session
+        if reader_session_matches(cached, source, book) then
+            self._reader_session_cache = cached
+            self._reader_session_cache_file = nil
+            self:showChapterMenu(
+                source,
+                cached.book or book,
+                cached.chapters,
+                {
+                    current_index = cached.current_index,
+                    reader_session = cached,
+                }
+            )
+            return
         end
-        if type(reader_session) ~= "table" then
-            -- Keep the current menu usable even if the local settings file is
-            -- temporarily read-only or the device is nearly full. Selecting
-            -- a chapter will retry the normal persistent session write.
-            reader_session = {
-                book = display_book,
-                chapters = result.chapters,
-                current_index = cache_index,
-                source_url = source.bookSourceUrl or "",
-                source_name = source.bookSourceName or "",
-            }
+
+        local fetched = result.chapter_result
+        if type(fetched) ~= "table" or type(fetched.chapters) ~= "table"
+                or #fetched.chapters == 0 then
+            self:showOperationResult(_("Chapter list is empty."))
+            return
         end
+        local display_book = fetched.info or book
+        local current_index = tonumber(result.current_index)
+        local cache_index = tonumber(result.cache_index) or current_index or 1
+        local reader_session = {
+            book = display_book,
+            chapters = fetched.chapters,
+            current_index = cache_index,
+            source_url = source.bookSourceUrl or "",
+            source_name = source.bookSourceName or "",
+        }
         self._reader_session_cache = reader_session
         self._reader_session_cache_file = nil
-        self:showChapterMenu(source, display_book, result.chapters, {
+        self:showChapterMenu(source, display_book, fetched.chapters, {
             current_index = current_index,
             reader_session = reader_session,
         })
