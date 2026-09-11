@@ -1,6 +1,6 @@
 # Legado for KOReader
 
-将 [Legado](https://github.com/HapeLee/legado-with-MD3) 的书源、书架和阅读记录带到已越狱的 Kindle 上，并使用 KOReader 负责最终阅读。
+将 Legado 的书源、书架和阅读记录带到已越狱的 Kindle 上，并使用 KOReader 负责最终阅读。
 
 项目主要面向 Kindle Paperwhite 4，当前以文本小说为主。
 
@@ -58,3 +58,7 @@ unzip -o /mnt/us/legado.koplugin.zip -d /mnt/us/koreader/plugins
 4. 选择书籍和章节即可阅读；阅读到章节末尾会自动进入下一章。
 
 需要登录或依赖浏览器验证的书源，功能取决于 Kindle 上可用的浏览器环境；文本内容会由 KOReader 打开和排版。
+
+## 相关项目
+
+- [legado-with-MD3](https://github.com/HapeLee/legado-with-MD3)：Android 客户端及备份格式参考。
