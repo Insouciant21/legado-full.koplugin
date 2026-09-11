@@ -7,6 +7,7 @@ local Javascript = require("legado/javascript")
 local Session = require("legado/session")
 local Content = require("legado/content")
 local rapidjson = require("rapidjson")
+local socket = require("socket")
 local util = require("util")
 
 local Runtime = {}
@@ -590,7 +591,7 @@ local function compact_chapter_variables(chapters, base_variables)
     end
 end
 
-local function extract_books(source, html, stage, context)
+local function extract_books(source, html, stage, context, options)
     local section = source[stage]
     -- Android Legado uses the search rule as the discovery rule when a source
     -- only defines an explore URL.  This is common for older source packs and
@@ -611,39 +612,136 @@ local function extract_books(source, html, stage, context)
         return nil, err
     end
     local books = {}
+    local lightweight = type(options) == "table"
+        and options.lightweight == true
+    -- Metadata fields are optional in Android Legado. A broken `kind`,
+    -- `wordCount` or cover rule must not discard an otherwise valid search
+    -- result, especially for aggregate sources whose JavaScript rules vary
+    -- between result items. Once one optional rule fails, skip that field for
+    -- the rest of this response instead of repeating the same expensive or
+    -- memory-hungry evaluation for every item.
+    local disabled_optional_fields = {}
+    local book_url_rule = rule(section, "bookUrl")
+    local batched_book_urls
+    local batched_names = {}
+    local batched_contexts = {}
+    -- Pure per-item JavaScript URL rules are safe to evaluate in one QuickJS
+    -- bridge call. This is important for aggregate JSON sources: a base64
+    -- signing expression otherwise starts a full native evaluation for every
+    -- result item.
+    if is_js_rule(book_url_rule)
+            and js_engine:is_batch_safe_rule(book_url_rule) then
+        local batch_contexts = {}
+        local batch_contents = {}
+        local batch_items = {}
+        for _, element in ipairs(elements) do
+            local item_context = {}
+            for key, value in pairs(context) do
+                item_context[key] = value
+            end
+            item_context.rule_variables = {}
+            local name = element_text_value(
+                element, rule(section, "name"), item_context
+            )
+            if name and trim(name) ~= "" then
+                item_context.book = { name = name }
+                batch_items[#batch_items + 1] = element
+                batch_contexts[#batch_contexts + 1] = item_context
+                batch_contents[#batch_contents + 1] = element
+                batched_names[element] = name
+                batched_contexts[element] = item_context
+            end
+        end
+        if #batch_items > 0 then
+            local values, _, batch_err = js_engine:evaluate_rule_batch(
+                source, book_url_rule, batch_contexts, batch_contents
+            )
+            if values then
+                batched_book_urls = {}
+                for index, element in ipairs(batch_items) do
+                    batched_book_urls[element] = javascript_value_text(values[index])
+                end
+            else
+                -- A source may use a rule that passes the conservative static
+                -- check but still exceeds the bridge's batch limits. Fall
+                -- back to the normal per-item path for compatibility.
+                batched_book_urls = nil
+                batched_names = {}
+                batched_contexts = {}
+            end
+        end
+    end
+    local function optional_field(element, field_name, item_context)
+        local expression = rule(section, field_name)
+        if expression == "" or disabled_optional_fields[field_name] then
+            return ""
+        end
+        local value, field_err = element_text_value(
+            element, expression, item_context
+        )
+        if field_err then
+            disabled_optional_fields[field_name] = true
+            return ""
+        end
+        return value or ""
+    end
     for _, element in ipairs(elements) do
-        local item_context = {}
-        for key, value in pairs(context) do
-            item_context[key] = value
+        local item_context = batched_contexts[element]
+        if not item_context then
+            item_context = {}
+            for key, value in pairs(context) do
+                item_context[key] = value
+            end
+            item_context.rule_variables = {}
         end
-        item_context.rule_variables = {}
-        local name, name_err = text_value(element, rule(section, "name"), item_context)
-        if name_err then
-            return nil, name_err
+        -- Parse fields relative to the selected result element. This keeps
+        -- Jsoup-compatible rules such as `h5@text` working when bookList has
+        -- already selected the h5 node itself, while complex rules still use
+        -- the complete parser as a fallback.
+        local name = batched_names[element]
+        if not name then
+            local name_err
+            name, name_err = element_text_value(
+                element, rule(section, "name"), item_context
+            )
+            if name_err then name = "" end
         end
-        local book_url, url_err = text_value(element, rule(section, "bookUrl"), item_context)
-        if url_err then
-            return nil, url_err
+        local book_url = batched_book_urls and batched_book_urls[element]
+        if book_url == nil then
+            local url_err
+            book_url, url_err = element_text_value(
+                element, book_url_rule, item_context
+            )
+            if url_err then book_url = "" end
         end
         if name and name ~= "" and book_url and book_url ~= "" then
             item_context.book = { name = name }
-            local author, author_err = text_value(element, rule(section, "author"), item_context)
-            if author_err then return nil, author_err end
-            item_context.book.author = author or ""
-            local cover_url, cover_err = text_value(element, rule(section, "coverUrl"), item_context)
-            if cover_err then return nil, cover_err end
-            local intro, intro_err = text_value(element, rule(section, "intro"), item_context)
-            if intro_err then return nil, intro_err end
-            local kind, kind_err = text_value(element, rule(section, "kind"), item_context)
-            if kind_err then return nil, kind_err end
-            local last_chapter, last_err = text_value(element, rule(section, "lastChapter"), item_context)
-            if last_err then return nil, last_err end
-            local update_time, update_err = text_value(element, rule(section, "updateTime"), item_context)
-            if update_err then return nil, update_err end
-            local word_count, word_count_err = text_value(element, rule(section, "wordCount"), item_context)
-            if word_count_err then return nil, word_count_err end
-            local toc_url, toc_err = text_value(element, rule(section, "tocUrl"), item_context)
-            if toc_err then return nil, toc_err end
+            local author = optional_field(element, "author", item_context)
+            item_context.book.author = author
+            local cover_url = ""
+            local intro = ""
+            local kind = ""
+            local last_chapter = ""
+            local update_time = ""
+            local word_count = ""
+            local toc_url = ""
+            if lightweight then
+                -- Search and source switching only need identity fields plus
+                -- the small display metadata below. Details and chapter_list
+                -- fetch the remaining fields after a candidate is selected.
+                last_chapter = optional_field(
+                    element, "lastChapter", item_context
+                )
+                toc_url = optional_field(element, "tocUrl", item_context)
+            else
+                cover_url = optional_field(element, "coverUrl", item_context)
+                intro = optional_field(element, "intro", item_context)
+                kind = optional_field(element, "kind", item_context)
+                last_chapter = optional_field(element, "lastChapter", item_context)
+                update_time = optional_field(element, "updateTime", item_context)
+                word_count = optional_field(element, "wordCount", item_context)
+                toc_url = optional_field(element, "tocUrl", item_context)
+            end
             local base_url = context.baseUrl or source.bookSourceUrl
             local book = {
                 name = name,
@@ -951,6 +1049,7 @@ function Runtime.search_source(source, keyword, page, options)
     if tonumber(source.bookSourceType or 0) ~= 0 then
         return nil, "only text book sources are supported"
     end
+    options = type(options) == "table" and options or {}
     local url_options = Network.url_options(source.searchUrl or "")
     local charset = url_options and url_options.charset or "UTF-8"
     local context = context_for(source, {
@@ -958,6 +1057,16 @@ function Runtime.search_source(source, keyword, page, options)
         keyRaw = keyword or "",
         page = page or 1,
     })
+    -- `timeout` historically limited one HTTP request. Search rules may make
+    -- several nested java.ajax calls, so expose an optional wall-clock budget
+    -- that Network.get can apply to every nested request as well.
+    local total_timeout = tonumber(
+        options.total_timeout or options.search_timeout
+    )
+    if total_timeout and total_timeout > 0
+            and type(socket.gettime) == "function" then
+        context.__legado_deadline = socket.gettime() + total_timeout / 1000
+    end
     local url, err = expand_url(source, source.searchUrl, context)
     if not url or url == "" then
         return nil, err or "source has no searchUrl"
@@ -979,7 +1088,7 @@ function Runtime.search_source(source, keyword, page, options)
     if not html then
         return nil, request_err
     end
-    return extract_books(source, html, "ruleSearch", context)
+    return extract_books(source, html, "ruleSearch", context, options)
 end
 
 function Runtime.book_info(source, book)

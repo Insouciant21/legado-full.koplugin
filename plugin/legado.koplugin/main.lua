@@ -2893,6 +2893,11 @@ end
 local SOURCE_CHANGE_MAX_CANDIDATES_PER_SOURCE = 5
 local SOURCE_CHANGE_MAX_RESULTS = 240
 local SOURCE_CHANGE_TOC_PROBE_LIMIT = 24
+-- A source search may call several endpoints through JavaScript. Keep the
+-- source-switch page responsive on a Kindle while still allowing ordinary
+-- pages time to load. Runtime propagates this budget to nested ajax calls.
+local SOURCE_CHANGE_SEARCH_TIMEOUT_MS = 20000
+local SINGLE_SOURCE_SEARCH_TIMEOUT_MS = 30000
 
 local function source_change_group_tokens(source)
     local groups = {}
@@ -3736,7 +3741,11 @@ function Legado:startBookSourceSearch(state)
             local source_name = source_display_name(source)
             write_progress(position - 1, source_name)
             local ok, books, search_error = pcall(
-                Runtime.search_source, source, keyword, 1, { timeout = 60000 }
+                Runtime.search_source, source, keyword, 1, {
+                    timeout = SOURCE_CHANGE_SEARCH_TIMEOUT_MS,
+                    total_timeout = SOURCE_CHANGE_SEARCH_TIMEOUT_MS,
+                    lightweight = true,
+                }
             )
             if not ok then
                 search_error = books
@@ -4038,7 +4047,11 @@ end
 function Legado:searchSource(source, keyword)
     self:runWorker(_("Searching…"), function()
         local Runtime = require("legado/runtime")
-        local books, err = Runtime.search_source(source, keyword, 1)
+        local books, err = Runtime.search_source(source, keyword, 1, {
+            timeout = SINGLE_SOURCE_SEARCH_TIMEOUT_MS,
+            total_timeout = SINGLE_SOURCE_SEARCH_TIMEOUT_MS,
+            lightweight = true,
+        })
         if not books then return nil, err or _("Search failed.") end
         return books
     end, function(books)

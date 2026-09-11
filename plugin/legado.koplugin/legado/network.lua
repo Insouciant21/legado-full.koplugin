@@ -467,7 +467,20 @@ local function cached_url_options(tail)
     if cached then
         return cached.options, cached.encoded
     end
-    local ok, options = pcall(rapidjson.decode, tail)
+    local option_text = tostring(tail or "")
+    local ok, options = pcall(rapidjson.decode, option_text)
+    if not ok or type(options) ~= "table" then
+        -- Some Android backup/export paths turn JSON quotes into typographic
+        -- quotes while preserving the URL-option suffix. Normalize only this
+        -- isolated options object; source rules and response text remain
+        -- untouched.
+        option_text = option_text
+            :gsub("“", '"')
+            :gsub("”", '"')
+            :gsub("‘", "'")
+            :gsub("’", "'")
+        ok, options = pcall(rapidjson.decode, option_text)
+    end
     if not ok or type(options) ~= "table" then
         return nil
     end
@@ -511,7 +524,11 @@ local function split_url_options(value)
     local found_options
     local found_encoded
     while comma do
-        local tail = value:sub(comma + 1):match("^%s*(.*)$")
+        -- Keep embedded newlines: exported URL options are JSON and may be
+        -- pretty-printed across several lines. Lua's `.` does not match a
+        -- newline, so `^%s*(.*)$` would truncate the options at the first
+        -- line break before the JSON decoder can see it.
+        local tail = trim(value:sub(comma + 1))
         local options, encoded = cached_url_options(tail)
         if options then
             found_url = trim(value:sub(1, comma - 1))
@@ -881,6 +898,17 @@ function Network.get(url, source, extra_options)
     local retry_count = tonumber(options and options.retry) or 0
     retry_count = math.max(0, math.min(5, math.floor(retry_count)))
     local timeout = tonumber(options and options.timeout)
+    local context = options and options.__legado_context
+    local deadline = context and tonumber(context.__legado_deadline)
+    if deadline and type(socket.gettime) == "function" then
+        local remaining_ms = math.floor((deadline - socket.gettime()) * 1000)
+        if remaining_ms < 100 then
+            return nil, "request deadline exceeded"
+        end
+        if not timeout or timeout <= 0 or timeout > remaining_ms then
+            timeout = remaining_ms
+        end
+    end
     -- Legado's timeout is milliseconds; LuaSocket expects seconds.
     local timeout_seconds = timeout and math.max(0.1, timeout / 1000)
         or DEFAULT_HTTP_TIMEOUT_SECONDS
@@ -977,11 +1005,26 @@ function Network.get(url, source, extra_options)
                 and (explicit_cookie .. "; " .. session_cookie)
                 or session_cookie
         end
+        local body_sink = ltn12.sink.table(chunks)
+        if deadline then
+            -- LuaSocket's TIMEOUT is an inactivity timeout, not a wall-clock
+            -- limit. Aggregator endpoints can keep sending small chunks and
+            -- therefore exceed the search budget indefinitely. Check the
+            -- deadline from the streaming sink as well so active responses
+            -- are interrupted after the configured total search time.
+            local regular_sink = body_sink
+            body_sink = function(chunk, sink_err)
+                if chunk and socket.gettime() >= deadline then
+                    return nil, "request deadline exceeded"
+                end
+                return regular_sink(chunk, sink_err)
+            end
+        end
         local request = {
             url = clean_url,
             method = method,
             headers = request_headers,
-            sink = ltn12.sink.table(chunks),
+            sink = body_sink,
         }
         if options and options.proxy then
             local proxy = tostring(options.proxy)

@@ -253,22 +253,33 @@ local function template_value(expression, context)
 end
 
 function Rules.expand_templates(value, context)
+    local text = tostring(value)
     context = context or {}
     local output = {}
     local cursor = 1
     while true do
-        local start, finish, expression = tostring(value):find("{{(.-)}}", cursor)
+        -- Lua's `.` does not match newlines. Android backups often pretty
+        -- print URL options and leave a line break inside `{{page}}`; scan
+        -- the delimiters literally so those valid templates are expanded as
+        -- well.
+        local start = text:find("{{", cursor, true)
         if not start then
-            output[#output + 1] = tostring(value):sub(cursor)
+            output[#output + 1] = text:sub(cursor)
+            break
+        end
+        local finish = text:find("}}", start + 2, true)
+        if not finish then
+            output[#output + 1] = text:sub(cursor)
             break
         end
         output[#output + 1] = tostring(value):sub(cursor, start - 1)
+        local expression = text:sub(start + 2, finish - 1)
         local replacement, err = template_value(expression, context)
         if not replacement then
             return nil, err
         end
         output[#output + 1] = replacement
-        cursor = finish + 1
+        cursor = finish + 2
     end
     return table.concat(output)
 end
@@ -408,6 +419,23 @@ local function simple_element_value(element, rule)
         end
     end
     local mode = trim(rule)
+    -- Android's legacy selector syntax commonly keeps the selected tag in
+    -- the field rule (`h5@text`, `a@href`). When the current value is already
+    -- that element, Jsoup includes it in the selector result; do the same
+    -- without reparsing the node as a descendant document.
+    local selector, selected_mode = mode:match(
+        "^([%a_][%w_:%-]*)@([%w_:%-]+)$"
+    )
+    if not selector then
+        selector, selected_mode = mode:match("^(%*)@([%w_:%-]+)$")
+    end
+    if selector then
+        local element_name = tostring(element.name or "")
+        if selector ~= "*" and element_name:lower() ~= selector:lower() then
+            return nil
+        end
+        return simple_element_value(element, selected_mode)
+    end
     if mode == "text" or mode == "ownText" or mode == "textNodes"
             or mode == "html" or mode == "all" then
         return element_value(element, mode)
@@ -3251,6 +3279,56 @@ local function replacement_value(value, replacement)
     return table.concat(output)
 end
 
+-- A large JSON search result often applies a small Java regex to every title
+-- (for example `（别名：.*?）`). Sending each replacement through QuickJS is
+-- disproportionately expensive on the KPW4. Keep a deliberately narrow
+-- native path for patterns without Java-only constructs; unsupported or
+-- ambiguous expressions continue through the JavaScript-compatible path.
+local function native_replace_pattern(pattern)
+    pattern = tostring(pattern or "")
+    if pattern == "" or pattern:find("\\", 1, true)
+            or pattern:find("(", 1, true)
+            or pattern:find(")", 1, true)
+            or pattern:find("[", 1, true)
+            or pattern:find("]", 1, true)
+            or pattern:find("+", 1, true)
+            or pattern:find("|", 1, true)
+            or pattern:find("{", 1, true)
+            or pattern:find("}", 1, true) then
+        return false
+    end
+    return true
+end
+
+local function native_replace(
+        value, pattern, replacement, first, empty_on_miss)
+    local patterns, pattern_err = lua_pattern_variants(pattern)
+    if not patterns then
+        return nil, pattern_err, false
+    end
+    local target = tostring(value or "")
+    local converted_replacement = replacement_value(target, replacement)
+    local matched = false
+    for _, converted in ipairs(patterns) do
+        local ok, replaced, count = pcall(function()
+            if first then
+                return target:gsub(converted, converted_replacement, 1)
+            end
+            return target:gsub(converted, converted_replacement)
+        end)
+        if not ok then
+            return nil, replaced, true
+        end
+        if count and count > 0 then matched = true end
+        target = replaced
+        if first and matched then return target, nil, true end
+    end
+    if first and empty_on_miss and not matched then
+        return "", nil, true
+    end
+    return target, nil, true
+end
+
 -- A replacement rule is often attached to every item of a large TOC.  Calling
 -- QuickJS for a literal replacement or an end/start anchor is needlessly
 -- expensive on the KPW4.  Keep this conservative: Java regex metacharacters,
@@ -3326,12 +3404,29 @@ local function replace_string(value, pattern, replacement, first, empty_on_miss,
     if fast_result ~= nil then
         return fast_result
     end
+
+    local native_result
+    local native_err
+    local native_supported = false
+    if native_replace_pattern(pattern) then
+        native_result, native_err, native_supported = native_replace(
+            value, pattern, replacement, first, empty_on_miss
+        )
+        if native_supported and native_result ~= nil then
+            return native_result
+        end
+    end
+
     local javascript_result = javascript_replace(
         value, pattern, replacement, first, empty_on_miss, context
     )
     if javascript_result ~= nil then
         return javascript_result
     end
+    if native_supported then
+        return native_result, native_err
+    end
+
     local alternatives, operator = split_top_level(tostring(pattern or ""), { "|" })
     if operator == nil then
         alternatives = { tostring(pattern or "") }
