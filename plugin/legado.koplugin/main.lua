@@ -3534,10 +3534,11 @@ function Legado:showBookSourceChangeMenu(state)
                 return
             end
             if not item.record or not item.source or not item.book then return end
-            if not state.done then
-                self:showOperationResult(_("Wait until source search finishes."))
-                return
-            end
+            -- A result is actionable as soon as its source worker has emitted
+            -- it. Do not make the user wait for the remaining sources: the
+            -- source replacement worker fetches and validates the candidate's
+            -- TOC independently, while the search page may continue receiving
+            -- results in the background.
             if source_change_is_current(state, item.source) then
                 self:showOperationResult(_("This is already the current source."))
                 return
@@ -3549,10 +3550,6 @@ function Legado:showBookSourceChangeMenu(state)
         end,
         onMenuHold = function(menu, item)
             if item and item.record and item.source then
-                if not state.done then
-                    self:showOperationResult(_("Wait until source search finishes."))
-                    return true
-                end
                 -- The Android adapter exposes source management from a result
                 -- row. Reuse the same generic source-actions implementation so
                 -- login, edit, enable/disable and delete stay source-agnostic.
