@@ -3447,7 +3447,10 @@ function Legado:showBookSourceChangeMenu(state)
         -- can therefore make TextBoxWidget receive a zero/negative width.
         -- Keep the useful prefix while leaving the wrapped candidate text
         -- untouched.
-        return source_change_truncate_utf8(value, 96)
+        -- 32 bytes leaves ample room even with KOReader's 16 px mandatory
+        -- font. The menu implementation does not otherwise protect against
+        -- a long right-hand widget consuming the entire row.
+        return source_change_truncate_utf8(value, 32)
     end
     local items = {
         {
