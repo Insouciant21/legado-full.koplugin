@@ -636,17 +636,24 @@ function Storage:get_reading_status(books)
     local history = self:get_history_settings():readSetting("books") or {}
     if type(history) ~= "table" then history = {} end
     local status = {}
+    local reading_times = {}
     for index, book in ipairs(books or {}) do
         if type(book) == "table" then
             local progress_entry = progress[book_key(book)]
             local history_entry = book.name and tostring(book.name) ~= ""
                 and history[history_key(book.name, book.author)] or nil
             status[index] = classify_book(book, progress_entry, history_entry)
+            local progress_time = type(progress_entry) == "table"
+                and as_epoch_seconds(progress_entry.updated_at) or 0
+            local history_time = type(history_entry) == "table"
+                and as_epoch_seconds(history_entry.last_read) or 0
+            reading_times[index] = math.max(progress_time, history_time)
         else
             status[index] = "unread"
+            reading_times[index] = 0
         end
     end
-    return status
+    return status, reading_times
 end
 
 function Storage:import_reading_records()

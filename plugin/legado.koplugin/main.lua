@@ -2639,8 +2639,8 @@ function Legado:showBookshelf()
         self:showOperationResult(_("Bookshelf is empty. Import an Android backup or search and download a book."))
         return
     end
-    local reading_status = self.storage:get_reading_status(books)
-    self:showBookshelfCategories(catalog, books, reading_status)
+    local reading_status, reading_times = self.storage:get_reading_status(books)
+    self:showBookshelfCategories(catalog, books, reading_status, reading_times)
 end
 
 local function bookshelf_category_label(category_id)
@@ -2650,7 +2650,7 @@ local function bookshelf_category_label(category_id)
     return _("All books")
 end
 
-function Legado:showBookshelfCategories(catalog, books, reading_status)
+function Legado:showBookshelfCategories(catalog, books, reading_status, reading_times)
     local categories = catalog:categories()
     local items = {}
     for category_index, category in ipairs(categories) do
@@ -2672,16 +2672,27 @@ function Legado:showBookshelfCategories(catalog, books, reading_status)
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
             self:showBookshelfBooks(
-                catalog, books, item.category, reading_status
+                catalog, books, item.category, reading_status, reading_times
             )
         end,
     }
     UIManager:show(category_menu)
 end
 
-function Legado:showBookshelfBooks(catalog, books, category, reading_status)
+function Legado:showBookshelfBooks(
+        catalog, books, category, reading_status, reading_times)
     local category_id = category and category.id or "all"
     local entries = catalog:books_for_category(books, category_id, reading_status)
+    table.sort(entries, function(left, right)
+        local left_time = tonumber(reading_times and reading_times[left.index]) or 0
+        local right_time = tonumber(reading_times and reading_times[right.index]) or 0
+        if left_time ~= right_time then
+            return left_time > right_time
+        end
+        -- Keep books with no reading timestamp stable instead of making the
+        -- order appear random every time the menu is rebuilt.
+        return (left.index or 0) < (right.index or 0)
+    end)
     local items = {}
     for entry_index, entry in ipairs(entries) do
         local book = entry.book
@@ -2720,7 +2731,9 @@ function Legado:showBookshelfBooks(catalog, books, category, reading_status)
         -- previous page when the user closes a category, instead of sending
         -- the user back to KOReader and requiring the whole flow again.
         close_callback = function()
-            self:showBookshelfCategories(catalog, books, reading_status)
+            self:showBookshelfCategories(
+                catalog, books, reading_status, reading_times
+            )
         end,
         onMenuSelect = function(menu, item)
             if item.empty_category then
