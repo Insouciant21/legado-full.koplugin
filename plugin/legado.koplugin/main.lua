@@ -3170,6 +3170,41 @@ local function source_change_visible(state, record)
         or book_name:find(filter, 1, true) ~= nil
 end
 
+-- Android's change-source adapter gives each result its own vertical row:
+-- source, author and latest-chapter text are separate views.  KOReader's
+-- Menu has no equivalent fixed-column adapter, so keep the same information
+-- in a wrapped text block.  In particular, `lastChapter` is also where many
+-- aggregate sources expose the backend source name (for example `番茄`),
+-- therefore it must not be hidden in a right-aligned status field.
+local function source_change_result_text(state, source, candidate)
+    local lines = {}
+    local function append(value, prefix)
+        value = trim_text(value)
+        if value == "" then return end
+        if prefix then value = prefix .. ": " .. value end
+        lines[#lines + 1] = display_text(value)
+    end
+
+    append(source_display_name(source))
+    append(candidate and candidate.name or state.book.name)
+
+    local candidate_origin = trim_text(
+        candidate and (candidate.originName or candidate.origin)
+    )
+    local source_name = trim_text(source_display_name(source))
+    if candidate_origin ~= ""
+            and source_change_normalize(candidate_origin)
+                ~= source_change_normalize(source_name) then
+        append(candidate_origin, _("Source"))
+    end
+    append(candidate and candidate.author, _("Author"))
+    -- Keep this value unlabelled, matching Android's `tvLast`. It can be a
+    -- latest chapter for an ordinary source or a backend-source marker for an
+    -- aggregate source, and the source rule is the authority for its text.
+    append(candidate and candidate.lastChapter)
+    return table.concat(lines, "\n")
+end
+
 local function source_change_status(state)
     if state.searching then
         local progress = state.progress or {}
@@ -3294,38 +3329,21 @@ function Legado:showBookSourceChangeMenu(state)
     for result_index, record in ipairs(visible_results) do
         local source = state.sources[record.source_index]
         local candidate = record.book or {}
-        local source_name = display_text(source_display_name(source))
-        local candidate_name = display_text(candidate.name or state.book.name)
-        local labels = {}
+        local status = {}
         if source_change_is_current(state, source) then
-            labels[#labels + 1] = _("Current")
+            status[#status + 1] = _("Current")
         end
-        if source_has_login(source) then
-            labels[#labels + 1] = _("Login / actions")
-        end
-        local groups = source_change_group_tokens(source)
-        local group_labels = {}
-        for group_index, group in ipairs(groups) do
-            group_labels[#group_labels + 1] = source_change_group_label(group)
-        end
-        if #group_labels > 0 then
-            labels[#labels + 1] = table.concat(group_labels, "/")
-        end
-        local author = trim_text(candidate.author)
-        if author ~= "" then labels[#labels + 1] = display_text(author) end
         if tonumber(candidate.chapter_count) then
-            labels[#labels + 1] = T(_("%1 chapters"), candidate.chapter_count)
+            status[#status + 1] = T(_("%1 chapters"), candidate.chapter_count)
         elseif candidate.toc_probe_skipped then
-            labels[#labels + 1] = _("TOC count skipped for memory safety")
+            status[#status + 1] = _("TOC count skipped for memory safety")
         end
         if candidate.enrichment_error then
-            labels[#labels + 1] = _("Info unavailable")
+            status[#status + 1] = _("Info unavailable")
         end
         local item = {
-            text = source_name
-                .. (candidate_name ~= display_text(state.book.name)
-                    and ("\n" .. candidate_name) or ""),
-            mandatory = #labels > 0 and table.concat(labels, " · ") or nil,
+            text = source_change_result_text(state, source, candidate),
+            mandatory = #status > 0 and table.concat(status, " · ") or nil,
             source = source,
             source_index = record.source_index,
             book = candidate,
