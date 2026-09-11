@@ -3126,6 +3126,9 @@ local function source_change_options(storage)
         load_toc = source_change_read_bool(
             storage, "change_source_load_toc", false
         ),
+        load_word_count = source_change_read_bool(
+            storage, "change_source_load_word_count", false
+        ),
     }
 end
 
@@ -3134,6 +3137,9 @@ local function source_change_save_options(storage, options)
     settings:saveSetting("change_source_check_author", options.check_author == true)
     settings:saveSetting("change_source_load_info", options.load_info == true)
     settings:saveSetting("change_source_load_toc", options.load_toc == true)
+    settings:saveSetting(
+        "change_source_load_word_count", options.load_word_count == true
+    )
     settings:flush()
 end
 
@@ -3154,6 +3160,7 @@ local function source_change_options_summary(options)
     if options.check_author then values[#values + 1] = _("Author") end
     if options.load_info then values[#values + 1] = _("Info") end
     if options.load_toc then values[#values + 1] = _("TOC count") end
+    if options.load_word_count then values[#values + 1] = _("Extra info") end
     if #values == 0 then return _("None") end
     return table.concat(values, " · ")
 end
@@ -3273,39 +3280,92 @@ local function source_change_visible(state, record)
         or book_name:find(filter, 1, true) ~= nil
 end
 
--- Android's change-source adapter gives each result its own vertical row:
--- source, author and latest-chapter text are separate views.  KOReader's
--- Menu has no equivalent fixed-column adapter, so keep the same information
--- in a wrapped text block.  In particular, `lastChapter` is also where many
--- aggregate sources expose the backend source name (for example `番茄`),
--- therefore it must not be hidden in a right-aligned status field.
+local function source_change_current_chapter(chapters, target_book, progress)
+    if type(chapters) ~= "table" or #chapters == 0 then return nil, nil end
+
+    -- Match Android's BookHelp.getDurChapter(): a title is more stable than a
+    -- numeric position after a source inserts or removes chapters.  Fall back
+    -- to the stored one-based Kindle position (or Android's zero-based field)
+    -- when the title is unavailable or the source changed its spelling.
+    local wanted_title = trim_text(progress and progress.title)
+    if wanted_title == "" then
+        wanted_title = trim_text(target_book and target_book.durChapterTitle)
+    end
+    local wanted = source_change_normalize(wanted_title)
+    if wanted ~= "" then
+        for index, chapter in ipairs(chapters) do
+            if source_change_normalize(chapter and chapter.name) == wanted then
+                return chapter, index
+            end
+        end
+    end
+
+    local index = tonumber(progress and progress.index)
+    if not index then
+        local android_index = tonumber(target_book and target_book.durChapterIndex)
+        if android_index then index = android_index + 1 end
+    end
+    if index and index >= 1 and index <= #chapters then
+        index = math.floor(index)
+        return chapters[index], index
+    end
+
+    -- Android displays the latest chapter when the change-source page was
+    -- opened outside the reader.  This is also the useful fallback for an
+    -- unread bookshelf entry with no saved progress.
+    return chapters[#chapters], #chapters
+end
+
+local function source_change_extra_text(state, candidate)
+    if not (state.options and state.options.load_word_count) then return nil end
+    local chapter_index = tonumber(candidate and candidate.chapter_word_count_index)
+    local chapter_title = trim_text(candidate and candidate.chapter_word_count_title)
+    local word_count = tonumber(candidate and candidate.chapter_word_count)
+    if not chapter_index or chapter_title == "" then return nil end
+    chapter_index = math.floor(chapter_index)
+    if word_count and word_count >= 0 then
+        local response_time = tonumber(candidate.respond_time)
+        if response_time and response_time >= 0 then
+            return T(
+                _("[%1] %2 · %3 words · %4 ms"),
+                chapter_index, display_text(chapter_title),
+                math.floor(word_count), math.floor(response_time)
+            )
+        end
+        return T(
+            _("[%1] %2 · %3 words"),
+            chapter_index, display_text(chapter_title), math.floor(word_count)
+        )
+    end
+    return T(
+        _("[%1] %2 · %3"),
+        chapter_index, display_text(chapter_title),
+        display_text(
+            candidate and candidate.chapter_word_count_error
+                or _("Word count unavailable")
+        )
+    )
+end
+
+-- Android's change-source adapter uses the source name as the card title and
+-- shows author/latest-chapter as supporting content.  KOReader's Menu renders
+-- one text stream, so use the same fields in a wrapped, delimiter-separated
+-- block.  The book title, source URL and source actions do not belong in this
+-- candidate summary: the title is already in the page header and actions are
+-- available from the row's long-press menu.
 local function source_change_result_text(state, source, candidate)
-    local lines = {}
-    local function append(value, prefix)
+    local values = {}
+    local function append(value)
         value = trim_text(value)
-        if value == "" then return end
-        if prefix then value = prefix .. ": " .. value end
-        lines[#lines + 1] = display_text(value)
+        if value ~= "" then values[#values + 1] = display_text(value) end
     end
 
     append(source_display_name(source))
-    append(candidate and candidate.name or state.book.name)
-
-    local candidate_origin = trim_text(
-        candidate and (candidate.originName or candidate.origin)
-    )
-    local source_name = trim_text(source_display_name(source))
-    if candidate_origin ~= ""
-            and source_change_normalize(candidate_origin)
-                ~= source_change_normalize(source_name) then
-        append(candidate_origin, _("Source"))
-    end
-    append(candidate and candidate.author, _("Author"))
-    -- Keep this value unlabelled, matching Android's `tvLast`. It can be a
-    -- latest chapter for an ordinary source or a backend-source marker for an
-    -- aggregate source, and the source rule is the authority for its text.
-    append(candidate and candidate.lastChapter)
-    return table.concat(lines, "\n")
+    append(candidate and candidate.author)
+    local latest_chapter = trim_text(candidate and candidate.lastChapter)
+    append(latest_chapter ~= "" and latest_chapter or _("No latest chapter"))
+    append(source_change_extra_text(state, candidate))
+    return table.concat(values, " · ")
 end
 
 local function source_change_status(state)
@@ -3490,11 +3550,10 @@ function Legado:showBookSourceChangeMenu(state)
 
     if state.menu then
         state.menu.item_table = items
-        -- updateItems(..., true) deliberately skips Menu's layout
-        -- recalculation. Keep its cached page count in sync anyway; otherwise
-        -- a menu created with only the four header rows keeps believing it has
-        -- one page after search results arrive, so its page controls remain
-        -- disabled and later results cannot be reached.
+        -- Dynamic-height rows cache both page_items and page_num. Rebuild that
+        -- cache before asking for a page: the initial menu has only its header
+        -- rows, while search results arrive incrementally from the worker.
+        state.menu:_recalculateDimen(false)
         local page_count = math.max(1, state.menu:getPageNumber(#items))
         if current_item and state.auto_scroll_current then
             state.menu.page = state.menu:getPageNumber(current_item)
@@ -3512,6 +3571,10 @@ function Legado:showBookSourceChangeMenu(state)
         title = T(_("Change source for %1"), display_text(state.book.name)),
         item_table = items,
         items_per_page = 12,
+        -- Android uses a source title plus supporting metadata in each card.
+        -- MenuItem removes literal newlines, so let KOReader wrap the compact
+        -- field stream and calculate a separate height for every result.
+        items_max_lines = 4,
         onMenuSelect = function(menu, item)
             if item.action == "refresh" then
                 if not state.searching then self:startBookSourceSearch(state) end
@@ -3672,6 +3735,7 @@ function Legado:showBookSourceOptions(state)
         check_author = state.options.check_author == true,
         load_info = state.options.load_info == true,
         load_toc = state.options.load_toc == true,
+        load_word_count = state.options.load_word_count == true,
     }
     local options_menu
     local function render()
@@ -3698,6 +3762,11 @@ function Legado:showBookSourceOptions(state)
                 "load_toc",
                 _("slow; count only, no TOC kept")
             ),
+            option_item(
+                _("Show extra information"),
+                "load_word_count",
+                _("slow; loads the current chapter")
+            ),
         }
         if options_menu then
             options_menu.item_table = items
@@ -3712,6 +3781,7 @@ function Legado:showBookSourceOptions(state)
                         local changed = working.check_author ~= state.options.check_author
                             or working.load_info ~= state.options.load_info
                             or working.load_toc ~= state.options.load_toc
+                            or working.load_word_count ~= state.options.load_word_count
                         state.options = working
                         source_change_save_options(self.storage, state.options)
                         UIManager:close(menu)
@@ -3817,16 +3887,19 @@ function Legado:startBookSourceSearch(state)
 
     local keyword = trim_text(state.book and state.book.name)
     local target_book = state.book
+    local target_progress = progress_from_book(self.storage, target_book)
     local options = {
         check_author = state.options.check_author == true,
         load_info = state.options.load_info == true,
         load_toc = state.options.load_toc == true,
+        load_word_count = state.options.load_word_count == true,
     }
     local progress_path = state.progress_path
     self:runWorker(_("Searching all sources…"), function()
         local Runtime = require("legado/runtime")
         local worker_util = require("util")
         local worker_json = require("rapidjson")
+        local socket = require("socket")
         local output = {
             records = {},
             errors = {},
@@ -3858,6 +3931,57 @@ function Legado:startBookSourceSearch(state)
                 match_score = match_score,
             }
             return true
+        end
+        local function now_milliseconds()
+            if type(socket.gettime) == "function" then
+                return socket.gettime() * 1000
+            end
+            return os.clock() * 1000
+        end
+        local function load_word_count(source, candidate)
+            local toc_result, toc_error = Runtime.chapter_list(
+                source, candidate, { use_cached_info = true }
+            )
+            output.toc_probe_count = output.toc_probe_count + 1
+            if type(toc_result) ~= "table"
+                    or type(toc_result.chapters) ~= "table"
+                    or #toc_result.chapters == 0 then
+                candidate.enrichment_error = tostring(
+                    toc_error or _("Chapter list is empty.")
+                )
+                return
+            end
+
+            source_change_merge_info(candidate, toc_result.info)
+            local chapters = toc_result.chapters
+            candidate.chapter_count = #chapters
+            candidate.totalChapterNum = #chapters
+            local chapter, chapter_index = source_change_current_chapter(
+                chapters, target_book, target_progress
+            )
+            if not chapter then return end
+
+            local title = source_change_truncate_utf8(chapter.name or "", 96)
+            local started = now_milliseconds()
+            local content, content_error = Runtime.chapter_content(
+                source, chapter, candidate
+            )
+            local elapsed = math.max(0, math.floor(now_milliseconds() - started))
+            candidate.chapter_word_count_index = chapter_index
+            candidate.chapter_word_count_title = title
+            candidate.respond_time = elapsed
+            if content then
+                candidate.chapter_word_count = #content
+            else
+                candidate.chapter_word_count = -1
+                candidate.chapter_word_count_error = source_change_truncate_utf8(
+                    content_error or _("Word count unavailable"), 512
+                )
+            end
+            content = nil
+            chapters = nil
+            toc_result = nil
+            collectgarbage("collect")
         end
         write_progress(0, "")
         for position, source_entry in ipairs(search_sources) do
@@ -3907,24 +4031,28 @@ function Legado:startBookSourceSearch(state)
                     )
                     for match_index = 1, limit do
                         local candidate = matches[match_index].book
-                        if options.load_toc
+                        if (options.load_toc or options.load_word_count)
                                 and output.toc_probe_count < SOURCE_CHANGE_TOC_PROBE_LIMIT then
-                            local toc_result, toc_error = Runtime.chapter_list(
-                                source, candidate, { use_cached_info = true }
-                            )
-                            output.toc_probe_count = output.toc_probe_count + 1
-                            if type(toc_result) == "table" then
-                                source_change_merge_info(candidate, toc_result.info)
-                                if type(toc_result.chapters) == "table" then
-                                    candidate.chapter_count = #toc_result.chapters
-                                    candidate.totalChapterNum = #toc_result.chapters
+                            if options.load_word_count then
+                                load_word_count(source, candidate)
+                            else
+                                local toc_result, toc_error = Runtime.chapter_list(
+                                    source, candidate, { use_cached_info = true }
+                                )
+                                output.toc_probe_count = output.toc_probe_count + 1
+                                if type(toc_result) == "table" then
+                                    source_change_merge_info(candidate, toc_result.info)
+                                    if type(toc_result.chapters) == "table" then
+                                        candidate.chapter_count = #toc_result.chapters
+                                        candidate.totalChapterNum = #toc_result.chapters
+                                    end
+                                elseif toc_error then
+                                    candidate.enrichment_error = tostring(toc_error)
                                 end
-                            elseif toc_error then
-                                candidate.enrichment_error = tostring(toc_error)
+                                toc_result = nil
+                                collectgarbage("collect")
                             end
-                            toc_result = nil
-                            collectgarbage("collect")
-                        elseif options.load_toc then
+                        elseif options.load_toc or options.load_word_count then
                             candidate.toc_probe_skipped = true
                             output.toc_probe_skipped = output.toc_probe_skipped + 1
                         elseif options.load_info then

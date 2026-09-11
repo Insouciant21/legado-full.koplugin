@@ -867,6 +867,10 @@ msgstr "信息"
 msgid "TOC count"
 msgstr "目录数"
 
+#: plugin/legado.koplugin/main.lua:3064
+msgid "Extra info"
+msgstr "额外信息"
+
 #: plugin/legado.koplugin/main.lua:3049
 msgid "None"
 msgstr "无"
@@ -963,6 +967,26 @@ msgstr "点击查看详情；其他书源仍会继续搜索。"
 msgid "Change source for %1"
 msgstr "为 %1 换源"
 
+#: plugin/legado.koplugin/main.lua:3347
+msgid "No latest chapter"
+msgstr "无最新章节"
+
+#: plugin/legado.koplugin/main.lua:3377
+msgid "[%1] %2 · %3 words · %4 ms"
+msgstr "[%1] %2 · %3 字 · %4 毫秒"
+
+#: plugin/legado.koplugin/main.lua:3384
+msgid "[%1] %2 · %3 words"
+msgstr "[%1] %2 · %3 字"
+
+#: plugin/legado.koplugin/main.lua:3389
+msgid "[%1] %2 · %3"
+msgstr "[%1] %2 · %3"
+
+#: plugin/legado.koplugin/main.lua:3391
+msgid "Word count unavailable"
+msgstr "无法获取字数"
+
 #: plugin/legado.koplugin/main.lua:3406 plugin/legado.koplugin/main.lua:3421
 msgid "Wait until source search finishes."
 msgstr "请等待书源搜索完成。"
@@ -1010,6 +1034,14 @@ msgstr "探测目录章节数"
 #: plugin/legado.koplugin/main.lua:3570
 msgid "slow; count only, no TOC kept"
 msgstr "较慢；仅保留章节数，不保留目录"
+
+#: plugin/legado.koplugin/main.lua:3575
+msgid "Show extra information"
+msgstr "显示更多信息"
+
+#: plugin/legado.koplugin/main.lua:3577
+msgid "slow; loads the current chapter"
+msgstr "较慢；会加载当前章节"
 
 #: plugin/legado.koplugin/main.lua:3612
 msgid "%1 source requests failed."

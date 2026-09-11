@@ -864,6 +864,10 @@ msgstr ""
 msgid "TOC count"
 msgstr ""
 
+#: plugin/legado.koplugin/main.lua:3064
+msgid "Extra info"
+msgstr ""
+
 #: plugin/legado.koplugin/main.lua:3049
 msgid "None"
 msgstr ""
@@ -960,6 +964,26 @@ msgstr ""
 msgid "Change source for %1"
 msgstr ""
 
+#: plugin/legado.koplugin/main.lua:3347
+msgid "No latest chapter"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3377
+msgid "[%1] %2 · %3 words · %4 ms"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3384
+msgid "[%1] %2 · %3 words"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3389
+msgid "[%1] %2 · %3"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3391
+msgid "Word count unavailable"
+msgstr ""
+
 #: plugin/legado.koplugin/main.lua:3406 plugin/legado.koplugin/main.lua:3421
 msgid "Wait until source search finishes."
 msgstr ""
@@ -1006,6 +1030,14 @@ msgstr ""
 
 #: plugin/legado.koplugin/main.lua:3570
 msgid "slow; count only, no TOC kept"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3575
+msgid "Show extra information"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua:3577
+msgid "slow; loads the current chapter"
 msgstr ""
 
 #: plugin/legado.koplugin/main.lua:3612
