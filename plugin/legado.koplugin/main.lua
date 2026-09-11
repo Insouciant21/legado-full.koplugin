@@ -1828,6 +1828,83 @@ local function login_control_value(control, saved, name)
     return tostring(value)
 end
 
+-- KOReader keeps virtual-keyboard layouts in global reader settings.  A fresh
+-- installation can legitimately have an empty `keyboard_layouts` list while
+-- the current layout is English; in that state the globe key has nowhere to
+-- switch and a source login form appears to support no Chinese input.
+--
+-- Login forms are the only plugin-owned text-entry surface that needs this
+-- convenience.  Temporarily activate the standard KOReader Pinyin layout and
+-- restore the user's keyboard settings when the dialog is closed.  The source
+-- is not involved in this choice, and no Android/Legado settings are imported.
+local function prepare_login_keyboard(dialog)
+    if not G_reader_settings or type(dialog) ~= "table" then return end
+
+    local previous_layout = G_reader_settings:readSetting("keyboard_layout")
+    local previous_layouts = G_reader_settings:readSetting("keyboard_layouts")
+    local layouts = {}
+    local seen = {}
+    if type(previous_layouts) == "table" then
+        for _, layout in ipairs(previous_layouts) do
+            layout = tostring(layout or "")
+            if layout ~= "" and not seen[layout] then
+                layouts[#layouts + 1] = layout
+                seen[layout] = true
+            end
+        end
+    end
+    -- Keep an English fallback in the globe popup, then make the Chinese
+    -- Pinyin layout available.  Existing user-selected layouts are preserved.
+    if #layouts == 0 then
+        layouts[1] = "en"
+        seen.en = true
+    end
+    if not seen.zh_CN then
+        -- KOReader's globe popup supports at most four active layouts.  This
+        -- list is temporary, so replace the last slot rather than creating a
+        -- fifth entry that would make the stock keyboard popup invalid.
+        if #layouts >= 4 then
+            layouts[4] = "zh_CN"
+        else
+            layouts[#layouts + 1] = "zh_CN"
+        end
+    end
+    G_reader_settings:saveSetting("keyboard_layouts", layouts)
+    G_reader_settings:saveSetting("keyboard_layout", "zh_CN")
+    -- The dialog may already have constructed its VirtualKeyboard before this
+    -- helper is called.  Reinitialize that instance as well as the setting;
+    -- changing the setting alone would only affect the next dialog.
+    local keyboard = dialog._input_widget and dialog._input_widget.keyboard
+    if keyboard and type(keyboard.setKeyboardLayout) == "function" then
+        pcall(keyboard.setKeyboardLayout, keyboard, "zh_CN")
+    end
+
+    local restored = false
+    local function restore()
+        if restored then return end
+        restored = true
+        if previous_layout == nil then
+            G_reader_settings:delSetting("keyboard_layout")
+        else
+            G_reader_settings:saveSetting("keyboard_layout", previous_layout)
+        end
+        if previous_layouts == nil then
+            G_reader_settings:delSetting("keyboard_layouts")
+        else
+            G_reader_settings:saveSetting("keyboard_layouts", previous_layouts)
+        end
+    end
+
+    -- UIManager closes dialogs through onCloseWidget even when a caller uses a
+    -- custom button callback.  Wrapping that lifecycle hook also covers the
+    -- hardware Back key and the title-bar close action.
+    local original_on_close_widget = dialog.onCloseWidget
+    dialog.onCloseWidget = function(self, ...)
+        restore()
+        return original_on_close_widget(self, ...)
+    end
+end
+
 function Legado:showGenericLoginDialog(source)
     local dialog
     dialog = InputDialog:new{
@@ -1861,6 +1938,7 @@ function Legado:showGenericLoginDialog(source)
             },
         },
     }
+    prepare_login_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -1961,6 +2039,7 @@ function Legado:showSourceLoginControls(source, controls)
             },
         },
     }
+    prepare_login_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
