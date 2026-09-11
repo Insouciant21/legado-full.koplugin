@@ -1,130 +1,60 @@
-# Legado for KOReader on Kindle
+# Legado for KOReader
 
-这是一个面向已越狱 Kindle Paperwhite 4 的 KOReader 插件项目，目标是：
+将 [Legado](https://github.com/HapeLee/legado-with-MD3) 的书源、书架和阅读记录带到已越狱的 Kindle 上，并使用 KOReader 负责最终阅读。
 
-- 在 Kindle 本地执行文本小说书源；
-- 从 `legado-with-MD3` / Legado Android 备份导入书源、书架和阅读记录；
-- 使用 KOReader 负责最终阅读、字体、字号、排版和阅读界面；
-- 以插件能力补充连续章节、预载和连载目录刷新。
+项目主要面向 Kindle Paperwhite 4，当前以文本小说为主。
 
-当前备份功能是“Android → Kindle”的单向导入，不提供 Kindle 端导出。项目不把
-用户的 WebDAV 备份或 `.env` 凭据放入仓库。
+## 功能特性
 
-## 当前实现
+- 从 Android Legado 备份包导入书源、书架和阅读记录。
+- 兼容普通书源和聚合书源，支持搜索、目录、登录、书源 Actions 和换源。
+- 书架提供全部、在读、未读、已读动态分类。
+- 支持上一章、下一章连续阅读，章节预加载和连载目录刷新。
+- 按需下载章节，也支持带进度的整本下载。
+- 清理章节 HTML 后交给 KOReader 排版。
+- 字体、字号、间距和其他阅读设置由 KOReader 管理。
+- 支持 emoji 回退字体。
 
-```text
-legado_kindle/       桌面端备份读取、结构校验和导入布局
-plugin/              KOReader 插件、书源运行时和本地状态
-tests/               不包含个人数据的合成测试
-```
+Android 备份中的主题、字体、阅读界面设置和书架分组不会导入 Kindle。插件只提供 Android → Kindle 的导入，不提供 Kindle 端导出。
 
-## 使用备份工具
+## 安装
+
+### 从源码构建
+
+在 Linux/macOS 环境准备 Python 3、`zip`、`msgfmt`、QuickJS 构建所需工具，以及 Kindle 使用的 ARM 交叉编译器，然后执行：
 
 ```bash
-python3 -m unittest discover -v
-python3 -m legado_kindle inspect /path/to/backup.zip
-python3 -m legado_kindle materialize /path/to/backup.zip /path/to/state
-python3 -m legado_kindle source-report /path/to/backup.zip
+make plugin-zip
 ```
 
-`inspect` 只输出文件结构、数量、字段名、规则使用情况和哈希，不输出书名、作者、URL、正文或配置值。
-`source-report` 只输出每条书源使用了哪些规则能力，不输出书源名称、地址或规则值，
-便于在导入 Kindle 前发现使用 JavaScript/XPath 的书源。
-
-Android 备份中仅有以下 5 个成员会进入 Kindle 状态：
+构建完成后会生成：
 
 ```text
-bookSource.json
-bookshelf.json
-readRecord.json
-readRecordDetail.json
-readRecordSession.json
+dist/legado.koplugin.zip
 ```
 
-`bookGroup.json`、`readConfig.json`、书架条目中的 `readConfig` 和分类字段、主题、界面设置、服务端、
-RSS、搜索历史和其他未来成员都会被忽略；其中书架条目的 `readConfig` 会被剥离。书源 JSON 本身
-完整保留，因此聚合源需要的规则、分页、变量、登录和 JavaScript 字段不会因为导入
-边界而被硬编码替换。阅读记录会转换为 Kindle 端的阅读历史和续读章节；书架只提供
-书籍元数据，分类完全根据 Kindle 阅读进度或导入的阅读记录动态计算；Android
-记录表本身没有章节索引，章节位置使用 `bookshelf.json` 的
-`durChapterIndex/durChapterTitle/durChapterTime`。
+### 安装到 Kindle
 
-运行 `make plugin-zip` 可生成可直接复制的 `dist/legado.koplugin.zip`；解压后目录名
-应保持为 `legado.koplugin`。
+将生成的 ZIP 复制到 Kindle 的 `/mnt/us/`，解压到 KOReader 的插件目录，并保持目录名为 `legado.koplugin`：
 
-插件界面使用 KOReader 的 gettext 实例，并在加载插件元数据时从
-`l10n/<locale>/legado.mo` 合并插件自己的目录。当前随仓库提供 `zh_CN` 翻译；KOReader
-使用其他语言时，如果没有对应目录则回退到 Lua 源文本（英文）。新增语言时复制
-`l10n/zh_CN/legado.po`，翻译 `msgstr` 后使用 `msgfmt` 生成同目录下的 `legado.mo`。
-`make l10n` 会校验并重新生成简体中文目录，`make plugin-zip` 会自动包含编译后的目录。
-书名、书源名称、搜索结果、正文和源返回的错误详情属于数据，不会被界面目录误翻译。
+```bash
+mkdir -p /mnt/us/koreader/plugins
+unzip -o /mnt/us/legado.koplugin.zip -d /mnt/us/koreader/plugins
+```
 
-## KOReader 插件
+也可以直接将完整的 `legado.koplugin` 目录复制到：
 
-将 `plugin/legado.koplugin` 复制到 KOReader 的 `plugins/` 目录后重启 KOReader。
-书架位于 KOReader 主菜单页的 `Legado bookshelf`，也可以从
-`Legado → Open bookshelf` 进入；还可以为 `Legado: open bookshelf` 绑定手势或快捷键。
+```text
+/mnt/us/koreader/plugins/legado.koplugin/
+```
 
-`Legado → Source settings → Source list` 列出导入的全部书源。点选书源后可以执行
-登录/Actions、搜索、完整 JSON 修改、启用/禁用和删除；`Add source` 支持粘贴单个
-书源/数组或导入 JSON 文件。`Legado → Backup & restore` 只有 Android 备份导入入口，
-`Diagnostics` 提供状态和兼容性报告。
+重启 KOReader 后，在 `Legado` 菜单中使用插件。
 
-书籍详情中的 `Change source` 参考 Legado Android 的 `ChangeBookSourceDialog`：打开后会以书名
-搜索全部已启用的可搜索文本书源，可选检查作者，并把候选集中到一个列表；后台搜索会逐源更新
-进度和结果。KPW4 上为控制内存，规则 worker 按书源串行运行；换源页支持按书源名/书名筛选、
-选择一个或多个书源分组，分组会直接限制搜索源池，当前书源会标记并自动定位。
-长按候选可以进入通用书源 Actions（登录、修改、启用/禁用、调整顺序和删除）。
+## 导入备份并开始阅读
 
-换源选项还可以预先加载书籍信息或探测目录章节数。为避免 KPW4 同时保留多个大目录，目录探测
-只传回章节数且最多探测 24 个候选；用户点击候选后才获取并保留完整目录。换源前必须成功获取
-新书源目录，然后以章节标题优先、章节序号兜底迁移阅读进度；旧书源的章节/封面/生成文件和
-阅读会话缓存会清理，换源后详情页与目录页会立即使用新书源。
+1. 将 Android Legado 导出的备份 ZIP 复制到 Kindle。
+2. 打开 `Legado → Backup & restore → Import Android backup`。
+3. 导入完成后，从 `Legado bookshelf` 打开书籍。
+4. 选择书籍和章节即可阅读；阅读到章节末尾会自动进入下一章。
 
-打开书架后只显示四个动态分类：“全部书籍”“在读”“未读”“已读”。“在读”表示
-已经开始阅读但尚未到达目录末章，“已读”表示当前进度已到达最后一个已知章节，“未读”
-表示没有开始阅读证据。分类不读取
-Android 的 `bookGroup.json` 或书籍 `group` 字段；书源和阅读历史仍保存在插件自己的
-状态目录中，不依赖 Android UI 配置。
-
-选择章节后会建立轻量阅读会话：翻到章节末尾会直接打开下一章，不必退回书架；阅读器
-菜单提供目录、上一章和下一章。当前 Legado 章节文档的 KOReader“目录”入口会显示源目录，
-普通书籍仍使用 KOReader 原生目录。连载读到已知目录末尾时可以刷新目录以获取新章。
-正常阅读只按需下载当前章，不要求先下载全本；整本下载逐章显示可取消进度，已缓存
-章节会跳过，取消后可以续传。打开章节后默认后台预载后续 5 章，可调整为 5–10 章。
-
-KOReader 完全负责字体、字号、间距、CSS、嵌入字体开关和其他阅读界面设置。插件不再
-读取或写入按书保存的 `reading-settings.lua`，也不把 Android 的阅读设置复制到书架；
-切换字体应直接使用 KOReader 的字体菜单。由于每个 Legado 章节是独立文档，章节切换
-前插件只会把当前 KOReader 文档的原生阅读字段同步到目标章节的 `.sdr`，不复制位置、
-书签、批注或 Android 设置。Emoji 数据不会被删除，插件提供单色
-`Symbola_hint.ttf` 作为回退字体，首次安装后必要时重启 KOReader 完成字体扫描。
-
-章节下载后会进入插件内的 ContentProcessor：先执行书源定义的 `ruleContent.replaceRegex`，
-再结构化处理 HTML，移除 `head`、脚本、样式、SVG 和图片/媒体内容，将块级标签转换为段落，
-解码 HTML 实体，去除重复章节标题及空段落，最后生成不带固定字体、行距或缩进 CSS 的 XHTML。
-前台下载、后台预载、旧缓存迁移和整本下载共用该处理流程。
-
-规则层覆盖普通 CSS/Legado 旧式选择器、JSONPath、常见 XPath、正则（含 `:` 开头的
-AllInOne 捕获规则）、`@put/@get` 变量、模板、分页、替换规则和 Legado JavaScript。
-QuickJS 桥接把 `java.ajax`、响应对象、Cookie、登录信息、源变量、`infoMap`、缓存、
-浏览器/WebView、Base64/Hex、对称加密和常见 Java/Jsoup 对象映射到 Kindle。发现源
-支持换行/`&&`/JSON/脚本返回的分类项，以及 `select/toggle/button` action；每个源的
-筛选状态独立保存。实现不识别任何聚合源名称、接口地址或私有字段；聚合源只作为
-通用协议覆盖测试的参考。
-
-书源登录读取源定义中的 `loginUi`、按钮和 `loginUrl`/JavaScript，结果 Cookie、登录
-信息和源变量按书源保存到 `<KOReader data dir>/legado/source-sessions.json`，这个
-会话文件不属于 Android 备份，首次迁移到 Kindle 后需要在 Kindle 上登录一次。
-
-`@webjs`、`java.webView`、`startBrowser*` 和登录/发现 action 会通过 Kindle 自带的
-Chromium/浏览器桥执行；这类规则需要设备上的浏览器可用，并可能需要用户完成验证码
-或登录。Android 专属 UI、RSS/图片/音频/漫画能力和 `qread` 不属于文本阅读范围，仍会
-明确报错或返回受限结果，不会静默抓取错误内容。网络和 HTML 处理在 Trapper 子进程执行，
-以避免慢源阻塞 KOReader 界面；正文 HTML 会先转换为干净文本再交给 KOReader 排版。
-
-QuickJS 原生库随插件放在 `lib/armel/` 和 `lib/armhf/`；`make plugin-zip` 会构建两种
-ARM ABI，KPW4 使用 `armhf`。
-
-Android 备份 ZIP 不包含正文缓存；插件只导入数据和阅读进度，不会把 Android 的
-主题、字体或其他界面状态带到 Kindle。
+需要登录或依赖浏览器验证的书源，功能取决于 Kindle 上可用的浏览器环境；文本内容会由 KOReader 打开和排版。
