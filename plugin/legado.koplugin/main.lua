@@ -525,6 +525,8 @@ end
 function Legado:runWorker(message, task, on_success, options)
     options = options or {}
     local trap_widget = options.trap_widget
+    local original_dismiss_callback = trap_widget
+        and trap_widget.dismiss_callback
     if options.interactive and not trap_widget then
         -- A source action may open the Kindle Chromium bridge and wait for
         -- real user input.  Trapper's normal TrapWidget interprets the first
@@ -571,8 +573,10 @@ function Legado:runWorker(message, task, on_success, options)
     local trap_target
     if options.invisible then
         -- Background work should not put a modal progress surface over the
-        -- page. nil asks Trapper to use its invisible event-resending trap.
-        trap_target = nil
+        -- page. An existing page can still be supplied as the event boundary:
+        -- it remains interactive, while Trapper does not add an invisible
+        -- cancel layer above it.
+        trap_target = trap_widget
     else
         trap_target = trap_widget ~= nil and trap_widget or message
     end
@@ -580,6 +584,10 @@ function Legado:runWorker(message, task, on_success, options)
     local function release_trap()
         if not trap_widget then return end
         if options.keep_trap then
+            -- The existing page is also used as the worker's event boundary.
+            -- Trapper replaces its dismiss callback while the subprocess runs;
+            -- restore the page's original callback before leaving it visible.
+            trap_widget.dismiss_callback = original_dismiss_callback
             if options.reset_trap_callback then
                 options.reset_trap_callback()
             end
@@ -2790,6 +2798,22 @@ local function apply_replacement_progress(book, chapters, progress)
     }
 end
 
+local function update_book_reference(target, replacement)
+    -- Bookshelf/category menus keep the array that was loaded before the
+    -- detail page opened. Updating the persisted JSON alone would leave that
+    -- captured table stale until the whole bookshelf was reopened. Preserve
+    -- the existing table identity so every open menu sees the new source too.
+    if type(target) ~= "table" or type(replacement) ~= "table" then
+        return
+    end
+    for key in pairs(target) do
+        target[key] = nil
+    end
+    for key, value in pairs(replacement) do
+        target[key] = value
+    end
+end
+
 local function refresh_parent_book_menu(parent_widget, old_book, new_book, index, storage)
     if type(parent_widget) ~= "table"
             or type(parent_widget.item_table) ~= "table" then
@@ -3466,13 +3490,19 @@ function Legado:showBookSourceChangeMenu(state)
 
     if state.menu then
         state.menu.item_table = items
+        -- updateItems(..., true) deliberately skips Menu's layout
+        -- recalculation. Keep its cached page count in sync anyway; otherwise
+        -- a menu created with only the four header rows keeps believing it has
+        -- one page after search results arrive, so its page controls remain
+        -- disabled and later results cannot be reached.
+        local page_count = math.max(1, state.menu:getPageNumber(#items))
         if current_item and state.auto_scroll_current then
             state.menu.page = state.menu:getPageNumber(current_item)
             state.auto_scroll_current = false
         else
-            local page_count = math.max(1, state.menu:getPageNumber(#items))
             state.menu.page = math.min(state.menu.page or 1, page_count)
         end
+        state.menu.page_num = page_count
         state.menu:updateItems(nil, true)
         return state.menu
     end
@@ -3947,6 +3977,13 @@ function Legado:startBookSourceSearch(state)
         end
     end, {
         invisible = true,
+        -- Keep the change-source page usable while the source workers run.
+        -- Passing nil here creates Trapper's invisible TrapWidget, whose first
+        -- tap is interpreted as cancellation. The already displayed menu is
+        -- a safe event boundary: its page buttons, filters and result rows
+        -- remain usable, while the search subprocess continues in parallel.
+        trap_widget = state.menu,
+        keep_trap = true,
         on_failure = function(error_message)
             if state.generation ~= generation then return end
             state.searching = false
@@ -4054,6 +4091,8 @@ function Legado:replaceBookSource(
         if source_picker then
             UIManager:close(source_picker)
         end
+        update_book_reference(book, result.book)
+        self._book_source_change_state = nil
         self.storage:invalidate_reading_record_cache()
         self.storage:set_cache_identity(result.book)
         self.storage:remove_cover_variants(result.book)
