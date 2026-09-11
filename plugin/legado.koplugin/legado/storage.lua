@@ -145,11 +145,14 @@ end
 
 local function book_key(book)
     if type(book) ~= "table" then return tostring(book or "") end
+    -- Do not put optional fields directly in an ipairs table: when `id` is
+    -- absent, Lua stops at that nil and every bookshelf entry collapses to the
+    -- same empty key. That makes one progress record classify every book.
     for _, value in ipairs({
-        book.id,
-        book.bookUrl,
-        book.bookSourceUrl,
-        book.name,
+        book.id or "",
+        book.bookUrl or "",
+        book.bookSourceUrl or "",
+        book.name or "",
     }) do
         if value ~= nil and tostring(value) ~= "" then
             return tostring(value)
