@@ -3439,28 +3439,42 @@ function Legado:showBookSourcePicker(book, book_index, parent_widget)
 end
 
 function Legado:showBookSourceChangeMenu(state)
+    local function safe_mandatory(value)
+        value = trim_text(value)
+        if value == "" then return nil end
+        -- KOReader's MenuItem subtracts the measured right-hand status width
+        -- from the text width without clamping it.  A long source/group name
+        -- can therefore make TextBoxWidget receive a zero/negative width.
+        -- Keep the useful prefix while leaving the wrapped candidate text
+        -- untouched.
+        return source_change_truncate_utf8(value, 96)
+    end
     local items = {
         {
             text = state.searching and _("Searching all sources…")
                 or _("Refresh source results"),
-            mandatory = source_change_status(state),
+            mandatory = safe_mandatory(source_change_status(state)),
             action = "refresh",
             separator = true,
         },
         {
             text = state.source_filter == "" and _("Filter source results")
                 or T(_("Filter: %1"), display_text(state.source_filter)),
-            mandatory = _("Source name or title filter"),
+            mandatory = safe_mandatory(_("Source name or title filter")),
             action = "filter",
         },
         {
             text = _("Source groups"),
-            mandatory = source_change_group_summary(state.selected_groups),
+            mandatory = safe_mandatory(
+                source_change_group_summary(state.selected_groups)
+            ),
             action = "groups",
         },
         {
             text = _("Change-source options"),
-            mandatory = source_change_options_summary(state.options),
+            mandatory = safe_mandatory(
+                source_change_options_summary(state.options)
+            ),
             action = "options",
         },
     }
@@ -3506,7 +3520,9 @@ function Legado:showBookSourceChangeMenu(state)
         end
         local item = {
             text = source_change_result_text(state, source, candidate),
-            mandatory = #status > 0 and table.concat(status, " · ") or nil,
+            mandatory = #status > 0 and safe_mandatory(
+                table.concat(status, " · ")
+            ) or nil,
             source = source,
             source_index = record.source_index,
             book = candidate,
@@ -3523,16 +3539,18 @@ function Legado:showBookSourceChangeMenu(state)
         if tonumber(state.source_count) == 0 then
             items[#items + 1] = {
                 text = _("No enabled source in selected groups"),
-                mandatory = _("Choose All groups or select another group."),
+                mandatory = safe_mandatory(
+                    _("Choose All groups or select another group.")
+                ),
                 dim = true,
                 action = "empty",
             }
         else
             items[#items + 1] = {
                 text = _("No matching source results"),
-                mandatory = state.source_filter ~= ""
+                mandatory = safe_mandatory(state.source_filter ~= ""
                     and _("Clear the filter or choose another group.")
-                    or _("Try Refresh or change the author check."),
+                    or _("Try Refresh or change the author check.")),
                 dim = true,
                 action = "empty",
             }
@@ -3541,7 +3559,7 @@ function Legado:showBookSourceChangeMenu(state)
     if #state.errors > 0 then
         table.insert(items, 5, {
             text = T(_("Source errors (%1)"), #state.errors),
-            mandatory = _("Tap to inspect; other sources continue."),
+            mandatory = safe_mandatory(_("Tap to inspect; other sources continue.")),
             action = "errors",
         })
         if current_item then current_item = current_item + 1 end
