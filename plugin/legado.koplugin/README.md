@@ -151,3 +151,12 @@ browser page to be brought to the foreground for verification. Android-only
 UI, RSS/image/audio/manga features and `qread` are outside the text-reader
 scope and remain explicit limited/unsupported
 capabilities.
+
+Cloudflare-like interstitials are detected asynchronously, and the bridge
+does not attempt to bypass or solve them on the older KPW4 Chromium engine. If
+a challenge is detected, the request ends immediately with an explicit
+unsupported message; source-side catches cannot turn it into a successful
+action. After an ordinary interactive browser completion, cookies are merged
+before an optional HTTP refetch. A challenge that rejects the Kindle engine
+requires a source-side alternative, a newer browser, or an external cookie
+handoff.

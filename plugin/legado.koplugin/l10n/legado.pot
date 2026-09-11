@@ -228,6 +228,10 @@ msgstr ""
 msgid "Operation returned invalid data."
 msgstr ""
 
+#: plugin/legado.koplugin/legado/browser.lua:20
+msgid "Cloudflare verification is not supported on this Kindle browser; operation cancelled."
+msgstr ""
+
 #: plugin/legado.koplugin/main.lua:764
 msgid "Reading session is missing."
 msgstr ""

@@ -73,6 +73,7 @@ local function with_session(source, callback)
     end
     active_session_key = key
     local ok, first, second, third = pcall(callback)
+    local fatal_error = js_engine:take_fatal_error()
     local saved, save_err = save_session(source)
     active_session_key = nil
     if not ok then
@@ -80,6 +81,9 @@ local function with_session(source, callback)
     end
     if not saved then
         return nil, save_err or "cannot persist source login state"
+    end
+    if fatal_error then
+        return nil, fatal_error
     end
     return first, second, third
 end

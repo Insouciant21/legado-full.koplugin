@@ -224,6 +224,10 @@ msgstr "后台任务没有返回数据。"
 msgid "Operation returned invalid data."
 msgstr "操作返回了无效数据。"
 
+#: plugin/legado.koplugin/legado/browser.lua:20
+msgid "Cloudflare verification is not supported on this Kindle browser; operation cancelled."
+msgstr "此 Kindle 浏览器不支持 Cloudflare 人机验证，操作已取消。"
+
 #: plugin/legado.koplugin/main.lua:764
 msgid "Reading session is missing."
 msgstr "阅读会话不存在。"

@@ -14,6 +14,9 @@ end)
 
 local Network = {}
 local DEFAULT_HTTP_TIMEOUT_SECONDS = 20
+local CLOUDFLARE_UNSUPPORTED_ERROR =
+    "Cloudflare verification is not supported on this Kindle browser; operation cancelled."
+Network.CLOUDFLARE_UNSUPPORTED_ERROR = CLOUDFLARE_UNSUPPORTED_ERROR
 
 local function trim(value)
     return (tostring(value):gsub("^%s+", ""):gsub("%s+$", ""))
@@ -625,6 +628,58 @@ local function response_body(body_chunks, response_headers, code, options)
     return body, response_headers, code
 end
 
+local function response_header_matches(headers, expected_name, expected_value)
+    if type(headers) ~= "table" then return false end
+    expected_name = tostring(expected_name or ""):lower()
+    expected_value = tostring(expected_value or ""):lower()
+    for name, value in pairs(headers) do
+        if tostring(name):lower() == expected_name
+                and tostring(value):lower() == expected_value then
+            return true
+        end
+    end
+    return false
+end
+
+local function response_sample(body_chunks, limit)
+    limit = tonumber(limit) or 512 * 1024
+    local pieces = {}
+    local length = 0
+    for _, chunk in ipairs(body_chunks or {}) do
+        if type(chunk) == "string" and #chunk > 0 then
+            local remaining = limit - length
+            if remaining <= 0 then break end
+            pieces[#pieces + 1] = chunk:sub(1, remaining)
+            length = length + math.min(#chunk, remaining)
+        end
+    end
+    return table.concat(pieces):lower()
+end
+
+local function is_cloudflare_challenge_response(headers, code, body_chunks)
+    if response_header_matches(headers, "cf-mitigated", "challenge") then
+        return true
+    end
+    local numeric_code = tonumber(code) or 0
+    local server_is_cloudflare = false
+    if type(headers) == "table" then
+        for name, value in pairs(headers) do
+            if tostring(name):lower() == "server"
+                    and tostring(value):lower():find("cloudflare", 1, true) then
+                server_is_cloudflare = true
+                break
+            end
+        end
+    end
+    if not server_is_cloudflare and numeric_code < 400 then
+        return false
+    end
+    local sample = response_sample(body_chunks)
+    return sample:find("<title>just a moment", 1, true) ~= nil
+        and (sample:find("/cdn-cgi/challenge-platform/", 1, true) ~= nil
+            or sample:find("cf-turnstile", 1, true) ~= nil)
+end
+
 local function response_cookies(url)
     local host = cookie_host(url)
     local cookies = host and cookie_jar[host] or nil
@@ -1052,7 +1107,12 @@ function Network.get(url, source, extra_options)
         local ok, code, response_headers, status = requester.request(request)
         requester.TIMEOUT = previous_timeout
         local numeric_code = tonumber(code)
-        if not ok then
+        if ok and is_cloudflare_challenge_response(
+                response_headers, numeric_code, chunks
+            ) then
+            update_cookies(clean_url, response_headers)
+            return nil, CLOUDFLARE_UNSUPPORTED_ERROR, numeric_code
+        elseif not ok then
             if attempt < retry_count then
                 attempt = attempt + 1
             else
@@ -1111,6 +1171,9 @@ function Network.get_response(url, source, extra_options)
     local clean_url = split_url_options(url)
     if body == nil then
         local message = tostring(headers or "HTTP request failed")
+        if message == CLOUDFLARE_UNSUPPORTED_ERROR then
+            return nil, message
+        end
         return {
             body = "",
             url = clean_url,

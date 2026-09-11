@@ -13,8 +13,12 @@ local ltn12 = require("ltn12")
 local rapidjson = require("rapidjson")
 local socket = require("socket")
 local BrowserInput = require("legado/browser_input")
+local _ = require("gettext")
 
 local Browser = {}
+local CLOUDFLARE_UNSUPPORTED_ERROR =
+    _("Cloudflare verification is not supported on this Kindle browser; operation cancelled.")
+Browser.CLOUDFLARE_UNSUPPORTED_ERROR = CLOUDFLARE_UNSUPPORTED_ERROR
 
 local BROWSER_BINARY = "/usr/bin/chromium/bin/kindle_browser"
 local BROWSER_LIBRARY_PATH = "/usr/bin/chromium/lib:/usr/bin/chromium/usr/lib:/usr/lib"
@@ -297,6 +301,55 @@ local function encode_base64(value)
     return table.concat(output)
 end
 
+-- A WebView caller must not receive Cloudflare's interstitial as if it were
+-- the requested page. The challenge is asynchronous: document.readyState can
+-- become `complete` before Turnstile has finished and before the clearance
+-- cookie is issued. Keep the test deliberately structural and ES5-only so it
+-- also runs in the old Kindle content shell. It is not tied to a source,
+-- domain, challenge token or endpoint.
+local CLOUDFLARE_CHALLENGE_PAGE = [=[
+(function() {
+  try {
+    var title = String(document.title || '').toLowerCase();
+    var text = String(document.body && document.body.innerText || '').toLowerCase().slice(0, 4096);
+    var cookie = String(document.cookie || '').toLowerCase();
+    var successful = text.indexOf('verification successful') >= 0;
+    if (successful || cookie.indexOf('cf_clearance=') >= 0) return false;
+    if (title.indexOf('just a moment') >= 0) return true;
+    if (text.indexOf('performing security verification') >= 0 ||
+        text.indexOf('checking your browser') >= 0 ||
+        text.indexOf('ddos protection') >= 0 ||
+        text.indexOf('enable javascript and cookies') >= 0) return true;
+    if (document.querySelector) {
+      if (document.querySelector('script[src*="/cdn-cgi/challenge-platform/"]') ||
+          document.querySelector('iframe[src*="challenges.cloudflare.com"]') ||
+          document.querySelector('input[name="cf-turnstile-response"]') ||
+          document.querySelector('[id^="cf-chl-"]')) return true;
+    }
+  } catch (error) {}
+  return false;
+})()
+]=]
+
+local function cloudflare_challenge_page(client)
+    local value, err = client:evaluate(CLOUDFLARE_CHALLENGE_PAGE)
+    if err then return nil, err end
+    return value == true
+end
+
+local function is_cloudflare_challenge_html(body)
+    if type(body) ~= "string" or body == "" then return false end
+    -- The challenge markers are in the document head. Limit the copy before
+    -- lower-casing so a large ordinary article does not create another large
+    -- transient Lua string.
+    local sample = body:sub(1, 512 * 1024):lower()
+    if not sample:find("<title>just a moment", 1, true) then
+        return false
+    end
+    return sample:find("/cdn%-cgi/challenge%-platform/", 1, false) ~= nil
+        or sample:find("cf%-turnstile", 1, false) ~= nil
+end
+
 local function pack_u16(value)
     local high = math.floor(value / 256) % 256
     local low = value % 256
@@ -422,6 +475,8 @@ function Client:new(client)
         events = {},
         resources = {},
         resource_seen = {},
+        cloudflare_challenge_seen = false,
+        responses = {},
     }, self)
 end
 
@@ -472,18 +527,38 @@ function Client:call(method, params)
     end
     local sent, send_err = websocket_send(self.socket, 1, encoded)
     if not sent then return nil, send_err end
+    local queued = self.responses[id]
+    if queued then
+        self.responses[id] = nil
+    end
     while true do
-        local message, receive_err = self:receive_message()
-        if not message then return nil, receive_err end
-        local decoded_ok, decoded = pcall(rapidjson.decode, message)
+        local decoded = queued
+        local decoded_ok = true
+        queued = nil
+        if not decoded then
+            decoded = self.responses[id]
+            if decoded then self.responses[id] = nil end
+        end
+        if not decoded then
+            local message, receive_err = self:receive_message()
+            if not message then return nil, receive_err end
+            decoded_ok, decoded = pcall(rapidjson.decode, message)
+            if not decoded_ok then decoded = nil end
+        end
         if decoded_ok and type(decoded) == "table" and tonumber(decoded.id) == id then
             if decoded.error then
                 local detail = type(decoded.error) == "table"
                     and (decoded.error.message or decoded.error.code) or decoded.error
-                return nil, "browser command " .. tostring(method) .. ": " .. tostring(detail)
+                local error_message = "browser command " .. tostring(method) .. ": " .. tostring(detail)
+                return nil, error_message
             end
             return decoded.result or {}
-        elseif decoded_ok and type(decoded) == "table" and decoded.method then
+        elseif type(decoded) == "table" and tonumber(decoded.id) then
+            -- CDP responses can arrive out of order while a command is
+            -- waiting for its own result. Retain unrelated responses instead
+            -- of losing them and hanging the next command forever.
+            self.responses[tonumber(decoded.id)] = decoded
+        elseif type(decoded) == "table" and decoded.method then
             -- DevTools events arrive while a synchronous command is waiting
             -- for its response. Keep them: sourceRegex is implemented using
             -- the same Network.* resource notifications as Legado's Android
@@ -505,6 +580,28 @@ function Client:record_event(event)
         url = params.response and params.response.url
     elseif method == "Page.frameNavigated" then
         url = params.frame and params.frame.url
+    end
+    if type(url) == "string" then
+        local lowered_url = url:lower()
+        if lowered_url:find(
+                "/cdn%-cgi/challenge%-platform/", 1, false
+            ) ~= nil or lowered_url:find("/turnstile/v0/", 1, true) ~= nil then
+            self.cloudflare_challenge_seen = true
+        end
+    end
+    if method == "Network.responseReceived" then
+        local response = type(params.response) == "table"
+            and params.response or {}
+        local headers = response.headers
+        if type(headers) == "table" then
+            for name, value in pairs(headers) do
+                if tostring(name):lower() == "cf-mitigated"
+                        and tostring(value):lower() == "challenge" then
+                    self.cloudflare_challenge_seen = true
+                    break
+                end
+            end
+        end
     end
     if type(url) == "string" and url ~= "" and not self.resource_seen[url] then
         self.resource_seen[url] = true
@@ -672,13 +769,18 @@ local function launch(url, port, user_dir, log_path, background)
         "--force-gpu-mem-available-mb=40",
         "--enable-low-end-device-mode",
         "--enable-low-res-tiling",
-        "--disable-site-isolation-trials",
         "--enable-grayscale-mode",
+        "--enable-features=NetworkService",
         "--js-flags=jitless",
         "--user-agent=" .. shell_quote(
-            "Mozilla/5.0 (X11; U; Linux armv7l like Android; en-us) "
-            .. "AppleWebKit/531.2+ (KHTML, like Gecko) Version/5.0 "
-            .. "Safari/533.2+ Kindle/3.0+"
+            -- This is the UA embedded in the KPW4 content shell.  Keeping it
+            -- consistent with navigator.userAgent and the engine's actual
+            -- feature set gives Cloudflare/Turnstile a coherent browser
+            -- fingerprint; the previous Safari 5 override was rejected as
+            -- an unsupported legacy client.
+            "Mozilla/5.0 (Linux; Android 9; Nexus 5 Build/MRA58N) "
+            .. "AppleWebKit/537.36 (KHTML, like Gecko) "
+            .. "Chrome/80.0.3987.149 Mobile Safari/537.36"
         ),
     }
     if background then
@@ -1144,6 +1246,10 @@ function Browser.await(url, options)
             comma = url:find(",", comma + 1, true)
         end
     end
+    local supplied_html = options.html
+    if is_cloudflare_challenge_html(supplied_html) then
+        return finish(nil, CLOUDFLARE_UNSUPPORTED_ERROR)
+    end
     local _, navigation_err = client:call("Page.navigate", { url = navigation_url })
     if navigation_err then return finish(nil, navigation_err) end
     if background then
@@ -1151,8 +1257,8 @@ function Browser.await(url, options)
     else
         promote_browser_window(now() + 2, hidden_kpp_windows)
     end
-    if type(options.html) == "string" and options.html ~= "" then
-        if #options.html > MAX_HTML_BYTES then
+    if type(supplied_html) == "string" and supplied_html ~= "" then
+        if #supplied_html > MAX_HTML_BYTES then
             return finish(nil, "browser HTML is too large")
         end
         local frame_tree = client:call("Page.getFrameTree", {})
@@ -1162,7 +1268,7 @@ function Browser.await(url, options)
         end
         local _, content_err = client:call("Page.setDocumentContent", {
             frameId = frame.id,
-            html = options.html,
+            html = supplied_html,
         })
         if content_err then return finish(nil, content_err) end
     end
@@ -1172,11 +1278,26 @@ function Browser.await(url, options)
     local injected = false
     local ready_at
     local pan_position
+    local cloudflare_seen = false
+    local function finish_browser_error(message)
+        if cloudflare_seen then
+            return finish(nil, CLOUDFLARE_UNSUPPORTED_ERROR)
+        end
+        return finish(nil, message)
+    end
     while now() < deadline do
         if not browser_process_alive(pid) then
             return finish(nil, "Kindle browser exited before the action completed")
         end
-        local current_url = tostring(client:evaluate("String(location.href || '')") or "")
+        if client.cloudflare_challenge_seen then
+            cloudflare_seen = true
+            return finish(nil, CLOUDFLARE_UNSUPPORTED_ERROR)
+        end
+        local current_url_value, current_url_err = client:evaluate(
+            "String(location.href || '')"
+        )
+        if current_url_err then return finish_browser_error(current_url_err) end
+        local current_url = tostring(current_url_value or "")
         if current_url ~= last_url then
             last_url = current_url
             injected = false
@@ -1197,6 +1318,12 @@ function Browser.await(url, options)
         else
             promote_browser_window(now() + 0.15, hidden_kpp_windows)
             pan_position = forward_browser_inputs(client, token, pan_position)
+        end
+        local challenge_value, challenge_err = cloudflare_challenge_page(client)
+        if challenge_err then return finish_browser_error(challenge_err) end
+        if challenge_value == true then
+            cloudflare_seen = true
+            return finish(nil, CLOUDFLARE_UNSUPPORTED_ERROR)
         end
         if options.override_url_regex and tostring(options.override_url_regex) ~= "" then
             local matched, match_err = client:matches_regex(
@@ -1227,13 +1354,16 @@ function Browser.await(url, options)
             end
         end
         if automatic then
-            local ready = client:evaluate("String(document.readyState || '')")
+            local ready, ready_err = client:evaluate(
+                "String(document.readyState || '')"
+            )
+            if ready_err then return finish_browser_error(ready_err) end
             if ready ~= "loading" then
                 if not ready_at then
                     local delay_ms = tonumber(options.delay) or 0
                     ready_at = now() + 1 + math.max(0, delay_ms) / 1000
                 end
-                if now() >= ready_at then
+                if ready_at and now() >= ready_at then
                     local script = tostring(options.script or "")
                     local script_value
                     if script ~= "" then
@@ -1260,30 +1390,51 @@ function Browser.await(url, options)
                 end
             end
         end
-        local done = client:evaluate("window.__legado_browser_done === true")
-        if done == true then
-            local result, result_err = document_result(client)
-            if not result then return finish(nil, result_err) end
-            if options.refetch_after_success == true
-                    and not url:lower():match("^data:") then
-                local Network = require("legado/network")
-                local refresh_options
-                if type(options.context) == "table" then
-                    refresh_options = { __legado_context = options.context }
-                end
-                local refreshed, refresh_err = Network.get(
-                    url, options.source, refresh_options
-                )
-                if refreshed then
-                    result.body = refreshed
-                    result.url = url
-                elseif refresh_err then
-                    result.refresh_error = refresh_err
+        if not automatic then
+            local done, done_err = client:evaluate(
+                "window.__legado_browser_done === true"
+            )
+            if done_err then return finish_browser_error(done_err) end
+            if done == true then
+                local pending_challenge, pending_err = cloudflare_challenge_page(client)
+                if pending_err then return finish_browser_error(pending_err) end
+                if pending_challenge then
+                    cloudflare_seen = true
+                    return finish(nil, CLOUDFLARE_UNSUPPORTED_ERROR)
+                else
+                    local result, result_err = document_result(client)
+                    if not result then return finish(nil, result_err) end
+                    if options.refetch_after_success == true
+                            and not url:lower():match("^data:") then
+                        local Network = require("legado/network")
+                        -- document_result carries cookies from Chromium's
+                        -- cookie store. Merge them before refetching through
+                        -- the normal HTTP client; otherwise a freshly issued
+                        -- cf_clearance cookie is only visible after this
+                        -- function has already returned.
+                        if result.cookies then Network.merge_cookies(result.cookies) end
+                        local refresh_options
+                        if type(options.context) == "table" then
+                            refresh_options = { __legado_context = options.context }
+                        end
+                        local refreshed, refresh_err = Network.get(
+                            url, options.source, refresh_options
+                        )
+                        if refreshed then
+                            result.body = refreshed
+                            result.url = url
+                        elseif refresh_err then
+                            result.refresh_error = refresh_err
+                        end
+                    end
+                    return finish(result)
                 end
             end
-            return finish(result)
         end
         socket.sleep(0.5)
+    end
+    if cloudflare_seen then
+        return finish(nil, CLOUDFLARE_UNSUPPORTED_ERROR)
     end
     return finish(nil, "browser interaction timed out; tap 完成并返回 Kindle")
 end

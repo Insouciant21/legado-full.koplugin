@@ -1430,6 +1430,7 @@ function Javascript:new()
     object.output_buffer = nil
     object.output_size = 0
     object.notifications = {}
+    object.fatal_error = nil
     return object
 end
 
@@ -1438,12 +1439,33 @@ end
 -- in the worker until Runtime.login_source can pass them back to the UI.
 function Javascript:clear_notifications()
     self.notifications = {}
+    self.fatal_error = nil
 end
 
 function Javascript:take_notifications()
     local messages = self.notifications or {}
     self.notifications = {}
     return messages
+end
+
+local function is_cloudflare_unsupported_error(message)
+    return tostring(message or ""):lower():find(
+        "cloudflare verification is not supported on this kindle browser",
+        1,
+        true
+    ) ~= nil
+end
+
+function Javascript:mark_fatal_error(message)
+    if is_cloudflare_unsupported_error(message) and not self.fatal_error then
+        self.fatal_error = tostring(message)
+    end
+end
+
+function Javascript:take_fatal_error()
+    local message = self.fatal_error
+    self.fatal_error = nil
+    return message
 end
 
 function Javascript:ensure_output_buffer(size)
@@ -1670,6 +1692,7 @@ function Javascript:host_call(operation, args, source, context)
         local request_options = request_options_with_context(second, context)
         local body, err = Network.get(tostring(first or ""), source, request_options)
         if body == nil then
+            self:mark_fatal_error(err)
             return nil, err or "HTTP request failed"
         end
         return body
@@ -2045,6 +2068,10 @@ function Javascript:host_call(operation, args, source, context)
         options.timeout = options.timeout or args[4]
         options = request_options_with_context(options, context)
         local response, err = Network.get_response(tostring(first or ""), source, options)
+        if not response then
+            self:mark_fatal_error(err)
+            return nil, err or "HTTP request failed"
+        end
         return response
     elseif operation == "getStrResponse" then
         local request_url = tostring(args[3] or context and context.baseUrl or "")
@@ -2069,7 +2096,10 @@ function Javascript:host_call(operation, args, source, context)
                 source_regex = source_regex ~= "" and source_regex or nil,
                 auto = true,
             })
-            if not browser_result then return nil, browser_err end
+            if not browser_result then
+                self:mark_fatal_error(browser_err)
+                return nil, browser_err
+            end
             if browser_result.cookies then Network.merge_cookies(browser_result.cookies) end
             return browser_result
         end
@@ -2077,6 +2107,10 @@ function Javascript:host_call(operation, args, source, context)
             request_url, request_source,
             request_options_with_context({}, context)
         )
+        if not response then
+            self:mark_fatal_error(err)
+            return nil, err or "HTTP request failed"
+        end
         return response
     elseif operation == "getResponse" or operation == "connect" then
         local request_url = tostring(first or (context and context.baseUrl or ""))
@@ -2094,6 +2128,10 @@ function Javascript:host_call(operation, args, source, context)
         request_options = request_options_with_context(request_options, context)
         request_options.timeout = request_options.timeout or args[3]
         local response, err = Network.get_response(request_url, source, request_options)
+        if not response then
+            self:mark_fatal_error(err)
+            return nil, err or "HTTP request failed"
+        end
         return response
     elseif operation == "get" or operation == "head" then
         local request_options = {
@@ -2105,6 +2143,10 @@ function Javascript:host_call(operation, args, source, context)
         local response, err = Network.get_response(
             tostring(first or ""), source, request_options
         )
+        if not response then
+            self:mark_fatal_error(err)
+            return nil, err or "HTTP request failed"
+        end
         return response
     elseif operation == "initUrl" then
         if context and first and tostring(first) ~= "" then
@@ -2123,7 +2165,13 @@ function Javascript:host_call(operation, args, source, context)
             local options = {}
             if timeout and timeout > 0 then options.timeout = timeout end
             options = request_options_with_context(options, context)
-            local response = Network.get_response(tostring(url or ""), source, options)
+            local response, response_err = Network.get_response(
+                tostring(url or ""), source, options
+            )
+            if not response then
+                self:mark_fatal_error(response_err)
+                return nil, response_err or "HTTP request failed"
+            end
             result[#result + 1] = response
         end
         return result
@@ -2148,6 +2196,7 @@ function Javascript:host_call(operation, args, source, context)
             body, err = read_js_text_file(path)
         end
         if not body or body == "" then
+            self:mark_fatal_error(err)
             return nil, err or "JavaScript library import failed"
         end
         return body
@@ -2419,7 +2468,10 @@ function Javascript:host_call(operation, args, source, context)
             override_url_regex = override_url_regex,
             auto = true,
         })
-        if not browser_result then return nil, browser_err or "WebView evaluation failed" end
+        if not browser_result then
+            self:mark_fatal_error(browser_err)
+            return nil, browser_err or "WebView evaluation failed"
+        end
         if browser_result.cookies then Network.merge_cookies(browser_result.cookies) end
         return browser_result.body or ""
     elseif operation == "startBrowserAwait"
@@ -2448,6 +2500,7 @@ function Javascript:host_call(operation, args, source, context)
             cookies = Network.export_cookies(),
         })
         if not browser_result then
+            self:mark_fatal_error(browser_err)
             return nil, browser_err or "browser interaction failed"
         end
         if browser_result.cookies then
