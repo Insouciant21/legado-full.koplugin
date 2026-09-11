@@ -2669,25 +2669,17 @@ function Legado:showBookshelfCategories(catalog, books, reading_status)
         onMenuSelect = function(menu, item)
             UIManager:close(menu)
             self:showBookshelfBooks(
-                catalog, books, item.category, reading_status, categories
+                catalog, books, item.category, reading_status
             )
         end,
     }
     UIManager:show(category_menu)
 end
 
-function Legado:showBookshelfBooks(catalog, books, category, reading_status, categories)
+function Legado:showBookshelfBooks(catalog, books, category, reading_status)
     local category_id = category and category.id or "all"
     local entries = catalog:books_for_category(books, category_id, reading_status)
     local items = {}
-    if categories and #categories > 0 then
-        items[#items + 1] = {
-            text = _("Change bookshelf category"),
-            mandatory = _("Categories"),
-            choose_category = true,
-            separator = true,
-        }
-    end
     for entry_index, entry in ipairs(entries) do
         local book = entry.book
         if type(book) == "table" and book.name and book.name ~= "" then
@@ -2721,13 +2713,14 @@ function Legado:showBookshelfBooks(catalog, books, category, reading_status, cat
         title = title,
         item_table = items,
         items_per_page = 12,
+        -- The category selector is the bookshelf root.  Keep it as the
+        -- previous page when the user closes a category, instead of sending
+        -- the user back to KOReader and requiring the whole flow again.
+        close_callback = function()
+            self:showBookshelfCategories(catalog, books, reading_status)
+        end,
         onMenuSelect = function(menu, item)
             if item.empty_category then
-                return
-            end
-            if item.choose_category then
-                UIManager:close(menu)
-                self:showBookshelfCategories(catalog, books, reading_status)
                 return
             end
             UIManager:close(menu)
