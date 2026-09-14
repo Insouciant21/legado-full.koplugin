@@ -190,8 +190,16 @@ function SourceCatalog:find_for_book(book)
     if not sources then
         return nil, err
     end
-    local origin = type(book) == "table" and (book.origin or book.bookSourceUrl) or nil
-    local origin_name = type(book) == "table" and book.originName or nil
+    local origin = type(book) == "table" and (
+        book.origin or book.bookSourceUrl or book.sourceUrl or book.source_url
+    ) or nil
+    -- Reading sessions from older plugin versions kept the display source in
+    -- sourceName, while Android bookshelf records commonly use originName.
+    -- Accept all source identity aliases here so cached reading sessions remain
+    -- resolvable after an upgrade or a source-result import.
+    local origin_name = type(book) == "table" and (
+        book.originName or book.sourceName or book.bookSourceName
+    ) or nil
     for _, source in ipairs(sources) do
         if tonumber(source.bookSourceType or 0) == 0
                 and origin and source.bookSourceUrl == origin then
