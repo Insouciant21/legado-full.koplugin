@@ -261,6 +261,83 @@ function SourceCatalog:update_book(index, book)
     return self:replace_books(updated)
 end
 
+function SourceCatalog:add_book(book)
+    if type(book) ~= "table" then
+        return nil, "book must be an object"
+    end
+    local books, err = self:books()
+    if not books then return nil, err end
+
+    -- Search results can be returned by several sources.  Keep one shelf
+    -- entry for the same logical title/author, matching Android Legado's
+    -- addBookByUrl migration behaviour, while treating an exact URL as an
+    -- idempotent add.
+    local existing_index = self:find_book_index(book)
+    if existing_index then
+        local existing = books[existing_index]
+        local incoming_url = book_text(book, "bookUrl")
+        local existing_url = book_text(existing, "bookUrl")
+        if incoming_url ~= "" and incoming_url == existing_url then
+            return {
+                status = "already",
+                index = existing_index,
+                book = existing,
+            }
+        end
+
+        local replacement = {}
+        for key, value in pairs(book) do replacement[key] = value end
+        -- A lightweight search result does not contain reading position or
+        -- source metadata fetched by a previous detail request. Preserve
+        -- those fields when the result replaces a same-title shelf entry.
+        for _, key in ipairs({
+            "durChapterIndex", "durChapterTitle", "durChapterPos",
+            "totalChapterNum", "group", "sort",
+        }) do
+            if replacement[key] == nil then replacement[key] = existing[key] end
+        end
+        local updated = {}
+        for position, value in ipairs(books) do updated[position] = value end
+        updated[existing_index] = replacement
+        local saved, save_err = self:replace_books(updated)
+        if not saved then return nil, save_err end
+        return {
+            status = "replaced",
+            index = existing_index,
+            book = replacement,
+        }
+    end
+
+    local updated = {}
+    for position, value in ipairs(books) do updated[position] = value end
+    updated[#updated + 1] = book
+    local saved, save_err = self:replace_books(updated)
+    if not saved then return nil, save_err end
+    return {
+        status = "added",
+        index = #updated,
+        book = book,
+    }
+end
+
+function SourceCatalog:remove_book(index)
+    local books, err = self:books()
+    if not books then return nil, err end
+    if type(index) ~= "number" or index < 1 or index > #books then
+        return nil, "book index is out of range"
+    end
+    local removed = books[index]
+    local updated = {}
+    for position, value in ipairs(books) do
+        if position ~= index then
+            updated[#updated + 1] = value
+        end
+    end
+    local saved, save_err = self:replace_books(updated)
+    if not saved then return nil, save_err end
+    return removed
+end
+
 function SourceCatalog:update_source(index, source)
     local sources, err = self:list()
     if not sources then

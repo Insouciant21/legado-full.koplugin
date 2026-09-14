@@ -115,6 +115,15 @@ local Legado = WidgetContainer:extend{
     fullname = _("Legado"),
 }
 
+-- Keep the search result set bounded for the KPW4's small memory budget while
+-- retaining Android-style multi-source and multi-page search behaviour.
+local SEARCH_MAX_RESULTS = 300
+local SEARCH_MAX_RESULTS_PER_SOURCE = 100
+local SEARCH_TIMEOUT_MS = 30000
+local SEARCH_POLL_SECONDS = 0.20
+local SEARCH_MAX_PAGES = 10
+local prepare_text_input_keyboard
+
 local function display_text(value)
     -- Keep source/book text byte-for-byte intact.  Emoji rendering is handled
     -- by the optional Symbola fallback installed by this plugin.
@@ -331,8 +340,18 @@ function Legado:getSubMenuItems()
             end,
         },
         {
+            text = _("Manage bookshelf"),
+            callback = function()
+                self:showBookshelfManager()
+            end,
+        },
+        {
             text = _("Source settings"),
             sub_item_table = self:getSourceSettingsMenuItems(),
+        },
+        {
+            text = _("Legado settings"),
+            sub_item_table = self:getLegadoSettingsMenuItems(),
         },
         {
             text = _("Backup & restore"),
@@ -375,6 +394,29 @@ function Legado:getReadingMenuItems()
         },
         {
             text = T(_("Prefetch next %1 chapters"), self.storage:get_prefetch_count()),
+            callback = function()
+                self:choosePrefetchCount()
+            end,
+        },
+    }
+end
+
+function Legado:getLegadoSettingsMenuItems()
+    return {
+        {
+            text = T(
+                _("Search concurrency: %1"),
+                self.storage:get_search_concurrency()
+            ),
+            callback = function()
+                self:chooseSearchConcurrency()
+            end,
+        },
+        {
+            text = T(
+                _("Prefetch next %1 chapters"),
+                self.storage:get_prefetch_count()
+            ),
             callback = function()
                 self:choosePrefetchCount()
             end,
@@ -1092,6 +1134,32 @@ function Legado:choosePrefetchCount()
     UIManager:show(menu)
 end
 
+function Legado:chooseSearchConcurrency()
+    local current = self.storage:get_search_concurrency()
+    local items = {}
+    for count = 1, 4 do
+        items[#items + 1] = {
+            text = T(_("Search concurrency: %1"), count),
+            mandatory = count == current and _("Current") or nil,
+            concurrency = count,
+        }
+    end
+    local menu
+    menu = LegadoMenu:new{
+        title = _("Search concurrency"),
+        item_table = items,
+        items_per_page = 4,
+        onMenuSelect = function(menu_instance, item)
+            UIManager:close(menu_instance)
+            local saved = self.storage:save_search_concurrency(item.concurrency)
+            self:showOperationResult(
+                T(_("Search concurrency set to %1."), saved)
+            )
+        end,
+    }
+    UIManager:show(menu)
+end
+
 function Legado:onLegadoEndOfBook()
     local session = self:getActiveReaderSession()
     if not session then return false end
@@ -1514,6 +1582,7 @@ function Legado:showAddSourceDialog(initial_input)
             },
         },
     }
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -1801,6 +1870,7 @@ function Legado:showEditSourceDialog(source, source_index)
             },
         },
     }
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -1871,11 +1941,11 @@ end
 -- the current layout is English; in that state the globe key has nowhere to
 -- switch and a source login form appears to support no Chinese input.
 --
--- Login forms are the only plugin-owned text-entry surface that needs this
--- convenience.  Temporarily activate the standard KOReader Pinyin layout and
--- restore the user's keyboard settings when the dialog is closed.  The source
--- is not involved in this choice, and no Android/Legado settings are imported.
-local function prepare_login_keyboard(dialog)
+-- Temporarily activate the standard KOReader Pinyin layout for plugin-owned
+-- text-entry surfaces and restore the user's keyboard settings when the
+-- dialog is closed. The source is not involved in this choice, and no
+-- Android/Legado settings are imported.
+prepare_text_input_keyboard = function(dialog)
     if not G_reader_settings or type(dialog) ~= "table" then return end
 
     local previous_layout = G_reader_settings:readSetting("keyboard_layout")
@@ -1976,7 +2046,7 @@ function Legado:showGenericLoginDialog(source)
             },
         },
     }
-    prepare_login_keyboard(dialog)
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -2077,7 +2147,7 @@ function Legado:showSourceLoginControls(source, controls)
             },
         },
     }
-    prepare_login_keyboard(dialog)
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -2591,6 +2661,46 @@ function Legado:runSourceLogin(source, values, action, label, context)
     })
 end
 
+local function search_source_key(source)
+    if type(source) ~= "table" then return "" end
+    local url = trim_text(source.bookSourceUrl)
+    if url ~= "" then return url end
+    return trim_text(source.bookSourceName)
+end
+
+local function source_can_search(source)
+    return type(source) == "table"
+        and source.enabled ~= false
+        and tonumber(source.bookSourceType or 0) == 0
+        and type(source.searchUrl) == "string"
+        and trim_text(source.searchUrl) ~= ""
+end
+
+local function read_search_source_scope(storage)
+    local value = storage:get_settings():readSetting("search_source_urls")
+    if type(value) ~= "table" then return nil end
+    local selected = {}
+    for _, source_key in ipairs(value) do
+        source_key = trim_text(source_key)
+        if source_key ~= "" then selected[source_key] = true end
+    end
+    if next(selected) == nil then return nil end
+    return selected
+end
+
+local function save_search_source_scope(storage, selected)
+    local values = {}
+    for source_key in pairs(selected or {}) do
+        values[#values + 1] = source_key
+    end
+    table.sort(values)
+    local settings = storage:get_settings()
+    -- An empty array means all enabled sources, matching Android Legado's
+    -- default SearchScope instead of pinning a stale list after source import.
+    settings:saveSetting("search_source_urls", values)
+    settings:flush()
+end
+
 function Legado:chooseSearchSource()
     local catalog = SourceCatalog:new(self.storage:get_state_root())
     local sources, err = catalog:list()
@@ -2598,25 +2708,140 @@ function Legado:chooseSearchSource()
         self:showOperationResult(_("Cannot load sources:\n") .. tostring(err))
         return
     end
-    local items = {}
+    local available = {}
     for source_index, source in ipairs(sources) do
-        if source.enabled ~= false
-                and tonumber(source.bookSourceType or 0) == 0
-                and type(source.searchUrl) == "string"
-                and source.searchUrl ~= "" then
-            items[#items + 1] = {
-                text = display_text(source.bookSourceName or _("Unnamed source")),
-                mandatory = display_text(source.bookSourceGroup),
+        if source_can_search(source) then
+            available[#available + 1] = {
                 source = source,
+                source_index = source_index,
+                key = search_source_key(source),
             }
         end
     end
-    if #items == 0 then
+    if #available == 0 then
         self:showOperationResult(_("No enabled text source with a search URL."))
         return
     end
+
+    local saved = read_search_source_scope(self.storage)
+    local all_selected = saved == nil
+    local selected = {}
+    if all_selected then
+        for _, entry in ipairs(available) do selected[entry.key] = true end
+    else
+        for _, entry in ipairs(available) do
+            if saved[entry.key] then selected[entry.key] = true end
+        end
+    end
+
     local source_menu
-    source_menu = LegadoMenu:new{
+    local function selected_count()
+        local count = 0
+        for _ in pairs(selected) do count = count + 1 end
+        return count
+    end
+    local function render()
+        local count = selected_count()
+        local items = {
+            {
+                text = _("Apply and search"),
+                mandatory = all_selected
+                    and T(_("All enabled sources (%1)"), #available)
+                    or T(_("%1 sources selected"), count),
+                action = "apply",
+                separator = true,
+            },
+            {
+                text = _("All enabled sources"),
+                mandatory = all_selected and _("Selected") or _("Not selected"),
+                scope_all = true,
+            },
+        }
+        for _, entry in ipairs(available) do
+            local group = trim_text(entry.source.bookSourceGroup)
+            items[#items + 1] = {
+                text = display_text(source_display_name(entry.source)),
+                mandatory = (selected[entry.key] and _("Selected") or _("Not selected"))
+                    .. (group ~= "" and (" · " .. display_text(group)) or ""),
+                source = entry.source,
+                source_index = entry.source_index,
+                source_key = entry.key,
+            }
+        end
+        if source_menu then
+            source_menu.item_table = items
+            source_menu:_recalculateDimen(false)
+            source_menu.page_num = math.max(1, source_menu:getPageNumber(#items))
+            source_menu.page = math.min(source_menu.page or 1, source_menu.page_num)
+            source_menu:updateItems(nil, true)
+            return
+        end
+        source_menu = LegadoMenu:new{
+            title = _("Search source scope"),
+            item_table = items,
+            items_per_page = 12,
+            onMenuSelect = function(menu, item)
+                if item.action == "apply" then
+                    if not all_selected and selected_count() == 0 then
+                        self:showOperationResult(_("Select at least one source."))
+                        return
+                    end
+                    save_search_source_scope(self.storage, all_selected and {} or selected)
+                    local chosen = {}
+                    for _, entry in ipairs(available) do
+                        if all_selected or selected[entry.key] then
+                            chosen[#chosen + 1] = entry.source
+                        end
+                    end
+                    UIManager:close(menu)
+                    self:showSearchDialog(chosen)
+                    return
+                end
+                if item.scope_all then
+                    all_selected = not all_selected
+                    selected = {}
+                    if all_selected then
+                        for _, entry in ipairs(available) do
+                            selected[entry.key] = true
+                        end
+                    end
+                elseif item.source_key then
+                    if all_selected then
+                        -- Turning off one source converts the implicit "all"
+                        -- scope into an explicit selection of the remainder.
+                        all_selected = false
+                        selected = {}
+                        for _, entry in ipairs(available) do
+                            if entry.key ~= item.source_key then
+                                selected[entry.key] = true
+                            end
+                        end
+                    elseif selected[item.source_key] then
+                        selected[item.source_key] = nil
+                    else
+                        selected[item.source_key] = true
+                    end
+                end
+                render()
+            end,
+        }
+        UIManager:show(source_menu)
+    end
+    render()
+end
+
+-- Keep this small compatibility wrapper for callers from older plugin state
+-- that may still invoke the former one-source picker through a saved menu.
+function Legado:chooseSingleSearchSource()
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local sources = catalog:list() or {}
+    local items = {}
+    for _, source in ipairs(sources) do
+        if source_can_search(source) then
+            items[#items + 1] = { text = display_text(source_display_name(source)), source = source }
+        end
+    end
+    local source_menu = LegadoMenu:new{
         title = _("Choose a text source"),
         item_table = items,
         items_per_page = 12,
@@ -2694,6 +2919,12 @@ function Legado:showBookshelfBooks(
         return (left.index or 0) < (right.index or 0)
     end)
     local items = {}
+    items[#items + 1] = {
+        text = _("Manage bookshelf"),
+        mandatory = _("Delete books or inspect shelf entries"),
+        action = "manage",
+        separator = true,
+    }
     for entry_index, entry in ipairs(entries) do
         local book = entry.book
         if type(book) == "table" and book.name and book.name ~= "" then
@@ -2736,6 +2967,10 @@ function Legado:showBookshelfBooks(
             )
         end,
         onMenuSelect = function(menu, item)
+            if item.action == "manage" then
+                self:showBookshelfManager(menu)
+                return
+            end
             if item.empty_category then
                 return
             end
@@ -2758,6 +2993,54 @@ function Legado:showBookshelfBooks(
         end,
     }
     UIManager:show(book_menu)
+end
+
+function Legado:showBookshelfManager(parent_widget)
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local books, err = catalog:books()
+    if not books then
+        self:showOperationResult(_("Cannot load bookshelf:\n") .. tostring(err))
+        return
+    end
+    local items = {}
+    for index, book in ipairs(books) do
+        if type(book) == "table" then
+            local author = trim_text(book.author)
+            items[#items + 1] = {
+                text = display_text(book.name or _("Unnamed book"))
+                    .. (author ~= "" and ("\n" .. display_text(author)) or ""),
+                mandatory = display_text(book.originName or book.origin),
+                book = book,
+                book_index = index,
+            }
+        end
+    end
+    if #items == 0 then
+        self:showOperationResult(_("Bookshelf is empty."))
+        return
+    end
+    local manager_menu
+    manager_menu = LegadoMenu:new{
+        title = _("Manage bookshelf"),
+        item_table = items,
+        items_per_page = 12,
+        items_max_lines = 3,
+        onMenuSelect = function(menu, item)
+            if item.book then
+                self:confirmDeleteBook(item.book, item.book_index, menu, function()
+                    UIManager:close(menu)
+                    self:showBookshelfManager(parent_widget)
+                end)
+            end
+        end,
+        onMenuHold = function(menu, item)
+            if item.book then
+                self:showBookDetail(item.book, item.book_index, nil, menu)
+            end
+            return true
+        end,
+    }
+    UIManager:show(manager_menu)
 end
 
 local function canonical_chapter_title(value)
@@ -2933,6 +3216,9 @@ function Legado:showBookDetail(
         on_refresh = source and function()
             self:refreshBookDetail(book, resolved_book_index, source, nil, parent_widget)
         end or nil,
+        on_delete = resolved_book_index and function()
+            self:confirmDeleteBook(book, resolved_book_index, parent_widget)
+        end or nil,
     }
     self._book_detail_widget = detail
     UIManager:show(detail)
@@ -2956,6 +3242,49 @@ function Legado:showBookDetail(
             end
         end)
     end
+end
+
+function Legado:confirmDeleteBook(book, book_index, parent_widget, on_deleted)
+    if type(book) ~= "table" then return end
+    local title = display_text(book.name or _("Unnamed book"))
+    UIManager:show(ConfirmBox:new{
+        text = T(_("Delete %1 from the bookshelf?"), title),
+        ok_text = _("Delete"),
+        ok_callback = function()
+            self:runWorker(_("Deleting book…"), function()
+                local catalog = SourceCatalog:new(self.storage:get_state_root())
+                local index = catalog:find_book_index(book) or tonumber(book_index)
+                if not index then
+                    return nil, _("Book is no longer in the bookshelf.")
+                end
+                local removed, remove_error = catalog:remove_book(index)
+                if not removed then return nil, remove_error end
+                local storage = Storage:new()
+                storage:remove_book_state(removed)
+                local cache_removed = storage:clear_book_cache(removed)
+                return { book = removed, cache_removed = cache_removed }
+            end, function()
+                self.storage:invalidate_reading_record_cache()
+                self.storage:invalidate_reader_session_cache()
+                self._reader_session_cache = nil
+                self._reader_session_cache_file = nil
+                if on_deleted then
+                    on_deleted()
+                else
+                    if parent_widget then pcall(UIManager.close, UIManager, parent_widget) end
+                    self:showOperationResult(_("Book deleted."), function()
+                        self:showBookshelf()
+                    end)
+                end
+            end, {
+                on_failure = function(error_message)
+                    self:showOperationResult(
+                        _("Cannot delete book:\n") .. tostring(error_message)
+                    )
+                end,
+            })
+        end,
+    })
 end
 
 function Legado:refreshBookDetail(book, book_index, source, detail_widget, parent_widget)
@@ -3045,7 +3374,6 @@ local SOURCE_CHANGE_TOC_PROBE_LIMIT = 24
 -- source-switch page responsive on a Kindle while still allowing ordinary
 -- pages time to load. Runtime propagates this budget to nested ajax calls.
 local SOURCE_CHANGE_SEARCH_TIMEOUT_MS = 20000
-local SINGLE_SOURCE_SEARCH_TIMEOUT_MS = 30000
 
 local function source_change_group_tokens(source)
     local groups = {}
@@ -3718,6 +4046,7 @@ function Legado:showBookSourceFilterDialog(state)
             },
         },
     }
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -4337,11 +4666,160 @@ function Legado:replaceBookSource(
     })
 end
 
-function Legado:showSearchDialog(source)
+local function search_copy_value(value, depth)
+    local value_type = type(value)
+    if value == nil or value_type == "string" or value_type == "number"
+            or value_type == "boolean" then
+        return value
+    end
+    if value_type ~= "table" or (depth or 0) >= 4 then return nil end
+    local result = {}
+    for key, child in pairs(value) do
+        local key_type = type(key)
+        if key_type == "string" or key_type == "number" then
+            local copied = search_copy_value(child, (depth or 0) + 1)
+            if copied ~= nil then result[key] = copied end
+        end
+    end
+    return result
+end
+
+local SEARCH_BOOK_FIELDS = {
+    "name", "author", "bookUrl", "tocUrl", "coverUrl", "intro", "kind",
+    "lastChapter", "updateTime", "wordCount", "sourceName", "sourceUrl",
+    "sourceVariable", "variable", "origin", "originName", "bookSourceUrl",
+}
+
+local function search_copy_book(book)
+    local result = {}
+    if type(book) ~= "table" then return result end
+    for _, field in ipairs(SEARCH_BOOK_FIELDS) do
+        local value = search_copy_value(book[field], 0)
+        if field == "intro" and type(value) == "string" and #value > 4096 then
+            value = value:sub(1, 4093) .. "…"
+        end
+        if value ~= nil then result[field] = value end
+    end
+    return result
+end
+
+local function search_normalized_text(value)
+    return trim_text(value):lower():gsub("%s+", "")
+end
+
+local function search_book_key(book)
+    local name = search_normalized_text(book and book.name)
+    local author = search_normalized_text(book and book.author)
+    if name == "" then
+        name = search_normalized_text(book and book.bookUrl)
+    end
+    return name .. "\0" .. author
+end
+
+local function search_candidate_key(source, book)
+    local source_key = search_source_key(source)
+    local url = trim_text(book and book.bookUrl)
+    if url == "" then url = search_normalized_text(book and book.name) end
+    return source_key .. "\0" .. url
+end
+
+local function search_book_for_source(book, source)
+    local result = search_copy_book(book)
+    if type(source) == "table" then
+        result.origin = source.bookSourceUrl or result.origin
+        result.originName = source.bookSourceName or result.originName
+        result.bookSourceUrl = source.bookSourceUrl or result.bookSourceUrl
+        result.sourceUrl = source.bookSourceUrl or result.sourceUrl
+        result.sourceName = source.bookSourceName or result.sourceName
+    end
+    return result
+end
+
+local function search_scope_title(sources)
+    if #sources == 1 then
+        return T(_("Search in %1"), display_text(source_display_name(sources[1])))
+    end
+    return T(_("Search %1 sources"), #sources)
+end
+
+local function search_result_source_text(record)
+    local names = record.source_names or {}
+    if #names <= 4 then return table.concat(names, " · ") end
+    return table.concat(names, " · ", 1, 4) .. T(_(" · and %1 more"), #names - 4)
+end
+
+local function search_result_rank(record, keyword)
+    local wanted = search_normalized_text(keyword)
+    local name = search_normalized_text(record.name)
+    local author = search_normalized_text(record.author)
+    if name == wanted and wanted ~= "" then return 0 end
+    if author == wanted and wanted ~= "" then return 1 end
+    if wanted ~= "" and name:find(wanted, 1, true) then return 2 end
+    return 3
+end
+
+local function search_result_lines(record)
+    local lines = { display_text(record.name or _("Unnamed book")) }
+    local author = trim_text(record.author)
+    if author ~= "" then lines[#lines + 1] = display_text(author) end
+    local kind = trim_text(record.kind)
+    local latest = trim_text(record.lastChapter)
+    local info = {}
+    if kind ~= "" then info[#info + 1] = display_text(kind) end
+    if latest ~= "" then info[#info + 1] = display_text(latest) end
+    if #info > 0 then lines[#lines + 1] = table.concat(info, " · ") end
+    local source_text = search_result_source_text(record)
+    if source_text ~= "" then lines[#lines + 1] = source_text end
+    local intro = trim_text(record.intro)
+    if intro ~= "" then
+        intro = intro:gsub("%s+", " ")
+        if #intro > 180 then intro = intro:sub(1, 177) .. "…" end
+        lines[#lines + 1] = display_text(intro)
+    end
+    return table.concat(lines, "\n")
+end
+
+local function search_source_entries(catalog, sources)
+    local all_sources = catalog:list() or {}
+    local source_indexes = {}
+    for index, source in ipairs(all_sources) do
+        source_indexes[search_source_key(source)] = index
+    end
+    local entries = {}
+    local seen = {}
+    for _, source in ipairs(sources or {}) do
+        if source_can_search(source) then
+            local key = search_source_key(source)
+            if key ~= "" and not seen[key] then
+                seen[key] = true
+                entries[#entries + 1] = {
+                    source = source,
+                    source_index = source_indexes[key] or #entries + 1,
+                    key = key,
+                }
+            end
+        end
+    end
+    return entries
+end
+
+function Legado:showSearchDialog(sources)
+    if type(sources) == "table" and sources.bookSourceUrl then
+        sources = { sources }
+    end
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local entries = search_source_entries(catalog, sources or {})
+    if #entries == 0 then
+        self:showOperationResult(_("No enabled text source with a search URL."))
+        return
+    end
+    local source_list = {}
+    for _, entry in ipairs(entries) do source_list[#source_list + 1] = entry.source end
     local dialog
     dialog = InputDialog:new{
-        title = T(_("Search in %1"), display_text(source.bookSourceName or _("text source"))),
-        input = "",
+        title = search_scope_title(source_list),
+        input = self._last_search_keyword or "",
+        input_hint = _("Search keyword"),
         buttons = {
             {
                 {
@@ -4355,68 +4833,623 @@ function Legado:showSearchDialog(source)
                     text = _("Search"),
                     is_enter_default = true,
                     callback = function()
-                        local keyword = dialog:getInputValue()
+                        local keyword = trim_text(dialog:getInputValue())
                         UIManager:close(dialog)
-                        if not keyword or keyword == "" then
+                        if keyword == "" then
                             self:showOperationResult(_("Search keyword cannot be empty."))
                             return
                         end
-                        self:searchSource(source, keyword)
+                        self._last_search_keyword = keyword
+                        self:searchSource(source_list, keyword)
                     end,
                 },
             },
         },
     }
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
 
-function Legado:searchSource(source, keyword)
-    self:runWorker(_("Searching…"), function()
-        local Runtime = require("legado/runtime")
-        local books, err = Runtime.search_source(source, keyword, 1, {
-            timeout = SINGLE_SOURCE_SEARCH_TIMEOUT_MS,
-            total_timeout = SINGLE_SOURCE_SEARCH_TIMEOUT_MS,
-            lightweight = true,
-        })
-        if not books then return nil, err or _("Search failed.") end
-        return books
-    end, function(books)
-        if type(books) ~= "table" or #books == 0 then
-            self:showOperationResult(_("No books found."))
-            return
-        end
-        self:showSearchResults(source, books)
-    end)
+function Legado:searchSource(sources, keyword)
+    if type(sources) == "table" and sources.bookSourceUrl then
+        sources = { sources }
+    end
+    local catalog = SourceCatalog:new(self.storage:get_state_root())
+    local entries = search_source_entries(catalog, sources or {})
+    if #entries == 0 then
+        self:showOperationResult(_("No enabled text source with a search URL."))
+        return
+    end
+    local state = {
+        keyword = trim_text(keyword),
+        sources = entries,
+        results = {},
+        result_map = {},
+        errors = {},
+        page = 1,
+        done = false,
+        searching = false,
+        stopped = false,
+        shelf_catalog = SourceCatalog:new(self.storage:get_state_root()),
+    }
+    self._search_state = state
+    self:showSearchMenu(state)
+    self:startSearchRound(state, 1, true)
 end
 
-function Legado:showSearchResults(source, books, on_select)
+local function search_worker_count(workers)
+    local count = 0
+    for _ in pairs(workers or {}) do count = count + 1 end
+    return count
+end
+
+function Legado:showSearchMenu(state)
     local items = {}
-    for index, book in ipairs(books) do
-        if index > 100 then break end
-        local author = book.author and book.author ~= ""
-            and ("\n" .. display_text(book.author)) or ""
+    local progress = T(
+        _("Searching sources: %1/%2"),
+        state.completed or 0,
+        #(state.sources or {})
+    )
+    if state.searching then
         items[#items + 1] = {
-            text = display_text(book.name or _("Unnamed book")) .. author,
-            mandatory = display_text(book.lastChapter),
-            book = book,
+            text = _("Stop search"),
+            mandatory = progress,
+            action = "stop",
+            separator = true,
+        }
+    else
+        local summary
+        if state.stopped then
+            summary = _("Search stopped; showing partial results.")
+        elseif state.done then
+            summary = T(
+                _("%1 books found from %2 sources"),
+                #state.results,
+                #(state.sources or {})
+            )
+        else
+            summary = _("Ready to search")
+        end
+        items[#items + 1] = {
+            text = _("Search again"),
+            mandatory = summary,
+            action = "refresh",
+            separator = true,
         }
     end
-    local result_menu
-    result_menu = LegadoMenu:new{
-        title = _("Search results"),
+    items[#items + 1] = {
+        text = _("Search source scope"),
+        mandatory = #state.sources == 1
+            and display_text(source_display_name(state.sources[1].source))
+            or T(_("%1 sources"), #state.sources),
+        action = "scope",
+    }
+    if not state.searching and state.page_found and state.page < SEARCH_MAX_PAGES then
+        items[#items + 1] = {
+            text = T(_("Load search page %1"), state.page + 1),
+            mandatory = _("Search these sources again for more results."),
+            action = "next_page",
+        }
+    end
+    if #state.errors > 0 then
+        items[#items + 1] = {
+            text = T(_("Source errors (%1)"), #state.errors),
+            mandatory = _("Tap to inspect; other sources continue."),
+            action = "errors",
+        }
+    end
+    if #state.results == 0 and state.done then
+        items[#items + 1] = {
+            text = _("No books found."),
+            mandatory = _("Try another keyword or source scope."),
+            dim = true,
+        }
+    end
+
+    table.sort(state.results, function(left, right)
+        local left_rank = search_result_rank(left, state.keyword)
+        local right_rank = search_result_rank(right, state.keyword)
+        if left_rank ~= right_rank then return left_rank < right_rank end
+        if #left.candidates ~= #right.candidates then
+            return #left.candidates > #right.candidates
+        end
+        return left.order < right.order
+    end)
+    for _, record in ipairs(state.results) do
+        local shelf_index, shelf_book = self:searchShelfBook(
+            state, record.candidates[1]
+        )
+        record.shelf_index = shelf_index
+        record.shelf_book = shelf_book
+        items[#items + 1] = {
+            text = search_result_lines(record),
+            mandatory = shelf_index and _("In bookshelf")
+                or (#record.candidates > 1
+                    and T(_("%1 sources"), #record.candidates)
+                    or search_result_source_text(record)),
+            record = record,
+        }
+    end
+
+    if state.menu then
+        state.menu.item_table = items
+        state.menu:_recalculateDimen(false)
+        local page_count = math.max(1, state.menu:getPageNumber(#items))
+        state.menu.page = math.min(state.menu.page or 1, page_count)
+        state.menu.page_num = page_count
+        pcall(state.menu.updateItems, state.menu, nil, true)
+        return state.menu
+    end
+
+    local search_menu
+    search_menu = LegadoMenu:new{
+        title = T(_("Search results: %1"), display_text(state.keyword)),
+        item_table = items,
+        items_per_page = 10,
+        items_max_lines = 5,
+        close_callback = function()
+            if state.searching then self:cancelSearchPool(state, true) end
+            if state.menu == search_menu then state.menu = nil end
+            if self._search_state == state then self._search_state = nil end
+        end,
+        onMenuSelect = function(menu, item)
+            if item.action == "stop" then
+                self:cancelSearchPool(state, false)
+                return
+            end
+            if item.action == "refresh" then
+                if not state.searching then
+                    state.results = {}
+                    state.result_map = {}
+                    state.errors = {}
+                    self:startSearchRound(state, 1, true)
+                end
+                return
+            end
+            if item.action == "next_page" then
+                if not state.searching then
+                    self:startSearchRound(state, state.page + 1, false)
+                end
+                return
+            end
+            if item.action == "scope" then
+                if state.searching then self:cancelSearchPool(state, true) end
+                UIManager:close(menu)
+                self:chooseSearchSource()
+                return
+            end
+            if item.action == "errors" then
+                self:showSearchErrors(state)
+                return
+            end
+            if item.record then
+                self:showSearchRecordActions(state, item.record)
+            end
+        end,
+        onMenuHold = function(_, item)
+            if item and item.record then
+                self:showSearchRecordActions(state, item.record)
+            end
+            return true
+        end,
+    }
+    state.menu = search_menu
+    UIManager:show(search_menu)
+    return search_menu
+end
+
+function Legado:showSearchErrors(state)
+    local lines = { T(_("%1 source requests failed."), #state.errors) }
+    for index, error in ipairs(state.errors) do
+        if index > 12 then
+            lines[#lines + 1] = T(_("… and %1 more"), #state.errors - 12)
+            break
+        end
+        lines[#lines + 1] = display_text(error.source_name)
+            .. ": " .. display_text(error.message)
+    end
+    UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n") })
+end
+
+function Legado:searchShelfIndex(state, candidate)
+    local index = self:searchShelfBook(state, candidate)
+    return index
+end
+
+function Legado:searchShelfBook(state, candidate)
+    if not candidate or type(candidate.book) ~= "table" then return nil end
+    local book = search_book_for_source(candidate.book, candidate.source)
+    local index = state.shelf_catalog:find_book_index(book)
+    index = tonumber(index)
+    if not index then return nil end
+    local books = state.shelf_catalog:books()
+    return index, books and books[index] or nil
+end
+
+function Legado:showSearchRecordActions(state, record)
+    local candidates = record.candidates or {}
+    if #candidates == 0 then return end
+    if #candidates == 1 then
+        self:showSearchCandidateActions(state, record, candidates[1])
+        return
+    end
+    local items = {}
+    for _, candidate in ipairs(candidates) do
+        local book = candidate.book or {}
+        items[#items + 1] = {
+            text = display_text(source_display_name(candidate.source)),
+            mandatory = display_text(book.author or book.lastChapter),
+            candidate = candidate,
+        }
+    end
+    local candidate_menu
+    candidate_menu = LegadoMenu:new{
+        title = T(_("Choose a source for %1"), display_text(record.name)),
         item_table = items,
         items_per_page = 12,
+        items_max_lines = 3,
         onMenuSelect = function(menu, item)
-            UIManager:close(menu)
-            if on_select then
-                on_select(item.book)
-            else
-                self:showChapters(source, item.book)
+            if item.candidate then
+                UIManager:close(menu)
+                self:showSearchCandidateActions(state, record, item.candidate)
             end
         end,
     }
-    UIManager:show(result_menu)
+    UIManager:show(candidate_menu)
+end
+
+function Legado:showSearchCandidateActions(state, record, candidate)
+    local source = candidate.source
+    local book = search_book_for_source(candidate.book, source)
+    local shelf_index, shelf_book = self:searchShelfBook(state, candidate)
+    local same_url = shelf_book
+        and trim_text(shelf_book.bookUrl) ~= ""
+        and trim_text(shelf_book.bookUrl) == trim_text(book.bookUrl)
+    local items = {
+        {
+            text = same_url and _("Already in bookshelf") or _("Add to bookshelf"),
+            mandatory = same_url and _("Open the existing bookshelf entry")
+                or (shelf_index and _("Replace the bookshelf source")
+                    or _("Save this source result")),
+            action = same_url and "detail" or "add",
+        },
+        {
+            text = _("Open chapter list"),
+            mandatory = display_text(source_display_name(source)),
+            action = "chapters",
+        },
+        {
+            text = _("Book details"),
+            mandatory = display_text(book.author),
+            action = "detail",
+        },
+    }
+    local action_menu
+    action_menu = LegadoMenu:new{
+        title = display_text(book.name or record.name),
+        item_table = items,
+        items_per_page = 8,
+        onMenuSelect = function(menu, item)
+            UIManager:close(menu)
+            if item.action == "add" then
+                self:addSearchBookToBookshelf(state, record, candidate)
+            elseif item.action == "chapters" then
+                self:showChapters(source, book)
+            elseif item.action == "detail" then
+                local index, existing = self:searchShelfBook(state, candidate)
+                self:showBookDetail(existing or book, index, source, state.menu)
+            end
+        end,
+    }
+    UIManager:show(action_menu)
+end
+
+function Legado:addSearchBookToBookshelf(state, record, candidate)
+    local source = candidate.source
+    local book = search_book_for_source(candidate.book, source)
+    self:runWorker(_("Adding book to bookshelf…"), function()
+        local catalog = SourceCatalog:new(self.storage:get_state_root())
+        local existing_index = catalog:find_book_index(book)
+        local existing_book = existing_index and catalog:books()[existing_index] or nil
+        local storage = Storage:new()
+        local old_progress = existing_book and storage:get_progress_entry(existing_book) or nil
+        local result, add_error = catalog:add_book(book)
+        if not result then return nil, add_error end
+        if result.status == "replaced" and existing_book then
+            storage:migrate_progress(existing_book, result.book, old_progress)
+            storage:clear_reader_session_for_book(existing_book)
+            storage:clear_book_cache(existing_book)
+            storage:set_cache_identity(result.book)
+        end
+        return result
+    end, function(result)
+        candidate.book = result.book
+        record.shelf_index = result.index
+        -- The catalog used to mark search results is a separate instance from
+        -- the worker's catalog. Reload it so the row immediately changes from
+        -- "Add to bookshelf" to the existing-entry action.
+        state.shelf_catalog = SourceCatalog:new(self.storage:get_state_root())
+        self:showSearchMenu(state)
+        local message = result.status == "already"
+            and _("Book is already in the bookshelf.")
+            or result.status == "replaced"
+                and _("Bookshelf source updated.")
+                or _("Book added to bookshelf.")
+        self:showOperationResult(message)
+    end, {
+        invisible = true,
+        trap_widget = state.menu,
+        keep_trap = true,
+    })
+end
+
+function Legado:startSearchRound(state, page, reset_errors)
+    if not state or state.searching then return false end
+    state.page = math.max(1, math.floor(tonumber(page) or 1))
+    state.searching = true
+    state.done = false
+    state.stopped = false
+    state.completed = 0
+    state.page_found = false
+    if reset_errors then state.errors = {} end
+    state.pending_index = 1
+    state.workers = {}
+    state.reap_workers = {}
+    state.cleanup_workers = state.cleanup_workers or {}
+    state.generation = (state.generation or 0) + 1
+    local generation = state.generation
+    self:showSearchMenu(state)
+    self:spawnSearchWorkers(state, generation)
+    self:pollSearchPool(state, generation)
+    return true
+end
+
+function Legado:spawnSearchWorker(state, source_entry, generation)
+    local result_path = self.storage:get_root() .. "/search-result-"
+        .. tostring(generation) .. "-" .. tostring(source_entry.source_index) .. ".json"
+    local partial_path = result_path .. ".part"
+    os.remove(result_path)
+    os.remove(partial_path)
+    local source = source_entry.source
+    local keyword = state.keyword
+    local page = state.page
+    local callback = function(_, child_write_fd)
+        local child_util = require("util")
+        local child_json = require("rapidjson")
+        local payload
+        local call_ok, books, search_error = pcall(function()
+            local Runtime = require("legado/runtime")
+            return Runtime.search_source(source, keyword, page, {
+                timeout = SEARCH_TIMEOUT_MS,
+                total_timeout = SEARCH_TIMEOUT_MS,
+                lightweight = true,
+            })
+        end)
+        if not call_ok then
+            payload = { ok = false, error = tostring(books) }
+        elseif type(books) ~= "table" then
+            payload = { ok = false, error = tostring(search_error or _("Search failed.")) }
+        else
+            local copied = {}
+            for index, book in ipairs(books) do
+                if index > SEARCH_MAX_RESULTS_PER_SOURCE then break end
+                copied[#copied + 1] = search_copy_book(book)
+            end
+            payload = { ok = true, books = copied }
+        end
+        local encoded_ok, encoded = pcall(child_json.encode, payload)
+        if not encoded_ok then
+            encoded = child_json.encode({ ok = false, error = tostring(encoded) })
+        end
+        local write_call_ok, write_result = pcall(
+            child_util.writeToFile, encoded, partial_path
+        )
+        if write_call_ok and write_result then
+            pcall(os.rename, partial_path, result_path)
+        end
+        pcall(FFIUtil.writeToFD, child_write_fd, "1", true)
+    end
+    local call_ok, pid, read_fd = pcall(FFIUtil.runInSubProcess, callback, true)
+    if not call_ok or not pid or pid == false then
+        return nil, tostring(read_fd or pid or _("Cannot start search worker."))
+    end
+    return {
+        pid = pid,
+        read_fd = read_fd,
+        result_path = result_path,
+        partial_path = partial_path,
+        source_entry = source_entry,
+    }
+end
+
+function Legado:spawnSearchWorkers(state, generation)
+    local limit = self.storage:get_search_concurrency()
+    while state.pending_index <= #(state.sources or {})
+            and search_worker_count(state.workers) < limit do
+        local source_entry = state.sources[state.pending_index]
+        state.pending_index = state.pending_index + 1
+        local worker, worker_error = self:spawnSearchWorker(
+            state, source_entry, generation
+        )
+        if worker then
+            state.workers[worker.pid] = worker
+        else
+            state.completed = state.completed + 1
+            state.errors[#state.errors + 1] = {
+                source_name = source_display_name(source_entry.source),
+                message = worker_error,
+            }
+        end
+    end
+end
+
+function Legado:finishSearchWorker(state, worker, response)
+    local entry = worker.source_entry
+    state.completed = state.completed + 1
+    if type(response) ~= "table" or response.ok ~= true
+            or type(response.books) ~= "table" then
+        state.errors[#state.errors + 1] = {
+            source_name = source_display_name(entry.source),
+            message = response and response.error or _("Search failed."),
+        }
+        return
+    end
+    if #response.books > 0 then state.page_found = true end
+    for _, book in ipairs(response.books) do
+        if type(book) == "table" then
+            local key = search_book_key(book)
+            if key ~= "" then
+                local record = state.result_map[key]
+                if not record then
+                    if #state.results >= SEARCH_MAX_RESULTS then break end
+                    record = {
+                        name = book.name,
+                        author = book.author,
+                        kind = book.kind,
+                        intro = book.intro,
+                        lastChapter = book.lastChapter,
+                        candidates = {},
+                        source_names = {},
+                        source_seen = {},
+                        candidate_seen = {},
+                        order = #state.results + 1,
+                    }
+                    state.result_map[key] = record
+                    state.results[#state.results + 1] = record
+                end
+                local candidate_key = search_candidate_key(entry.source, book)
+                if not record.candidate_seen[candidate_key] then
+                    record.candidate_seen[candidate_key] = true
+                    record.candidates[#record.candidates + 1] = {
+                        source = entry.source,
+                        source_index = entry.source_index,
+                        book = search_book_for_source(book, entry.source),
+                    }
+                    local source_key = entry.key
+                    if not record.source_seen[source_key] then
+                        record.source_seen[source_key] = true
+                        record.source_names[#record.source_names + 1] =
+                            display_text(source_display_name(entry.source))
+                    end
+                end
+                if trim_text(record.kind) == "" then record.kind = book.kind end
+                if trim_text(record.intro) == "" then record.intro = book.intro end
+                if trim_text(record.lastChapter) == "" then
+                    record.lastChapter = book.lastChapter
+                end
+            end
+        end
+    end
+end
+
+function Legado:pollSearchPool(state, generation)
+    if not state or state.generation ~= generation then return end
+    for pid, worker in pairs(state.workers or {}) do
+        local done_call_ok, is_done = pcall(FFIUtil.isSubProcessDone, pid)
+        if not done_call_ok then is_done = false end
+        local available
+        if worker.read_fd then
+            available = FFIUtil.getNonBlockingReadSize(worker.read_fd)
+        end
+        if is_done or (available and available > 0) then
+            if worker.read_fd then
+                local read_ok, data = pcall(FFIUtil.readAllFromFD, worker.read_fd)
+                worker.read_fd = nil
+                if not read_ok then data = nil end
+            end
+            local raw = util.readFromFile(worker.result_path)
+            local response
+            local decoded_ok, decoded = pcall(rapidjson.decode, raw or "")
+            if decoded_ok and type(decoded) == "table" then
+                response = decoded
+            elseif raw and raw ~= "" then
+                response = { ok = false, error = _("Search returned invalid data.") }
+            else
+                response = { ok = false, error = _("Search worker returned no data.") }
+            end
+            os.remove(worker.result_path)
+            os.remove(worker.partial_path)
+            self:finishSearchWorker(state, worker, response)
+            state.workers[pid] = nil
+            if not is_done then state.reap_workers[#state.reap_workers + 1] = worker end
+        end
+    end
+    for index = #state.reap_workers, 1, -1 do
+        local worker = state.reap_workers[index]
+        if FFIUtil.isSubProcessDone(worker.pid) then
+            table.remove(state.reap_workers, index)
+        end
+    end
+    self:spawnSearchWorkers(state, generation)
+    if state.pending_index > #(state.sources or {})
+            and search_worker_count(state.workers) == 0 then
+        state.cleanup_workers = state.cleanup_workers or {}
+        for _, worker in ipairs(state.reap_workers or {}) do
+            state.cleanup_workers[#state.cleanup_workers + 1] = worker
+        end
+        state.reap_workers = {}
+        state.searching = false
+        state.done = true
+        self:showSearchMenu(state)
+        self:pollSearchCleanup(state)
+        return
+    end
+    self:showSearchMenu(state)
+    UIManager:scheduleIn(SEARCH_POLL_SECONDS, function()
+        self:pollSearchPool(state, generation)
+    end)
+end
+
+function Legado:cancelSearchPool(state, silent)
+    if not state then return end
+    state.searching = false
+    state.done = true
+    state.stopped = true
+    state.generation = (state.generation or 0) + 1
+    state.cleanup_workers = state.cleanup_workers or {}
+    local cleanup_seen = {}
+    for _, worker in ipairs(state.cleanup_workers) do cleanup_seen[worker.pid] = true end
+    for pid, worker in pairs(state.workers or {}) do
+        pcall(FFIUtil.terminateSubProcess, pid)
+        if not cleanup_seen[worker.pid] then
+            state.cleanup_workers[#state.cleanup_workers + 1] = worker
+            cleanup_seen[worker.pid] = true
+        end
+    end
+    for _, worker in ipairs(state.reap_workers or {}) do
+        if not cleanup_seen[worker.pid] then
+            state.cleanup_workers[#state.cleanup_workers + 1] = worker
+            cleanup_seen[worker.pid] = true
+        end
+    end
+    state.workers = {}
+    state.reap_workers = {}
+    if not silent then self:showSearchMenu(state) end
+    self:pollSearchCleanup(state)
+end
+
+function Legado:pollSearchCleanup(state)
+    local remaining = {}
+    for _, worker in ipairs(state.cleanup_workers or {}) do
+        local done = FFIUtil.isSubProcessDone(worker.pid)
+        if done then
+            if worker.read_fd then
+                pcall(FFIUtil.readAllFromFD, worker.read_fd)
+                worker.read_fd = nil
+            end
+            os.remove(worker.result_path)
+            os.remove(worker.partial_path)
+        else
+            remaining[#remaining + 1] = worker
+        end
+    end
+    state.cleanup_workers = remaining
+    if #remaining > 0 then
+        UIManager:scheduleIn(SEARCH_POLL_SECONDS, function()
+            self:pollSearchCleanup(state)
+        end)
+    end
 end
 
 function Legado:showChapterMenu(source, display_book, chapters, options)
@@ -4704,6 +5737,7 @@ function Legado:showChapterJump(source, book, result, reader_session)
             },
         },
     }
+    prepare_text_input_keyboard(dialog)
     UIManager:show(dialog)
     dialog:onShowKeyboard()
 end

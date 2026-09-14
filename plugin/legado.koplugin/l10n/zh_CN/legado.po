@@ -1,7 +1,7 @@
 # Chinese translations for the Legado KOReader plugin.
 msgid ""
 msgstr ""
-"Project-Id-Version: legado 0.1.0\n"
+"Project-Id-Version: legado 0.3.0\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-09-11 02:50+0800\n"
 "PO-Revision-Date: 2026-09-11 00:00+0800\n"
@@ -1317,6 +1317,207 @@ msgstr ""
 "替换规则：%s\n"
 "模板：%s"
 
+#: plugin/legado.koplugin/main.lua
+msgid "Manage bookshelf"
+msgstr "管理书架"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Legado settings"
+msgstr "Legado 设置"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Search concurrency: %1"
+msgstr "搜索并发数：%1"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search concurrency"
+msgstr "搜索并发数"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Search concurrency set to %1."
+msgstr "搜索并发数已设置为 %1。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Apply and search"
+msgstr "应用并搜索"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Add to bookshelf"
+msgstr "添加到书架"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "All enabled sources (%1)"
+msgstr "全部启用书源（%1）"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "%1 sources selected"
+msgstr "已选择 %1 个书源"
+
+#: plugin/legado.koplugin/main.lua
+msgid "All enabled sources"
+msgstr "全部启用书源"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "%1 sources"
+msgstr "%1 个书源"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search source scope"
+msgstr "搜索书源范围"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Search results: %1"
+msgstr "搜索结果：%1"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search keyword"
+msgstr "搜索关键词"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Select at least one source."
+msgstr "请至少选择一个书源。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Delete books or inspect shelf entries"
+msgstr "删除书籍或查看书架条目"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Bookshelf is empty."
+msgstr "书架为空。"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Delete %1 from the bookshelf?"
+msgstr "要从书架删除《%1》吗？"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Deleting book…"
+msgstr "正在删除书籍…"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Book deleted."
+msgstr "书籍已删除。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Cannot delete book:\n"
+msgstr "无法删除书籍：\n"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Search %1 sources"
+msgstr "搜索 %1 个书源"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid " · and %1 more"
+msgstr " · 以及另外 %1 个"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Searching sources: %1/%2"
+msgstr "正在搜索书源：%1/%2"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Stop search"
+msgstr "停止搜索"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search stopped; showing partial results."
+msgstr "搜索已停止；显示部分结果。"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "%1 books found from %2 sources"
+msgstr "已从 %2 个书源找到 %1 本书"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Ready to search"
+msgstr "准备搜索"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search again"
+msgstr "重新搜索"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Load search page %1"
+msgstr "加载搜索结果第 %1 页"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search these sources again for more results."
+msgstr "再次搜索这些书源以获取更多结果。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Try another keyword or source scope."
+msgstr "请尝试其他关键词或书源范围。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "In bookshelf"
+msgstr "已在书架"
+
+#: plugin/legado.koplugin/main.lua
+#, lua-format
+msgid "Choose a source for %1"
+msgstr "为《%1》选择书源"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Already in bookshelf"
+msgstr "已在书架"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Open the existing bookshelf entry"
+msgstr "打开现有书架条目"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Save this source result"
+msgstr "保存此书源结果"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Replace the bookshelf source"
+msgstr "替换书架书源"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Open chapter list"
+msgstr "打开目录"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Adding book to bookshelf…"
+msgstr "正在添加书籍到书架…"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Book is already in the bookshelf."
+msgstr "书籍已经在书架中。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Bookshelf source updated."
+msgstr "书架书源已更新。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Book added to bookshelf."
+msgstr "书籍已添加到书架。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Cannot start search worker."
+msgstr "无法启动搜索任务。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search returned invalid data."
+msgstr "搜索返回了无效数据。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Search worker returned no data."
+msgstr "搜索任务没有返回数据。"
+
+#: plugin/legado.koplugin/legado/book_detail.lua
+msgid "Delete from bookshelf"
+msgstr "从书架删除"
+
 #~ msgid "Searching %1…"
 #~ msgstr "正在从 %1 搜索…"
 
@@ -1348,6 +1549,3 @@ msgstr ""
 #, lua-format
 #~ msgid "Search for %1 on this source. You can edit the keyword."
 #~ msgstr "将在此书源搜索 %1；你可以修改关键词。"
-
-#~ msgid "Search keyword"
-#~ msgstr "搜索关键词"

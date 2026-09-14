@@ -7,6 +7,7 @@
 
 local DataStorage = require("datastorage")
 local lfs = require("libs/libkoreader-lfs")
+local socket = require("socket")
 local util = require("util")
 local rapidjson = require("rapidjson")
 
@@ -193,6 +194,30 @@ local function write_records(path, records)
     return true
 end
 
+local function acquire_save_lock(path)
+    local lock = path .. ".lock"
+    local started = type(socket.gettime) == "function" and socket.gettime() or os.clock()
+    while true do
+        if lfs.mkdir(lock) then return lock end
+        -- A SIGKILL during a Kindle search can leave the lock directory
+        -- behind. It contains no user data, so an old lock is safe to reap;
+        -- active saves finish in milliseconds and are never mistaken for it.
+        local modified = lfs.attributes(lock, "modification")
+        local now = type(socket.gettime) == "function" and socket.gettime() or os.clock()
+        if modified and now - modified > 60 then
+            pcall(lfs.rmdir, lock)
+        elseif now - started > 15 then
+            return nil, "timed out waiting for source session lock"
+        else
+            socket.sleep(0.02)
+        end
+    end
+end
+
+local function release_save_lock(lock)
+    if lock then pcall(lfs.rmdir, lock) end
+end
+
 function Session.path()
     return default_path()
 end
@@ -220,34 +245,42 @@ end
 
 function Session.save(source, state)
     local path = Session.path()
+    local lock, lock_err = acquire_save_lock(path)
+    if not lock then return nil, lock_err end
     local records, err = read_records(path)
     if not records then
+        release_save_lock(lock)
         return nil, err
     end
-    local source_url, source_name = source_parts(source)
-    local key = source_key(source)
-    local record = copy_record(state)
-    record.sourceUrl = source_url
-    record.sourceName = source_name
-    record.updatedAt = os.time()
-    local replaced = false
-    for index, existing in ipairs(records) do
-        if type(existing) == "table" then
-            local existing_source = {
-                bookSourceUrl = existing.sourceUrl,
-                bookSourceName = existing.sourceName,
-            }
-            if source_key(existing_source) == key then
-                records[index] = record
-                replaced = true
-                break
+    local save_ok, saved, save_err = pcall(function()
+        local source_url, source_name = source_parts(source)
+        local key = source_key(source)
+        local record = copy_record(state)
+        record.sourceUrl = source_url
+        record.sourceName = source_name
+        record.updatedAt = os.time()
+        local replaced = false
+        for index, existing in ipairs(records) do
+            if type(existing) == "table" then
+                local existing_source = {
+                    bookSourceUrl = existing.sourceUrl,
+                    bookSourceName = existing.sourceName,
+                }
+                if source_key(existing_source) == key then
+                    records[index] = record
+                    replaced = true
+                    break
+                end
             end
         end
-    end
-    if not replaced then
-        records[#records + 1] = record
-    end
-    return write_records(path, records)
+        if not replaced then
+            records[#records + 1] = record
+        end
+        return write_records(path, records)
+    end)
+    release_save_lock(lock)
+    if not save_ok then return nil, saved end
+    return saved, save_err
 end
 
 return Session

@@ -775,6 +775,21 @@ function Storage:save_prefetch_count(value)
     return value
 end
 
+function Storage:get_search_concurrency()
+    local value = tonumber(self:get_settings():readSetting("search_concurrency"))
+    if not value then return 2 end
+    return math.max(1, math.min(4, math.floor(value)))
+end
+
+function Storage:save_search_concurrency(value)
+    value = tonumber(value) or 2
+    value = math.max(1, math.min(4, math.floor(value)))
+    local settings = self:get_settings()
+    settings:saveSetting("search_concurrency", value)
+    settings:flush()
+    return value
+end
+
 function Storage:load_reader_session()
     if self.reader_session_load_attempted and not self.reader_session_static then
         return nil
@@ -997,6 +1012,36 @@ function Storage:save_last_chapter(book, chapter)
     settings:saveSetting("books", books)
     settings:flush()
     return true
+end
+
+function Storage:remove_book_state(book)
+    if type(book) ~= "table" then return false end
+    local changed = false
+    local progress = self:get_progress_settings()
+    local progress_books = progress:readSetting("books") or {}
+    if type(progress_books) ~= "table" then progress_books = {} end
+    local key = book_key(book)
+    if key ~= "" and progress_books[key] ~= nil then
+        progress_books[key] = nil
+        progress:saveSetting("books", progress_books)
+        progress:flush()
+        changed = true
+    end
+
+    local history = self:get_history_settings()
+    local history_books = history:readSetting("books") or {}
+    if type(history_books) ~= "table" then history_books = {} end
+    local history_id = history_key(book.name, book.author)
+    if history_id ~= "\t" and history_books[history_id] ~= nil then
+        history_books[history_id] = nil
+        history:saveSetting("books", history_books)
+        history:flush()
+        changed = true
+    end
+
+    if self:clear_reader_session_for_book(book) then changed = true end
+    self:invalidate_reading_record_cache()
+    return changed
 end
 
 function Storage:write_chapter(book, chapter, content)

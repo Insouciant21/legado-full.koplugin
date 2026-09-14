@@ -78,7 +78,20 @@ VIP rules retain the original per-chapter evaluation order.
 Only the current chapter is needed for normal reading. Whole-book download is
 sequential, cancellable and resumable because cached chapters are skipped.
 After a chapter is ready, the plugin prefetches the next five uncached
-chapters in the background; `Legado → Reading` can change this from 5 to 10.
+chapters in the background; `Legado → Legado settings` can change this from 5
+to 10.
+
+The source search page follows the Android workflow: choose all enabled text
+sources or an explicit subset, enter a keyword with the KOReader keyboard,
+search sources concurrently, merge the same title/author from multiple
+origins, and act on each candidate without waiting for every source. Results
+can be added to the bookshelf, opened directly, or loaded again page by page.
+The search concurrency is configurable from 1 to 4 in `Legado settings`.
+
+`Manage bookshelf` and the book-detail page can remove a shelf entry. Removal
+also clears its plugin-owned chapter cache, cover cache, reading position and
+imported reading-history record; KOReader's own document settings are not
+modified.
 
 KOReader owns font, size, spacing, CSS, embedded-font handling, position,
 bookmarks and all other reading presentation. The plugin no longer reads or

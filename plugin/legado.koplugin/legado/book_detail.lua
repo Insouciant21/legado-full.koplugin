@@ -42,6 +42,7 @@ local BookDetail = ButtonDialog:extend{
     on_chapters = nil,
     on_change_source = nil,
     on_refresh = nil,
+    on_delete = nil,
     on_close = nil,
     width_factor = 0.98,
     dismissable = true,
@@ -271,6 +272,13 @@ function BookDetail:init()
                 text = _("Refresh book information"),
                 enabled = self.on_refresh ~= nil,
                 callback = function() self:dispatch("refresh") end,
+            },
+        },
+        {
+            {
+                text = _("Delete from bookshelf"),
+                enabled = self.on_delete ~= nil,
+                callback = function() self:dispatch("delete") end,
             },
         },
         {
