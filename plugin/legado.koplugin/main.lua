@@ -2727,9 +2727,9 @@ function Legado:chooseSearchSource()
     local all_selected = saved == nil
     local selected = {}
     if all_selected then
-        for _, entry in ipairs(available) do selected[entry.key] = true end
+        for entry_index, entry in ipairs(available) do selected[entry.key] = true end
     else
-        for _, entry in ipairs(available) do
+        for entry_index, entry in ipairs(available) do
             if saved[entry.key] then selected[entry.key] = true end
         end
     end
@@ -2737,7 +2737,7 @@ function Legado:chooseSearchSource()
     local source_menu
     local function selected_count()
         local count = 0
-        for _ in pairs(selected) do count = count + 1 end
+        for selected_key in pairs(selected) do count = count + 1 end
         return count
     end
     local function render()
@@ -2757,7 +2757,7 @@ function Legado:chooseSearchSource()
                 scope_all = true,
             },
         }
-        for _, entry in ipairs(available) do
+        for entry_index, entry in ipairs(available) do
             local group = trim_text(entry.source.bookSourceGroup)
             items[#items + 1] = {
                 text = display_text(source_display_name(entry.source)),
@@ -2788,7 +2788,7 @@ function Legado:chooseSearchSource()
                     end
                     save_search_source_scope(self.storage, all_selected and {} or selected)
                     local chosen = {}
-                    for _, entry in ipairs(available) do
+                    for entry_index, entry in ipairs(available) do
                         if all_selected or selected[entry.key] then
                             chosen[#chosen + 1] = entry.source
                         end
@@ -2801,7 +2801,7 @@ function Legado:chooseSearchSource()
                     all_selected = not all_selected
                     selected = {}
                     if all_selected then
-                        for _, entry in ipairs(available) do
+                        for entry_index, entry in ipairs(available) do
                             selected[entry.key] = true
                         end
                     end
@@ -2811,7 +2811,7 @@ function Legado:chooseSearchSource()
                         -- scope into an explicit selection of the remainder.
                         all_selected = false
                         selected = {}
-                        for _, entry in ipairs(available) do
+                        for entry_index, entry in ipairs(available) do
                             if entry.key ~= item.source_key then
                                 selected[entry.key] = true
                             end
