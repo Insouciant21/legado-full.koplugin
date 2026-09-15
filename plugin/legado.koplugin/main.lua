@@ -1046,7 +1046,7 @@ function Legado:startReaderPrefetch()
             local path = self.storage:write_chapter(session.book, chapter, content)
             if not path then
                 self._prefetch_jobs[chapter_index] = nil
-                for _, waiter in ipairs(job.waiters) do
+                for waiter_index, waiter in ipairs(job.waiters) do
                     waiter(nil, _("Cannot save prefetched chapter."))
                 end
                 finish()
@@ -1062,7 +1062,7 @@ function Legado:startReaderPrefetch()
                 self._prefetch_running = false
                 self._prefetch_stop_after = nil
                 self._prefetch_jobs = {}
-                for _, waiter in ipairs(job.waiters) do
+                for waiter_index, waiter in ipairs(job.waiters) do
                     UIManager:nextTick(function()
                         waiter(path)
                     end)
@@ -1084,7 +1084,7 @@ function Legado:startReaderPrefetch()
             on_failure = function(error_message)
                 if self._prefetch_jobs[chapter_index] == job then
                     self._prefetch_jobs[chapter_index] = nil
-                    for _, waiter in ipairs(job.waiters) do
+                    for waiter_index, waiter in ipairs(job.waiters) do
                         waiter(nil, error_message)
                     end
                 end
@@ -1093,7 +1093,7 @@ function Legado:startReaderPrefetch()
             on_cancel = function()
                 if self._prefetch_jobs[chapter_index] == job then
                     self._prefetch_jobs[chapter_index] = nil
-                    for _, waiter in ipairs(job.waiters) do
+                    for waiter_index, waiter in ipairs(job.waiters) do
                         waiter(nil, _("Prefetch cancelled."))
                     end
                 end
@@ -3139,7 +3139,7 @@ local function refresh_parent_book_menu(parent_widget, old_book, new_book, index
         return
     end
     local changed = false
-    for _, item in ipairs(parent_widget.item_table) do
+    for item_index, item in ipairs(parent_widget.item_table) do
         if type(item) == "table"
                 and (item.book == old_book or item.book_index == index) then
             item.book = new_book
@@ -4956,7 +4956,7 @@ function Legado:showSearchMenu(state)
         end
         return left.order < right.order
     end)
-    for _, record in ipairs(state.results) do
+    for record_index, record in ipairs(state.results) do
         local shelf_index, shelf_book = self:searchShelfBook(
             state, record.candidates[1]
         )
