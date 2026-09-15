@@ -15,6 +15,7 @@ local Geom = require("ui/geometry")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
+local LineWidget = require("ui/widget/linewidget")
 local Size = require("ui/size")
 local ScrollableContainer = require("ui/widget/container/scrollablecontainer")
 local TextBoxWidget = require("ui/widget/textboxwidget")
@@ -294,25 +295,57 @@ function BookDetail:init()
     end
     ButtonDialog.init(self)
 
-    -- ButtonDialog normally centers a small rounded popup. Details are a
-    -- complete page, so give it a square full-screen white surface and keep
-    -- the existing button dialog centered horizontally but aligned to the
-    -- top. This also prevents the previous KOReader page from showing below
-    -- the dialog on devices with a tall screen.
-    if self.movable and self.movable[1] then
-        self.movable[1].radius = 0
-        self.movable[1].bordersize = 0
-    end
-    local dialog_center = self[1]
-    dialog_center.ignore = "height"
-    self[1] = FrameContainer:new{
-        dimen = Screen:getSize(),
+    -- ButtonDialog normally puts the added widgets above the button table and
+    -- makes the button table scroll when the whole dialog is too tall. A book
+    -- detail page has a different interaction contract: the header and
+    -- introduction may scroll, but all six actions must remain fixed at the
+    -- bottom so the user can always reach Close/Delete/Change source.
+    local button_size = self.buttontable:getSize()
+    local edge_padding = Size.padding.buttontable + Size.margin.default
+    local content_height = math.max(
+        Screen:scaleBySize(160),
+        Screen:getHeight() - button_size.h - Size.line.medium - 2 * edge_padding
+    )
+    -- Leave room for ScrollableContainer's scrollbar gutter. Without this,
+    -- a vertical scrollbar also creates a needless horizontal scrollbar.
+    local content_width = math.max(
+        button_size.w,
+        self.title_group:getSize().w
+    ) + ScrollableContainer:getScrollbarWidth()
+    local content_scroll = ScrollableContainer:new{
+        dimen = Geom:new{ w = content_width, h = content_height },
+        show_parent = self,
+        self.title_group,
+    }
+    self.cropping_widget = content_scroll
+    local separator = LineWidget:new{
+        background = Blitbuffer.COLOR_GRAY,
+        dimen = Geom:new{ w = content_width, h = Size.line.medium },
+    }
+    local page = VerticalGroup:new{
+        align = "center",
+        VerticalSpan:new{ width = edge_padding },
+        content_scroll,
+        separator,
+        self.buttontable,
+        VerticalSpan:new{ width = edge_padding },
+    }
+    local screen_size = Geom:new{
+        w = Screen:getWidth(),
+        h = Screen:getHeight(),
+    }
+    self.movable = FrameContainer:new{
+        dimen = screen_size,
         padding = 0,
         margin = 0,
         bordersize = 0,
         background = Blitbuffer.COLOR_WHITE,
-        dialog_center,
+        CenterContainer:new{
+            dimen = screen_size,
+            page,
+        },
     }
+    self[1] = self.movable
 end
 
 -- ButtonDialog normally invalidates only its movable popup rectangle.  The
