@@ -1204,9 +1204,17 @@ function Browser.await(url, options)
         promote_browser_window(now() + 5, hidden_kpp_windows)
     end
 
+    -- Chromium's very first launch after a boot or a page-cache eviction
+    -- mmaps tens of megabytes of libchromium.so from eMMC and can take well
+    -- over 20 seconds before its DevTools endpoint listens. A 20-second
+    -- deadline turned that cold start into a guaranteed
+    -- "browser interaction timed out" on the first chapter load; warm
+    -- launches answer in about a second. Give the endpoint 45 seconds, and
+    -- let the main loop's process-liveness check catch a browser that died
+    -- instead of started.
     local page, page_err = wait_for_page(
         port,
-        now() + 20,
+        now() + 45,
         background and hide_browser_window or nil,
         background and 0.35 or nil
     )
