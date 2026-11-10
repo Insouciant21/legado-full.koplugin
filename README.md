@@ -7,6 +7,7 @@
 ## 功能特性
 
 - 从 Android Legado 备份包导入书源、书架和阅读记录。
+- 支持从 WebDAV 服务器浏览并直接导入备份 ZIP，无需手动拷贝文件。
 - 兼容普通书源和聚合书源，支持搜索、目录、登录、书源 Actions 和换源。
 - 书架提供全部、在读、未读、已读动态分类。
 - 支持上一章、下一章连续阅读，章节预加载和连载目录刷新。
@@ -56,6 +57,8 @@ unzip -o /mnt/us/legado.koplugin.zip -d /mnt/us/koreader/plugins
 2. 打开 `Legado → Backup & restore → Import Android backup`。
 3. 导入完成后，从 `Legado bookshelf` 打开书籍。
 4. 选择书籍和章节即可阅读；阅读到章节末尾会自动进入下一章。
+
+也可以从 WebDAV 服务器直接导入：在 `Legado → Backup & restore → WebDAV server settings` 填入服务器地址、用户名和应用密码（如坚果云的 WebDAV 密码），然后选择 `Import backup from WebDAV` 浏览服务器目录并选中备份 ZIP。配置保存在 Kindle 端，支持 HTTP Basic 认证和 HTTPS。
 
 需要登录或依赖浏览器验证的书源，功能取决于 Kindle 上可用的浏览器环境；文本内容会由 KOReader 打开和排版。
 

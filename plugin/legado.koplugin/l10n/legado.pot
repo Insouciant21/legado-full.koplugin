@@ -1465,3 +1465,83 @@ msgid ""
 "Replacements: %s\n"
 "Templates: %s"
 msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Import backup from WebDAV"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV server settings"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV server"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Server URL"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Username"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Password"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua plugin/legado.koplugin/legado/webdav.lua
+msgid "The WebDAV URL must start with http:// or https://"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Could not save the WebDAV settings."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV server saved."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Loading WebDAV directory…"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV listing failed."
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Back to parent folder"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "The WebDAV folder is empty: %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Folder"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "Backup archive"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV backup: %1"
+msgstr ""
+
+#: plugin/legado.koplugin/main.lua plugin/legado.koplugin/legado/webdav.lua
+msgid "Backup download failed."
+msgstr ""
+
+#: plugin/legado.koplugin/legado/webdav.lua
+msgid "No WebDAV server is configured."
+msgstr ""
+
+#: plugin/legado.koplugin/legado/webdav.lua
+msgid "WebDAV authentication failed. Check the username and password."
+msgstr ""
+
+#: plugin/legado.koplugin/legado/webdav.lua
+msgid "The WebDAV file is too large to import."
+msgstr ""

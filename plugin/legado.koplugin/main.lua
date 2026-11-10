@@ -98,6 +98,7 @@ local EmojiFont = require("legado/font")
 local SourceCatalog = require("legado/source")
 local BrowserInput = require("legado/browser_input")
 local BookDetail = require("legado/book_detail")
+local Webdav = require("legado/webdav")
 
 -- Every plugin Menu is a screen-sized page.  Menu's default is a popout,
 -- which gives a full-screen instance a rounded frame and installs an
@@ -132,6 +133,26 @@ end
 
 local function trim_text(value)
     return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function format_file_size(bytes)
+    bytes = tonumber(bytes)
+    if not bytes or bytes < 0 then return nil end
+    if bytes >= 1024 * 1024 then
+        return string.format("%.1f MB", bytes / (1024 * 1024))
+    end
+    if bytes >= 1024 then
+        return string.format("%.0f KB", bytes / 1024)
+    end
+    return string.format("%d B", bytes)
+end
+
+local function file_name_from_url(url)
+    local path = tostring(url or ""):gsub("%?.*$", ""):gsub("/+$", "")
+    local name = path:match("[^/]+$") or tostring(url or "")
+    return (name:gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end))
 end
 
 local BOOK_INFO_FIELDS = {
@@ -468,6 +489,18 @@ function Legado:getBackupMenuItems()
             text = _("Import sources, bookshelf and reading history"),
             callback = function()
                 self:chooseBackupFile()
+            end,
+        },
+        {
+            text = _("Import backup from WebDAV"),
+            callback = function()
+                self:importBackupFromWebDAV()
+            end,
+        },
+        {
+            text = _("WebDAV server settings"),
+            callback = function()
+                self:showWebDAVSettings()
             end,
         },
     }
@@ -5998,6 +6031,201 @@ function Legado:chooseBackupFile()
         end,
     }
     UIManager:show(chooser)
+end
+
+-- WebDAV import reuses the local import pipeline unchanged: the Android
+-- backup ZIP is downloaded to a plugin-owned file, then handed to the same
+-- Backup.import_archive call as Import Android backup.
+function Legado:showWebDAVSettings(on_done)
+    local saved = Webdav.load_config()
+    local dialog
+    dialog = MultiInputDialog:new{
+        title = _("WebDAV server"),
+        fields = {
+            {
+                description = _("Server URL"),
+                text = saved.url,
+                hint = "https://dav.jianguoyun.com/dav/",
+            },
+            {
+                description = _("Username"),
+                text = saved.username,
+            },
+            {
+                description = _("Password"),
+                text = saved.password,
+                text_type = "password",
+            },
+        },
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local entered = dialog:getFields()
+                        local url = trim_text(entered[1] or "")
+                        if url:match("^%s*https?://") == nil then
+                            UIManager:show(InfoMessage:new{
+                                text = _("The WebDAV URL must start with http:// or https://"),
+                            })
+                            return
+                        end
+                        UIManager:close(dialog)
+                        local saved_ok, saved_err = Webdav.save_config({
+                            url = url,
+                            username = trim_text(entered[2] or ""),
+                            password = entered[3] or "",
+                        })
+                        if not saved_ok then
+                            self:showOperationResult(
+                                _("Could not save the WebDAV settings.") .. "\n\n" .. tostring(saved_err)
+                            )
+                            return
+                        end
+                        if on_done then
+                            on_done()
+                        else
+                            self:showOperationResult(_("WebDAV server saved."))
+                        end
+                    end,
+                },
+            },
+        },
+    }
+    prepare_text_input_keyboard(dialog)
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+function Legado:importBackupFromWebDAV()
+    local saved = Webdav.load_config()
+    if trim_text(saved.url) == "" then
+        self:showWebDAVSettings(function()
+            self:chooseWebDAVBackup()
+        end)
+        return
+    end
+    self:chooseWebDAVBackup()
+end
+
+function Legado:chooseWebDAVBackup(url)
+    local config = Webdav.load_config()
+    url = url or config.url
+    self:runWorker(_("Loading WebDAV directory…"), function()
+        local items, list_err = Webdav.list_directory(config, url)
+        if not items then return nil, list_err or _("WebDAV listing failed.") end
+        return items
+    end, function(items)
+        self:showWebDAVDirectory(config, url, items)
+    end)
+end
+
+function Legado:showWebDAVDirectory(config, url, items)
+    local normalized, normalize_err = Webdav.normalize_directory_url(url)
+    if not normalized then
+        self:showOperationResult(tostring(normalize_err))
+        return
+    end
+    local display_items = {}
+    local parent = Webdav.parent_url(normalized)
+    if parent then
+        display_items[#display_items + 1] = {
+            text = _("Back to parent folder"),
+            mandatory = "..",
+            parent_url = parent,
+        }
+    end
+    if #display_items == 0 and #items == 0 then
+        self:showOperationResult(T(_("The WebDAV folder is empty: %1"), normalized))
+        return
+    end
+    -- gettext is the module-local `_`; never shadow it with a loop variable.
+    for item_index, item in ipairs(items) do
+        if item.is_dir then
+            display_items[#display_items + 1] = {
+                text = display_text(item.name) .. "/",
+                mandatory = _("Folder"),
+                dir_url = item.url,
+            }
+        elseif tostring(item.name):lower():match("%.zip$") then
+            display_items[#display_items + 1] = {
+                text = display_text(item.name),
+                mandatory = format_file_size(item.size) or _("Backup archive"),
+                zip_url = item.url,
+            }
+        end
+    end
+    local menu
+    menu = LegadoMenu:new{
+        title = T(_("WebDAV backup: %1"), file_name_from_url(normalized)),
+        item_table = display_items,
+        items_per_page = 12,
+        onMenuSelect = function(menu_instance, item)
+            UIManager:close(menu_instance)
+            if item.parent_url or item.dir_url then
+                self:chooseWebDAVBackup(item.parent_url or item.dir_url)
+            elseif item.zip_url then
+                self:importWebDAVBackup(item.zip_url)
+            end
+        end,
+    }
+    UIManager:show(menu)
+end
+
+function Legado:importWebDAVBackup(zip_url)
+    local config = Webdav.load_config()
+    self:runWorker(_("Importing backup…"), function()
+        local temp_path = self.storage:get_root() .. "/webdav-download.zip"
+        -- A previous run interrupted after downloading leaves the file behind.
+        os.remove(temp_path)
+        local downloaded, download_err = Webdav.download_file(config, zip_url, temp_path)
+        if not downloaded then
+            os.remove(temp_path)
+            return nil, download_err or _("Backup download failed.")
+        end
+        local result, err = Backup.import_archive(downloaded.path, self.storage:get_state_root())
+        os.remove(downloaded.path)
+        if not result then return nil, err or _("Backup import failed.") end
+        -- Android's three read-record tables are kept as supported state
+        -- members, then converted to the Kindle-native progress and history
+        -- files without importing Android reader options.
+        local imported_storage = Storage:new()
+        local reading, reading_err = imported_storage:import_reading_records()
+        result.reading_import = reading
+        result.reading_import_error = reading_err
+        result.source = zip_url
+        return result
+    end, function(result)
+        self.storage:invalidate_reading_record_cache()
+        self:invalidateReaderSourceCache()
+        self._reader_session_cache = nil
+        self._reader_session_cache_file = nil
+        local counts = result.summary.counts or {}
+        local reading = result.reading_import or {}
+        local records = reading.records or {}
+        local reading_error = result.reading_import_error
+            and ("\n" .. _("Reading history conversion:") .. " " .. tostring(result.reading_import_error))
+            or ""
+        self:showOperationResult(string.format(
+            _("Imported Android data.\nSources: %s\nBooks: %s\nRead records: %s\nRead details: %s\nRead sessions: %s\nResumed books: %s\nIgnored Android members: %s%s"),
+            tostring(counts.book_sources or 0),
+            tostring(counts.bookshelf_books or 0),
+            tostring(counts.read_records or records.read_records or 0),
+            tostring(counts.read_record_details or records.read_record_details or 0),
+            tostring(counts.read_record_sessions or records.read_record_sessions or 0),
+            tostring(reading.progress_books or 0),
+            tostring(counts.ignored_members or 0),
+            reading_error
+        ))
+    end)
 end
 
 function Legado:onLegadoShowStatus()

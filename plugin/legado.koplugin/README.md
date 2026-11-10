@@ -22,7 +22,8 @@ koreader/
         │   ├── runtime.lua
         │   ├── session.lua
         │   ├── source.lua
-        │   └── storage.lua
+        │   ├── storage.lua
+        │   └── webdav.lua
         └── lib/
             ├── armel/liblegado_js.so
             └── armhf/liblegado_js.so
@@ -46,6 +47,14 @@ chapter in the bookshelf (`durChapterIndex`, `durChapterTitle` and
 `durChapterTime`), while `readRecord*.json` stores reading statistics. The
 plugin converts the chapter index to its own one-based continuation record and
 stores statistics separately in `reading-history.lua`.
+
+The backup ZIP can also be fetched from the user's own WebDAV server
+(`webdav.lua`: PROPFIND browsing plus HTTP Basic auth over LuaSocket/LuaSec).
+`Import backup from WebDAV` downloads the archive to a plugin-owned file and
+hands it to the same local import path. The server URL, username and password
+are stored in `webdav.json` beside the imported state, written atomically with
+mode 0600 where the build supports `chmod`. The module is deliberately kept
+out of the source-rule runtime: no book source can call WebDAV verbs.
 
 ## Bookshelf and reading
 

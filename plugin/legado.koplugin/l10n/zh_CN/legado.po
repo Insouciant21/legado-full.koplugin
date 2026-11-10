@@ -1518,6 +1518,86 @@ msgstr "搜索任务没有返回数据。"
 msgid "Delete from bookshelf"
 msgstr "从书架删除"
 
+#: plugin/legado.koplugin/main.lua
+msgid "Import backup from WebDAV"
+msgstr "从 WebDAV 导入备份"
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV server settings"
+msgstr "WebDAV 服务器设置"
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV server"
+msgstr "WebDAV 服务器"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Server URL"
+msgstr "服务器地址"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Username"
+msgstr "用户名"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Password"
+msgstr "密码"
+
+#: plugin/legado.koplugin/main.lua plugin/legado.koplugin/legado/webdav.lua
+msgid "The WebDAV URL must start with http:// or https://"
+msgstr "WebDAV 地址必须以 http:// 或 https:// 开头"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Could not save the WebDAV settings."
+msgstr "无法保存 WebDAV 服务器设置。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV server saved."
+msgstr "WebDAV 服务器设置已保存。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Loading WebDAV directory…"
+msgstr "正在读取 WebDAV 目录…"
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV listing failed."
+msgstr "WebDAV 目录读取失败。"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Back to parent folder"
+msgstr "返回上级目录"
+
+#: plugin/legado.koplugin/main.lua
+msgid "The WebDAV folder is empty: %1"
+msgstr "WebDAV 文件夹为空：%1"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Folder"
+msgstr "文件夹"
+
+#: plugin/legado.koplugin/main.lua
+msgid "Backup archive"
+msgstr "备份压缩包"
+
+#: plugin/legado.koplugin/main.lua
+msgid "WebDAV backup: %1"
+msgstr "WebDAV 备份：%1"
+
+#: plugin/legado.koplugin/main.lua plugin/legado.koplugin/legado/webdav.lua
+msgid "Backup download failed."
+msgstr "备份下载失败。"
+
+#: plugin/legado.koplugin/legado/webdav.lua
+msgid "No WebDAV server is configured."
+msgstr "尚未配置 WebDAV 服务器。"
+
+#: plugin/legado.koplugin/legado/webdav.lua
+msgid "WebDAV authentication failed. Check the username and password."
+msgstr "WebDAV 认证失败，请检查用户名和密码。"
+
+#: plugin/legado.koplugin/legado/webdav.lua
+msgid "The WebDAV file is too large to import."
+msgstr "WebDAV 文件过大，无法导入。"
+
 #~ msgid "Searching %1…"
 #~ msgstr "正在从 %1 搜索…"
 
