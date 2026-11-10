@@ -10,6 +10,7 @@ build/
 *.egg-info/
 artifacts/
 testdata/
+.zcode/
 *.zip
 *.sqlite
 *.sqlite3
