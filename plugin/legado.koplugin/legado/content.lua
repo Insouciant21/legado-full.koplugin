@@ -409,6 +409,16 @@ function Content.process(value, options)
     }
 end
 
+---Decode HTML character references (&#..;, &name;) in plain rule text.
+---
+---JSoup's `.text()`, which Android Legado rule results are produced with,
+---always unescapes references; KOReader's htmlparser leaves them in place.
+---rules.lua applies this at the same boundary so a chapter title such as
+---"圣体出世&middot;群雄震撼" reaches the TOC as "圣体出世·群雄震撼".
+function Content.decode_entities(value)
+    return decode_entities(tostring(value or ""))
+end
+
 function Content.to_text(value)
     return (Content.process(value, { remove_same_title = false }))
 end

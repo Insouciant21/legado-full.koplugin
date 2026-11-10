@@ -6,6 +6,7 @@
 
 local htmlparser = require("htmlparser")
 local rapidjson = require("rapidjson")
+local Content = require("legado/content")
 
 local Rules = {}
 local regex_values
@@ -365,11 +366,16 @@ end
 
 local function element_value(element, mode)
     if mode == "text" then
-        return normalize_text(element:textonly())
+        -- htmlparser's textonly() leaves character references untouched,
+        -- while JSoup's .text() -- the API Android Legado rules are written
+        -- against -- always unescapes them. Decode at this boundary so a
+        -- chapter title such as "圣体出世&middot;群雄震撼" reaches the TOC
+        -- as "圣体出世·群雄震撼" instead of a literal entity.
+        return normalize_text(Content.decode_entities(element:textonly()))
     elseif mode == "ownText" then
-        return own_text(element)
+        return normalize_text(Content.decode_entities(own_text(element)))
     elseif mode == "textNodes" then
-        return own_text(element)
+        return normalize_text(Content.decode_entities(own_text(element)))
     elseif mode == "html" then
         return element:getcontent() or ""
     elseif mode == "all" then
@@ -1536,7 +1542,8 @@ local function select_legacy(root, expression)
             if all then
                 elements = {}
                 for _, element in ipairs(all) do
-                    if own_text(element):find(value, 1, true) then
+                    -- JSoup's :contains() matches against decoded text.
+                    if Content.decode_entities(own_text(element)):find(value, 1, true) then
                         elements[#elements + 1] = element
                     end
                 end
