@@ -1,0 +1,591 @@
+# Chinese translations for the Legado server KOReader plugin.
+msgid ""
+msgstr ""
+"Project-Id-Version: Legado server for KOReader 0.3.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-16 19:25+0800\n"
+"PO-Revision-Date: 2026-11-16 19:02+0800\n"
+"Last-Translator: Legado contributors\n"
+"Language-Team: Chinese\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: plugin/legado-server.koplugin/_meta.lua:48
+#: plugin/legado-server.koplugin/main.lua:93
+#: plugin/legado-server.koplugin/main.lua:606
+msgid "Legado server"
+msgstr "Legado 服务器"
+
+#: plugin/legado-server.koplugin/_meta.lua:49
+msgid "Sync published books and read offline with KOReader"
+msgstr "使用 KOReader 同步已发布书籍并离线阅读"
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:76
+#: plugin/legado-server.koplugin/legado_server/reader.lua:291
+msgid "The whole-book EPUB is not available locally."
+msgstr "本地没有可用的整本 EPUB。"
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:178
+msgid "Cannot map the saved chapter to this EPUB."
+msgstr "无法将已保存章节映射到此 EPUB。"
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:352
+#: plugin/legado-server.koplugin/legado_server/reader.lua:408
+msgid "KOReader cannot open this document."
+msgstr "KOReader 无法打开此文档。"
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:363
+msgid "Chapter selection is outside the local table of contents."
+msgstr "所选章节不在本地目录中。"
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:366
+msgid "Invalid chapter index in the local table of contents."
+msgstr "本地目录中的章节索引无效。"
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:492
+msgid "The current chapter is no longer in the published table of contents."
+msgstr "当前章节已不在已发布目录中。"
+
+#: plugin/legado-server.koplugin/main.lua:36
+msgid "Never"
+msgstr "从未同步"
+
+#: plugin/legado-server.koplugin/main.lua:49
+#: plugin/legado-server.koplugin/main.lua:65
+msgid "Unknown server operation error."
+msgstr "服务器操作发生未知错误。"
+
+#: plugin/legado-server.koplugin/main.lua:51
+msgid "Cannot connect to the Legado server."
+msgstr "无法连接到 Legado 服务器。"
+
+#: plugin/legado-server.koplugin/main.lua:52
+#: plugin/legado-server.koplugin/main.lua:201
+#: plugin/legado-server.koplugin/main.lua:217
+msgid "Pair this Kindle with the server first."
+msgstr "请先将此 Kindle 与服务器配对。"
+
+#: plugin/legado-server.koplugin/main.lua:53
+msgid "The discovered server identity does not match this Kindle pairing."
+msgstr "发现的服务器身份与此 Kindle 的配对信息不一致。"
+
+#: plugin/legado-server.koplugin/main.lua:54
+msgid "The server returned invalid pairing data."
+msgstr "服务器返回了无效的配对数据。"
+
+#: plugin/legado-server.koplugin/main.lua:55
+msgid "The server response points to an unpaired address."
+msgstr "服务器响应指向了未配对的地址。"
+
+#: plugin/legado-server.koplugin/main.lua:56
+msgid "The server returned invalid data."
+msgstr "服务器返回了无效数据。"
+
+#: plugin/legado-server.koplugin/main.lua:57
+msgid "Cannot save local Kindle data."
+msgstr "无法保存 Kindle 本地数据。"
+
+#: plugin/legado-server.koplugin/main.lua:58
+msgid "The local Kindle data is invalid."
+msgstr "Kindle 本地数据已损坏或无效。"
+
+#: plugin/legado-server.koplugin/main.lua:59
+msgid "The server returned incomplete published-book data."
+msgstr "服务器返回的已发布书籍数据不完整。"
+
+#: plugin/legado-server.koplugin/main.lua:60
+msgid "A published-book package could not be installed."
+msgstr "无法安装已发布书籍内容包。"
+
+#: plugin/legado-server.koplugin/main.lua:61
+msgid "A published-book EPUB could not be installed."
+msgstr "无法安装已上架书籍的 EPUB。"
+
+#: plugin/legado-server.koplugin/main.lua:62
+msgid "The published bookshelf could not be updated."
+msgstr "无法更新已发布书架。"
+
+#: plugin/legado-server.koplugin/main.lua:63
+msgid "The server operation failed."
+msgstr "服务器操作失败。"
+
+#: plugin/legado-server.koplugin/main.lua:64
+msgid "The server returned an HTTP error."
+msgstr "服务器返回了 HTTP 错误。"
+
+#: plugin/legado-server.koplugin/main.lua:107
+msgid "My Books"
+msgstr "我的书架"
+
+#: plugin/legado-server.koplugin/main.lua:109
+msgid "My Books · %1"
+msgstr "我的书架 · %1"
+
+#: plugin/legado-server.koplugin/main.lua:112
+msgid "Pushed Books"
+msgstr "推送书籍"
+
+#: plugin/legado-server.koplugin/main.lua:114
+#: plugin/legado-server.koplugin/main.lua:844
+msgid "Pushed Books · %1"
+msgstr "推送书籍 · %1"
+
+#: plugin/legado-server.koplugin/main.lua:117
+msgid "Sync Now"
+msgstr "立即同步"
+
+#: plugin/legado-server.koplugin/main.lua:119
+msgid "Sync Now · %1"
+msgstr "立即同步 · %1"
+
+#: plugin/legado-server.koplugin/main.lua:122
+#: plugin/legado-server.koplugin/main.lua:589
+msgid "Sync Center"
+msgstr "同步中心"
+
+#: plugin/legado-server.koplugin/main.lua:124
+msgid "Sync Center · %1"
+msgstr "同步中心 · %1"
+
+#: plugin/legado-server.koplugin/main.lua:127
+#: plugin/legado-server.koplugin/main.lua:654
+msgid "Server"
+msgstr "服务器"
+
+#: plugin/legado-server.koplugin/main.lua:128
+msgid "Server · %1"
+msgstr "服务器 · %1"
+
+#: plugin/legado-server.koplugin/main.lua:149
+#: plugin/legado-server.koplugin/main.lua:150
+#: plugin/legado-server.koplugin/main.lua:822
+msgid "Count: %1"
+msgstr "共 %1 本"
+
+#: plugin/legado-server.koplugin/main.lua:151
+#: plugin/legado-server.koplugin/main.lua:634
+msgid "Not paired"
+msgstr "未配对"
+
+#: plugin/legado-server.koplugin/main.lua:151
+#: plugin/legado-server.koplugin/main.lua:623
+msgid "Paired"
+msgstr "已配对"
+
+#: plugin/legado-server.koplugin/main.lua:157
+msgid "%1 books · %2%"
+msgstr "共 %1 本 · %2%"
+
+#: plugin/legado-server.koplugin/main.lua:162
+#: plugin/legado-server.koplugin/main.lua:554
+msgid "%1 pending"
+msgstr "%1 条待上传"
+
+#: plugin/legado-server.koplugin/main.lua:164
+#: plugin/legado-server.koplugin/main.lua:563
+msgid "%1 conflicts"
+msgstr "%1 个冲突"
+
+#: plugin/legado-server.koplugin/main.lua:165
+msgid "Retry needed"
+msgstr "需要重试"
+
+#: plugin/legado-server.koplugin/main.lua:167
+#: plugin/legado-server.koplugin/main.lua:554
+msgid "Up to date"
+msgstr "已同步"
+
+#: plugin/legado-server.koplugin/main.lua:174
+#: plugin/legado-server.koplugin/main.lua:179
+#: plugin/legado-server.koplugin/main.lua:184
+#: plugin/legado-server.koplugin/main.lua:189
+#: plugin/legado-server.koplugin/main.lua:194
+msgid "Unavailable"
+msgstr "不可用"
+
+#: plugin/legado-server.koplugin/main.lua:198
+#: plugin/legado-server.koplugin/main.lua:214
+msgid "Local storage is unavailable."
+msgstr "本地存储不可用。"
+
+#: plugin/legado-server.koplugin/main.lua:253
+msgid "A server operation is already running."
+msgstr "已有服务器操作正在运行。"
+
+#: plugin/legado-server.koplugin/main.lua:276
+msgid "Server operation returned no result."
+msgstr "服务器操作未返回结果。"
+
+#: plugin/legado-server.koplugin/main.lua:306
+msgid "Cannot save push settings."
+msgstr "无法保存自动推送设置。"
+
+#: plugin/legado-server.koplugin/main.lua:334
+msgid "Cannot save automatic sync settings."
+msgstr "无法保存自动同步设置。"
+
+#: plugin/legado-server.koplugin/main.lua:461
+msgid "Checking Kindle inbox…"
+msgstr "正在检查 Kindle 收件箱…"
+
+#: plugin/legado-server.koplugin/main.lua:461
+msgid "Pulling pushed books…"
+msgstr "正在拉取推送书籍…"
+
+#: plugin/legado-server.koplugin/main.lua:469
+msgid "Pushed books: %1 downloaded, %2 will retry."
+msgstr "推送书籍：成功下载 %1 本，%2 本将重试。"
+
+#: plugin/legado-server.koplugin/main.lua:471
+msgid "Pushed books received: %1"
+msgstr "已收到 %1 本推送书籍"
+
+#: plugin/legado-server.koplugin/main.lua:479
+msgid "Syncing bookshelf and reading progress…"
+msgstr "正在同步书架和阅读进度…"
+
+#: plugin/legado-server.koplugin/main.lua:496
+msgid "Sync complete. %1 progress events sent; %2 conflicts need attention."
+msgstr "同步完成：已发送 %1 条进度，有 %2 个冲突需要处理。"
+
+#: plugin/legado-server.koplugin/main.lua:499
+msgid "Sync complete. %1 progress events sent."
+msgstr "同步完成：已发送 %1 条阅读进度。"
+
+#: plugin/legado-server.koplugin/main.lua:505
+msgid "Sending reading progress…"
+msgstr "正在发送阅读进度…"
+
+#: plugin/legado-server.koplugin/main.lua:520
+msgid "Reading progress acknowledged: %1; %2 conflicts need attention."
+msgstr "服务器已确认 %1 条阅读进度；有 %2 个冲突需要处理。"
+
+#: plugin/legado-server.koplugin/main.lua:523
+msgid "Reading progress acknowledged: %1"
+msgstr "服务器已确认阅读进度：%1"
+
+#: plugin/legado-server.koplugin/main.lua:532
+msgid ""
+"Last sync: %1\n"
+"Pending progress: %2\n"
+"Unresolved conflicts: %3"
+msgstr ""
+"最后同步：%1\n"
+"待上传进度：%2\n"
+"未解决冲突：%3"
+
+#: plugin/legado-server.koplugin/main.lua:535
+msgid "Last error: %1"
+msgstr "上次错误：%1"
+
+#: plugin/legado-server.koplugin/main.lua:543
+msgid "Cannot load synchronization status."
+msgstr "无法读取同步状态。"
+
+#: plugin/legado-server.koplugin/main.lua:547
+msgid "Sync status"
+msgstr "同步状态"
+
+#: plugin/legado-server.koplugin/main.lua:552
+msgid "Send reading progress"
+msgstr "发送阅读进度"
+
+#: plugin/legado-server.koplugin/main.lua:561
+#: plugin/legado-server.koplugin/main.lua:685
+msgid "Reading progress conflicts"
+msgstr "阅读进度冲突"
+
+#: plugin/legado-server.koplugin/main.lua:563
+msgid "None"
+msgstr "无"
+
+#: plugin/legado-server.koplugin/main.lua:570
+msgid "Automatic synchronization: %1"
+msgstr "自动同步：%1"
+
+#: plugin/legado-server.koplugin/main.lua:571
+#: plugin/legado-server.koplugin/main.lua:580
+#: plugin/legado-server.koplugin/main.lua:608
+#: plugin/legado-server.koplugin/main.lua:609
+msgid "Off"
+msgstr "关闭"
+
+#: plugin/legado-server.koplugin/main.lua:571
+#: plugin/legado-server.koplugin/main.lua:580
+#: plugin/legado-server.koplugin/main.lua:608
+#: plugin/legado-server.koplugin/main.lua:609
+msgid "On"
+msgstr "开启"
+
+#: plugin/legado-server.koplugin/main.lua:579
+msgid "Receive pushed books automatically: %1"
+msgstr "自动接收推送：%1"
+
+#: plugin/legado-server.koplugin/main.lua:600
+#: plugin/legado-server.koplugin/main.lua:615
+msgid "Cannot load server pairing information."
+msgstr "无法读取服务器配对信息。"
+
+#: plugin/legado-server.koplugin/main.lua:602
+#: plugin/legado-server.koplugin/main.lua:975
+msgid "This Kindle is not paired with a server."
+msgstr "此 Kindle 尚未与服务器配对。"
+
+#: plugin/legado-server.koplugin/main.lua:605
+msgid ""
+"Server: %1\n"
+"Address: %2\n"
+"Automatic synchronization: %3\n"
+"Automatic push delivery: %4"
+msgstr ""
+"服务器：%1\n"
+"地址：%2\n"
+"自动同步：%3\n"
+"自动推送：%4"
+
+#: plugin/legado-server.koplugin/main.lua:622
+msgid "Paired server"
+msgstr "已配对服务器"
+
+#: plugin/legado-server.koplugin/main.lua:627
+msgid "Forget server pairing"
+msgstr "忘记服务器配对"
+
+#: plugin/legado-server.koplugin/main.lua:635
+msgid "Pairing required"
+msgstr "需要配对"
+
+#: plugin/legado-server.koplugin/main.lua:638
+msgid "Find server on LAN"
+msgstr "查找局域网服务器"
+
+#: plugin/legado-server.koplugin/main.lua:645
+msgid "Pair manually"
+msgstr "手动配对"
+
+#: plugin/legado-server.koplugin/main.lua:664
+msgid "no saved position"
+msgstr "没有已保存位置"
+
+#: plugin/legado-server.koplugin/main.lua:666
+msgid "chapter %1, %2%"
+msgstr "第 %1 章，%2%"
+
+#: plugin/legado-server.koplugin/main.lua:671
+msgid "There are no unresolved reading progress conflicts."
+msgstr "没有未解决的阅读进度冲突。"
+
+#: plugin/legado-server.koplugin/main.lua:678
+msgid "Server: %1 · Kindle: %2"
+msgstr "服务端：%1 · Kindle：%2"
+
+#: plugin/legado-server.koplugin/main.lua:691
+msgid ""
+"Choose the reading position to keep.\n"
+"\n"
+"Server: %1\n"
+"Kindle: %2"
+msgstr ""
+"请选择要保留的阅读位置。\n"
+"\n"
+"服务端：%1\n"
+"Kindle：%2"
+
+#: plugin/legado-server.koplugin/main.lua:693
+msgid "Keep server"
+msgstr "保留服务端"
+
+#: plugin/legado-server.koplugin/main.lua:694
+msgid "Use Kindle"
+msgstr "使用 Kindle"
+
+#: plugin/legado-server.koplugin/main.lua:706
+msgid "Refreshing reading progress conflicts…"
+msgstr "正在刷新阅读进度冲突…"
+
+#: plugin/legado-server.koplugin/main.lua:721
+msgid "Resolving reading progress conflict…"
+msgstr "正在解决阅读进度冲突…"
+
+#: plugin/legado-server.koplugin/main.lua:742
+msgid "Reading progress conflict resolved."
+msgstr "阅读进度冲突已解决。"
+
+#: plugin/legado-server.koplugin/main.lua:751
+msgid ""
+"No published books are stored. Publish from the WebUI and sync this Kindle."
+msgstr "没有已上架书籍。请先在 WebUI 上架，然后同步此 Kindle。"
+
+#: plugin/legado-server.koplugin/main.lua:760
+msgid "%1/%2 · %3%"
+msgstr "%1/%2 · %3%"
+
+#: plugin/legado-server.koplugin/main.lua:761
+msgid "No chapters"
+msgstr "无章节"
+
+#: plugin/legado-server.koplugin/main.lua:772
+msgid ""
+"My Books\n"
+"Tap to resume · Hold for chapters"
+msgstr ""
+"我的书架\n"
+"点按续读 · 长按目录"
+
+#: plugin/legado-server.koplugin/main.lua:793
+#: plugin/legado-server.koplugin/main.lua:865
+msgid "No chapters have been published yet."
+msgstr "尚未上架任何章节。"
+
+#: plugin/legado-server.koplugin/main.lua:800
+msgid "The pushed EPUB is not available locally."
+msgstr "本地没有可用的推送 EPUB。"
+
+#: plugin/legado-server.koplugin/main.lua:811
+msgid "Cannot open the pushed EPUB."
+msgstr "无法打开推送的 EPUB。"
+
+#: plugin/legado-server.koplugin/main.lua:821
+msgid "Check for new pushes"
+msgstr "检查新推送"
+
+#: plugin/legado-server.koplugin/main.lua:838
+msgid "No pushed books have been received."
+msgstr "尚未收到推送书籍。"
+
+#: plugin/legado-server.koplugin/main.lua:839
+msgid "Empty"
+msgstr "空"
+
+#: plugin/legado-server.koplugin/main.lua:869
+msgid "Offline"
+msgstr "已离线"
+
+#: plugin/legado-server.koplugin/main.lua:869
+msgid "Pending download"
+msgstr "等待下载"
+
+#: plugin/legado-server.koplugin/main.lua:873
+msgid "Current · %1"
+msgstr "当前 · %1"
+
+#: plugin/legado-server.koplugin/main.lua:879
+msgid "Table of Contents"
+msgstr "目录"
+
+#: plugin/legado-server.koplugin/main.lua:898
+msgid "Cancel"
+msgstr "取消"
+
+#: plugin/legado-server.koplugin/main.lua:899
+msgid "OK"
+msgstr "确定"
+
+#: plugin/legado-server.koplugin/main.lua:908
+#: plugin/legado-server.koplugin/main.lua:1016
+msgid "Pairing code from WebUI"
+msgstr "WebUI 配对码"
+
+#: plugin/legado-server.koplugin/main.lua:916
+msgid "The discovered server address is invalid."
+msgstr "发现的服务器地址无效。"
+
+#: plugin/legado-server.koplugin/main.lua:917
+#: plugin/legado-server.koplugin/main.lua:1017
+msgid "Pairing Kindle…"
+msgstr "正在配对 Kindle…"
+
+#: plugin/legado-server.koplugin/main.lua:923
+msgid "Kindle paired with %1."
+msgstr "Kindle 已与 %1 配对。"
+
+#: plugin/legado-server.koplugin/main.lua:932
+msgid ""
+"No Legado server was found on this LAN. Check that both devices are on the "
+"same Wi-Fi and that discovery is enabled."
+msgstr ""
+"局域网中未找到 Legado 服务器。请确认两台设备连接到同一 Wi‑Fi，且服务器已启用"
+"局域网发现。"
+
+#: plugin/legado-server.koplugin/main.lua:945
+msgid "Legado servers on this LAN"
+msgstr "局域网中的 Legado 服务器"
+
+#: plugin/legado-server.koplugin/main.lua:960
+msgid ""
+"This Kindle is already paired. The plugin will rediscover the same server "
+"automatically when its LAN address changes."
+msgstr ""
+"此 Kindle 已配对。服务器局域网地址变化后，插件会自动重新发现同一台服务器。"
+
+#: plugin/legado-server.koplugin/main.lua:963
+msgid "Looking for Legado server…"
+msgstr "正在查找 Legado 服务器…"
+
+#: plugin/legado-server.koplugin/main.lua:971
+msgid "Wait for the current server operation to finish."
+msgstr "请等待当前服务器操作完成。"
+
+#: plugin/legado-server.koplugin/main.lua:979
+msgid ""
+"Forget the server pairing? Downloaded books and reading state will be kept "
+"on this Kindle."
+msgstr "忘记服务器配对？已下载的书籍和阅读状态会保留在此 Kindle 上。"
+
+#: plugin/legado-server.koplugin/main.lua:980
+msgid "Forget"
+msgstr "忘记"
+
+#: plugin/legado-server.koplugin/main.lua:995
+msgid "Server pairing removed from this Kindle."
+msgstr "已从此 Kindle 移除服务器配对。"
+
+#: plugin/legado-server.koplugin/main.lua:1005
+msgid ""
+"This local library is already paired. Reuse its existing server device "
+"token; a new pairing requires a separate local library."
+msgstr ""
+"本地书库已配对。可继续使用现有的服务器设备令牌；如需新配对，请使用独立的本地"
+"书库。"
+
+#: plugin/legado-server.koplugin/main.lua:1008
+msgid "Server URL"
+msgstr "服务器地址"
+
+#: plugin/legado-server.koplugin/main.lua:1015
+msgid "Enter a complete HTTP or HTTPS server URL."
+msgstr "请输入完整的 HTTP 或 HTTPS 服务器地址。"
+
+#: plugin/legado-server.koplugin/main.lua:1021
+msgid "Kindle paired. Sync published books to begin."
+msgstr "Kindle 配对成功。请同步已发布书籍以开始使用。"
+
+#~ msgid "Sync Center…"
+#~ msgstr "同步中心…"
+
+#~ msgid "Server…"
+#~ msgstr "服务器…"
+
+#~ msgid "Published bookshelf"
+#~ msgstr "已上架书架"
+
+#~ msgid "Pull pushed books"
+#~ msgstr "拉取推送书籍"
+
+#~ msgid "Sync published books"
+#~ msgstr "同步已发布书籍"
+
+#~ msgid "Syncing published books…"
+#~ msgstr "正在同步已发布书籍…"
+
+#~ msgid "Books synced. Reading progress will retry: %1"
+#~ msgstr "书籍同步完成，阅读进度将稍后重试：%1"
+
+#~ msgid "Published books are ready to read offline."
+#~ msgstr "已发布书籍已可离线阅读。"
+
+#~ msgid "Sync automatically"
+#~ msgstr "自动同步"

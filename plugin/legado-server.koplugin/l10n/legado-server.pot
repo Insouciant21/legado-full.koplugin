@@ -1,0 +1,550 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the Legado server for KOReader package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: Legado server for KOReader 0.3.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-16 19:25+0800\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: plugin/legado-server.koplugin/_meta.lua:48
+#: plugin/legado-server.koplugin/main.lua:93
+#: plugin/legado-server.koplugin/main.lua:606
+msgid "Legado server"
+msgstr ""
+
+#: plugin/legado-server.koplugin/_meta.lua:49
+msgid "Sync published books and read offline with KOReader"
+msgstr ""
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:76
+#: plugin/legado-server.koplugin/legado_server/reader.lua:291
+msgid "The whole-book EPUB is not available locally."
+msgstr ""
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:178
+msgid "Cannot map the saved chapter to this EPUB."
+msgstr ""
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:352
+#: plugin/legado-server.koplugin/legado_server/reader.lua:408
+msgid "KOReader cannot open this document."
+msgstr ""
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:363
+msgid "Chapter selection is outside the local table of contents."
+msgstr ""
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:366
+msgid "Invalid chapter index in the local table of contents."
+msgstr ""
+
+#: plugin/legado-server.koplugin/legado_server/reader.lua:492
+msgid "The current chapter is no longer in the published table of contents."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:36
+msgid "Never"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:49
+#: plugin/legado-server.koplugin/main.lua:65
+msgid "Unknown server operation error."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:51
+msgid "Cannot connect to the Legado server."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:52
+#: plugin/legado-server.koplugin/main.lua:201
+#: plugin/legado-server.koplugin/main.lua:217
+msgid "Pair this Kindle with the server first."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:53
+msgid "The discovered server identity does not match this Kindle pairing."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:54
+msgid "The server returned invalid pairing data."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:55
+msgid "The server response points to an unpaired address."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:56
+msgid "The server returned invalid data."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:57
+msgid "Cannot save local Kindle data."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:58
+msgid "The local Kindle data is invalid."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:59
+msgid "The server returned incomplete published-book data."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:60
+msgid "A published-book package could not be installed."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:61
+msgid "A published-book EPUB could not be installed."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:62
+msgid "The published bookshelf could not be updated."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:63
+msgid "The server operation failed."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:64
+msgid "The server returned an HTTP error."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:107
+msgid "My Books"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:109
+msgid "My Books · %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:112
+msgid "Pushed Books"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:114
+#: plugin/legado-server.koplugin/main.lua:844
+msgid "Pushed Books · %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:117
+msgid "Sync Now"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:119
+msgid "Sync Now · %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:122
+#: plugin/legado-server.koplugin/main.lua:589
+msgid "Sync Center"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:124
+msgid "Sync Center · %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:127
+#: plugin/legado-server.koplugin/main.lua:654
+msgid "Server"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:128
+msgid "Server · %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:149
+#: plugin/legado-server.koplugin/main.lua:150
+#: plugin/legado-server.koplugin/main.lua:822
+msgid "Count: %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:151
+#: plugin/legado-server.koplugin/main.lua:634
+msgid "Not paired"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:151
+#: plugin/legado-server.koplugin/main.lua:623
+msgid "Paired"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:157
+msgid "%1 books · %2%"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:162
+#: plugin/legado-server.koplugin/main.lua:554
+msgid "%1 pending"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:164
+#: plugin/legado-server.koplugin/main.lua:563
+msgid "%1 conflicts"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:165
+msgid "Retry needed"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:167
+#: plugin/legado-server.koplugin/main.lua:554
+msgid "Up to date"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:174
+#: plugin/legado-server.koplugin/main.lua:179
+#: plugin/legado-server.koplugin/main.lua:184
+#: plugin/legado-server.koplugin/main.lua:189
+#: plugin/legado-server.koplugin/main.lua:194
+msgid "Unavailable"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:198
+#: plugin/legado-server.koplugin/main.lua:214
+msgid "Local storage is unavailable."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:253
+msgid "A server operation is already running."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:276
+msgid "Server operation returned no result."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:306
+msgid "Cannot save push settings."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:334
+msgid "Cannot save automatic sync settings."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:461
+msgid "Checking Kindle inbox…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:461
+msgid "Pulling pushed books…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:469
+msgid "Pushed books: %1 downloaded, %2 will retry."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:471
+msgid "Pushed books received: %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:479
+msgid "Syncing bookshelf and reading progress…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:496
+msgid "Sync complete. %1 progress events sent; %2 conflicts need attention."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:499
+msgid "Sync complete. %1 progress events sent."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:505
+msgid "Sending reading progress…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:520
+msgid "Reading progress acknowledged: %1; %2 conflicts need attention."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:523
+msgid "Reading progress acknowledged: %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:532
+msgid ""
+"Last sync: %1\n"
+"Pending progress: %2\n"
+"Unresolved conflicts: %3"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:535
+msgid "Last error: %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:543
+msgid "Cannot load synchronization status."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:547
+msgid "Sync status"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:552
+msgid "Send reading progress"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:561
+#: plugin/legado-server.koplugin/main.lua:685
+msgid "Reading progress conflicts"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:563
+msgid "None"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:570
+msgid "Automatic synchronization: %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:571
+#: plugin/legado-server.koplugin/main.lua:580
+#: plugin/legado-server.koplugin/main.lua:608
+#: plugin/legado-server.koplugin/main.lua:609
+msgid "Off"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:571
+#: plugin/legado-server.koplugin/main.lua:580
+#: plugin/legado-server.koplugin/main.lua:608
+#: plugin/legado-server.koplugin/main.lua:609
+msgid "On"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:579
+msgid "Receive pushed books automatically: %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:600
+#: plugin/legado-server.koplugin/main.lua:615
+msgid "Cannot load server pairing information."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:602
+#: plugin/legado-server.koplugin/main.lua:975
+msgid "This Kindle is not paired with a server."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:605
+msgid ""
+"Server: %1\n"
+"Address: %2\n"
+"Automatic synchronization: %3\n"
+"Automatic push delivery: %4"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:622
+msgid "Paired server"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:627
+msgid "Forget server pairing"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:635
+msgid "Pairing required"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:638
+msgid "Find server on LAN"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:645
+msgid "Pair manually"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:664
+msgid "no saved position"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:666
+msgid "chapter %1, %2%"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:671
+msgid "There are no unresolved reading progress conflicts."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:678
+msgid "Server: %1 · Kindle: %2"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:691
+msgid ""
+"Choose the reading position to keep.\n"
+"\n"
+"Server: %1\n"
+"Kindle: %2"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:693
+msgid "Keep server"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:694
+msgid "Use Kindle"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:706
+msgid "Refreshing reading progress conflicts…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:721
+msgid "Resolving reading progress conflict…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:742
+msgid "Reading progress conflict resolved."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:751
+msgid ""
+"No published books are stored. Publish from the WebUI and sync this Kindle."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:760
+msgid "%1/%2 · %3%"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:761
+msgid "No chapters"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:772
+msgid ""
+"My Books\n"
+"Tap to resume · Hold for chapters"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:793
+#: plugin/legado-server.koplugin/main.lua:865
+msgid "No chapters have been published yet."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:800
+msgid "The pushed EPUB is not available locally."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:811
+msgid "Cannot open the pushed EPUB."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:821
+msgid "Check for new pushes"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:838
+msgid "No pushed books have been received."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:839
+msgid "Empty"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:869
+msgid "Offline"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:869
+msgid "Pending download"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:873
+msgid "Current · %1"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:879
+msgid "Table of Contents"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:898
+msgid "Cancel"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:899
+msgid "OK"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:908
+#: plugin/legado-server.koplugin/main.lua:1016
+msgid "Pairing code from WebUI"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:916
+msgid "The discovered server address is invalid."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:917
+#: plugin/legado-server.koplugin/main.lua:1017
+msgid "Pairing Kindle…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:923
+msgid "Kindle paired with %1."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:932
+msgid ""
+"No Legado server was found on this LAN. Check that both devices are on the "
+"same Wi-Fi and that discovery is enabled."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:945
+msgid "Legado servers on this LAN"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:960
+msgid ""
+"This Kindle is already paired. The plugin will rediscover the same server "
+"automatically when its LAN address changes."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:963
+msgid "Looking for Legado server…"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:971
+msgid "Wait for the current server operation to finish."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:979
+msgid ""
+"Forget the server pairing? Downloaded books and reading state will be kept "
+"on this Kindle."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:980
+msgid "Forget"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:995
+msgid "Server pairing removed from this Kindle."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:1005
+msgid ""
+"This local library is already paired. Reuse its existing server device "
+"token; a new pairing requires a separate local library."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:1008
+msgid "Server URL"
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:1015
+msgid "Enter a complete HTTP or HTTPS server URL."
+msgstr ""
+
+#: plugin/legado-server.koplugin/main.lua:1021
+msgid "Kindle paired. Sync published books to begin."
+msgstr ""
