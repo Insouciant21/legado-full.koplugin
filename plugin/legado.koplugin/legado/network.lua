@@ -1048,6 +1048,13 @@ function Network.get(url, source, extra_options)
     local redirect_count = 0
     local attempt = 0
     while true do
+        -- LuaSocket sends raw URL bytes, unlike the Android HTTP client.
+        -- Rules may leave Chinese path/query values or spaces unescaped;
+        -- encode those bytes while preserving delimiters and existing %XX
+        -- escapes (including search keywords encoded in another charset).
+        clean_url = clean_url:gsub("[%z\1-\32\127-\255]", function(character)
+            return string.format("%%%02X", character:byte())
+        end)
         local chunks = {}
         local request_headers = {}
         for key, value in pairs(headers) do
@@ -1080,6 +1087,8 @@ function Network.get(url, source, extra_options)
             method = method,
             headers = request_headers,
             sink = body_sink,
+            -- Let the loop normalize Location URLs before the next request.
+            redirect = false,
         }
         if options and options.proxy then
             local proxy = tostring(options.proxy)

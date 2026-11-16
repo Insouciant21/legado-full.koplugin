@@ -17,6 +17,7 @@ local DataStorage = require("datastorage")
 local lfs = require("libs/libkoreader-lfs")
 local ltn12 = require("ltn12")
 local socket = require("socket")
+local socket_url = require("socket.url")
 local util = require("util")
 local rapidjson = require("rapidjson")
 local Network = require("legado/network")
@@ -122,64 +123,58 @@ end
 -- are ASCII, so scanning a lowercased copy keeps byte offsets aligned with
 -- the original string while matching any prefix case-insensitively; entry
 -- text is sliced from the untouched original to preserve name casing.
--- `<d:response>` elements cannot nest, and the frontier `%f[^%w]` keeps
--- `<d:responsedescription>` from being mistaken for a block boundary.
+-- Match the complete local name, so response-like extension elements are
+-- not confused with response blocks. Prefixes may contain dots and dashes.
+local function find_open_tag(lower, name, position)
+    local start, finish, qualified_name = lower:find(
+        "<([%w_%.%-]+:" .. name .. ")%f[%s/>]", position
+    )
+    local bare_start, bare_finish, bare_name = lower:find(
+        "<(" .. name .. ")%f[%s/>]", position
+    )
+    if bare_start and (not start or bare_start < start) then
+        return bare_start, bare_finish, bare_name
+    end
+    return start, finish, qualified_name
+end
+
+local function closing_tag_pattern(qualified_name)
+    return "</" .. qualified_name:gsub("([^%w])", "%%%1") .. "%s*>"
+end
+
+-- DAV response elements cannot nest. Match each closing tag against the
+-- opening tag's full name, while retaining the original text and casing.
 local function multistatus_blocks(xml)
     local blocks = {}
     local lower = xml:lower()
-    local patterns = {
-        "<d:?response%f[^%w]",
-        "</d:?response%f[^%w]",
-    }
     local position = 1
     while true do
-        local open_start, open_end = lower:find(patterns[1], position)
+        local open_start, open_end, qualified_name = find_open_tag(lower, "response", position)
         if not open_start then break end
-        local close_start = lower:find(patterns[2], open_end + 1)
+        local close_start, close_end = lower:find(closing_tag_pattern(qualified_name), open_end + 1)
         if not close_start then break end
         blocks[#blocks + 1] = xml:sub(open_end + 1, close_start - 1)
-        position = close_start + 1
-    end
-    if #blocks == 0 then
-        patterns[1] = "<response%f[^%w]"
-        patterns[2] = "</response%f[^%w]"
-        position = 1
-        while true do
-            local open_start, open_end = lower:find(patterns[1], position)
-            if not open_start then break end
-            local close_start = lower:find(patterns[2], open_end + 1)
-            if not close_start then break end
-            blocks[#blocks + 1] = xml:sub(open_end + 1, close_start - 1)
-            position = close_start + 1
-        end
+        position = close_end + 1
     end
     return blocks
 end
 
 local function first_tag_text(block, name)
     local lower = block:lower()
-    local name_lower = name:lower()
-    local open_patterns = {
-        "<[%w_%-]+:" .. name_lower .. "%f[^%w]",
-        "<" .. name_lower .. "%f[^%w]",
-    }
-    local close_pattern = "</[%w_%-]*:?" .. name_lower .. "%f[^%w]"
-    for _, open_pattern in ipairs(open_patterns) do
-        local open_start, open_end = lower:find(open_pattern)
-        if open_start then
-            local open_tag_end = lower:find(">", open_end + 1, true)
-            local close_start = lower:find(close_pattern, open_end + 1)
-            if open_tag_end and close_start then
-                return block:sub(open_tag_end + 1, close_start - 1)
-            end
-        end
+    local open_start, open_end, qualified_name = find_open_tag(lower, name:lower())
+    if not open_start then return nil end
+    local open_tag_end = lower:find(">", open_end + 1, true)
+    if not open_tag_end then return nil end
+    if lower:sub(open_tag_end - 1, open_tag_end) == "/>" then return "" end
+    local close_start = lower:find(closing_tag_pattern(qualified_name), open_tag_end + 1)
+    if close_start then
+        return block:sub(open_tag_end + 1, close_start - 1)
     end
     return nil
 end
 
 local function has_collection_tag(block)
-    local lower = block:lower()
-    return lower:find("<[%w_%-]*:?collection%f[^%w]") ~= nil
+    return find_open_tag(block:lower(), "collection") ~= nil
 end
 
 -- Pure function so the parser is testable on a host Lua interpreter.  Returns
@@ -187,7 +182,7 @@ end
 function Webdav.parse_propfind(xml)
     local entries = {}
     if type(xml) ~= "string" or xml == "" then return entries end
-    for _, block in ipairs(multistatus_blocks(xml)) do
+    for block_index, block in ipairs(multistatus_blocks(xml)) do
         local href = decode_xml_entities(first_tag_text(block, "href") or "")
         if href ~= "" then
             entries[#entries + 1] = {
@@ -368,59 +363,107 @@ end
 -- HTTP transport
 -- ---------------------------------------------------------------------------
 
+-- Compare scheme, host and effective port, rather than a URL prefix. Reject
+-- embedded credentials so LuaSocket cannot synthesize an Authorization header
+-- for a redirected URL behind our back.
+local function url_origin(url)
+    local parsed = socket_url.parse(tostring(url or ""))
+    local scheme = parsed and tostring(parsed.scheme or ""):lower()
+    if not parsed or (scheme ~= "http" and scheme ~= "https")
+            or not parsed.host or parsed.host == "" then
+        return nil, "invalid WebDAV HTTP URL"
+    end
+    if parsed.userinfo or parsed.user or parsed.password then
+        return nil, "WebDAV URLs must not contain credentials"
+    end
+    local port = tonumber(parsed.port or (scheme == "https" and 443 or 80))
+    if not port or port < 1 or port > 65535 or port ~= math.floor(port) then
+        return nil, "invalid WebDAV port"
+    end
+    return scheme .. "://" .. parsed.host:lower() .. ":" .. tostring(port), scheme
+end
+
 -- One logical request against the configured server.  Returns
 -- status_code, response_headers, response_body (buffered only when the caller
--- passed no sink) or nil, error_message on transport failures.  Redirects
+-- passed no sink_factory) or nil, error_message on transport failures. Redirects
 -- keep the method and body: WebDAV verbs are idempotent here, and downgrading
 -- a redirected PROPFIND to GET would return an HTML page instead of 207.
--- Redirected file downloads may carry a small 3xx body in the sink; real
--- servers redirect downloads rarely, and hrefs are already absolute.
+-- A sink_factory creates a fresh output for each response, so redirect bodies
+-- and end-of-stream events cannot corrupt the final download. Credentials are
+-- attached only to the configured origin, and HTTPS downgrades are refused.
 function Webdav.request(config, options)
+    config = config or {}
     options = options or {}
     local method = tostring(options.method or "GET"):upper()
     local headers = {}
-    for key, value in pairs(options.headers or {}) do
-        headers[tostring(key)] = tostring(value)
-    end
     local auth = authorization_header(config)
-    if auth and headers.Authorization == nil then
-        headers.Authorization = auth
+    for key, value in pairs(options.headers or {}) do
+        if tostring(key):lower() == "authorization" then
+            auth = tostring(value)
+        else
+            headers[tostring(key)] = tostring(value)
+        end
     end
     headers["User-Agent"] = headers["User-Agent"] or Network.user_agent()
     local body = options.body
     if body ~= nil then
         headers["Content-Length"] = tostring(#body)
     end
-    local chunks
-    local sink = options.sink
-    if not sink then
-        chunks = {}
-        sink = ltn12.sink.table(chunks)
-    end
+    local configured_origin, configured_scheme = url_origin(config.url)
+    if auth and not configured_origin then return nil, configured_scheme end
+    local credential_origin = auth and configured_origin
     local timeout_seconds = tonumber(options.timeout) or DEFAULT_TIMEOUT_SECONDS
     local url = tostring(options.url or "")
+    local require_https = configured_origin and configured_scheme == "https"
     local redirect_count = 0
     while true do
+        local origin, scheme = url_origin(url)
+        if not origin then return nil, scheme end
+        if require_https and scheme ~= "https" then
+            return nil, "WebDAV HTTPS downgrade is not allowed"
+        end
+        require_https = require_https or scheme == "https"
         local requester = http
-        if url:lower():match("^https://") then
+        if scheme == "https" then
             if not https then
                 return nil, "HTTPS support is unavailable in this KOReader build"
             end
             requester = https
         end
+        local chunks, sink
+        if options.sink_factory then
+            local sink_err
+            sink, sink_err = options.sink_factory()
+            if not sink then return nil, sink_err end
+        else
+            chunks = {}
+            sink = ltn12.sink.table(chunks)
+        end
+        local request_headers = {}
+        for key, value in pairs(headers) do
+            request_headers[key] = value
+        end
+        if origin == credential_origin then
+            request_headers.Authorization = auth
+        end
         local request = {
             url = url,
             method = method,
-            headers = headers,
+            headers = request_headers,
             sink = sink,
+            -- All hops must pass the origin and downgrade checks above.
+            redirect = false,
         }
         if body ~= nil and method ~= "GET" and method ~= "HEAD" then
             request.source = ltn12.source.string(body)
         end
         local previous_timeout = requester.TIMEOUT
         requester.TIMEOUT = timeout_seconds
-        local ok, code, response_headers, status = requester.request(request)
+        local called, ok, code, response_headers, status = pcall(requester.request, request)
         requester.TIMEOUT = previous_timeout
+        if not called then
+            return nil, "WebDAV request failed: " .. tostring(ok)
+        end
         local numeric_code = tonumber(code)
         if not ok then
             return nil, "WebDAV request failed: " .. tostring(code or status or "unknown error")
@@ -443,7 +486,7 @@ end
 function Webdav.list_directory(config, url)
     local directory_url, normalize_err = Webdav.normalize_directory_url(url)
     if not directory_url then return nil, normalize_err end
-    local code, _, body_text, request_err = Webdav.request(config, {
+    local code, headers_or_err, body_text = Webdav.request(config, {
         url = directory_url,
         method = "PROPFIND",
         headers = {
@@ -455,7 +498,7 @@ function Webdav.list_directory(config, url)
             .. '<d:displayname/><d:resourcetype/><d:getcontentlength/>'
             .. '</d:prop></d:propfind>',
     })
-    if not code then return nil, request_err end
+    if not code then return nil, headers_or_err end
     if code == 401 then
         return nil, _("WebDAV authentication failed. Check the username and password.")
     end
@@ -466,7 +509,7 @@ function Webdav.list_directory(config, url)
         return tostring(value):gsub("/+$", "")
     end
     local items = {}
-    for _, entry in ipairs(Webdav.parse_propfind(body_text or "")) do
+    for entry_index, entry in ipairs(Webdav.parse_propfind(body_text or "")) do
         local entry_url = Network.absolute(directory_url, entry.href)
         -- Servers echo the requested collection itself with Depth: 1.
         if strip_trailing(entry_url) ~= strip_trailing(directory_url) then
@@ -490,23 +533,21 @@ end
 -- The download never buffers the whole archive: bytes flow straight into the
 -- output file, with the size cap enforced inside the sink.
 function Webdav.download_file(config, url, destination)
-    local file, open_err = io.open(destination, "wb")
-    if not file then
-        return nil, "cannot create the download file: " .. tostring(open_err)
-    end
+    local file
     local bytes_written = 0
     local overflow = false
-    local file_closed = false
+    local close_err
     local close_file = function()
-        if not file_closed then
-            file_closed = true
-            pcall(function() file:close() end)
+        if file then
+            local closed, err = file:close()
+            if not closed then close_err = err or "cannot close the download file" end
+            file = nil
         end
     end
     local guarded_sink = function(chunk, sink_err)
         if chunk == nil then
-            -- ltn12 sink contract: a nil chunk ends the stream.
             close_file()
+            if sink_err or close_err then return nil, sink_err or close_err end
             return true
         end
         bytes_written = bytes_written + #chunk
@@ -516,10 +557,20 @@ function Webdav.download_file(config, url, destination)
         end
         return file:write(chunk)
     end
-    local code, _, _, request_err = Webdav.request(config, {
+    local code, headers_or_err = Webdav.request(config, {
         url = url,
         method = "GET",
-        sink = guarded_sink,
+        sink_factory = function()
+            close_file()
+            if close_err then return nil, close_err end
+            local open_err
+            file, open_err = io.open(destination, "wb")
+            if not file then
+                return nil, "cannot create the download file: " .. tostring(open_err)
+            end
+            bytes_written = 0
+            return guarded_sink
+        end,
     })
     -- The sink only closes the file on a clean end-of-stream; a transport or
     -- size failure aborts the pump without one.
@@ -533,7 +584,11 @@ function Webdav.download_file(config, url, destination)
     end
     if not code then
         cleanup()
-        return nil, request_err or _("Backup download failed.")
+        return nil, headers_or_err or _("Backup download failed.")
+    end
+    if close_err then
+        cleanup()
+        return nil, close_err
     end
     if code ~= 200 then
         cleanup()

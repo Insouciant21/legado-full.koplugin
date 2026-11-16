@@ -46,7 +46,11 @@ local BookDetail = ButtonDialog:extend{
     on_delete = nil,
     on_close = nil,
     width_factor = 0.98,
-    dismissable = true,
+    -- The page paints its own full-screen surface, so there is no "outside
+    -- the dialog" area to close on.  Dismissable mode would also make the
+    -- base class dereference self.movable.dimen, a rectangle that this page
+    -- never paints (see paintTo below).
+    dismissable = false,
 }
 
 local function value_text(value)
@@ -334,7 +338,13 @@ function BookDetail:init()
         w = Screen:getWidth(),
         h = Screen:getHeight(),
     }
-    self.movable = FrameContainer:new{
+    -- The fixed bottom actions were the whole point of this custom layout,
+    -- but the field name matters as well: ButtonTable's per-button callback
+    -- calls show_parent.movable:resetEventState() when that field exists,
+    -- and a plain FrameContainer without the method crashed on every button
+    -- tap.  Keep the base class's own MovableContainer untouched and hang
+    -- the fixed page off a name of our own.
+    self.page_frame = FrameContainer:new{
         dimen = screen_size,
         padding = 0,
         margin = 0,
@@ -345,7 +355,7 @@ function BookDetail:init()
             page,
         },
     }
-    self[1] = self.movable
+    self[1] = self.page_frame
 end
 
 -- ButtonDialog normally invalidates only its movable popup rectangle.  The
@@ -356,6 +366,16 @@ function BookDetail:onShow()
     UIManager:setDirty(self, function()
         return "full", Screen:getSize()
     end)
+end
+
+-- ButtonDialog:paintTo reports self.movable.dimen -- the popup rectangle the
+-- base class built but this page never paints -- as the widget rectangle.
+-- Report the full screen instead so dirty-region math matches what is on
+-- display, and so self.dimen is never the undefined rectangle of an
+-- unpainted widget.
+function BookDetail:paintTo(...)
+    ButtonDialog.paintTo(self, ...)
+    self.dimen = Screen:getSize()
 end
 
 function BookDetail:onCloseWidget()
