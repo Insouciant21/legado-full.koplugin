@@ -1,0 +1,16 @@
+.git
+.gradle
+.gradle-home
+.gradle-project-cache
+.gradle-project
+gradle-project-cache
+gradle-cache
+**/build
+web/node_modules
+web/dist
+web/.vite
+web/coverage
+web/playwright-report
+web/test-results
+web/tsconfig.tsbuildinfo
+AGENTS.md

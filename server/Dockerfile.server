@@ -1,0 +1,102 @@
+# syntax=docker/dockerfile:1.7
+
+ARG DOCKER_REGISTRY=""
+ARG PLAYWRIGHT_VERSION=1.64.0
+
+FROM ${DOCKER_REGISTRY}node:22-alpine AS web-build
+WORKDIR /src/web
+COPY web/package*.json ./
+RUN --mount=type=cache,id=legado-npm-cache,target=/root/.npm \
+    if [ -f package-lock.json ]; then \
+        npm ci --ignore-scripts --no-audit --fund=false; \
+    else \
+        npm install --ignore-scripts --no-audit --fund=false; \
+    fi
+COPY web/ ./
+RUN npm run build
+
+#
+# Browser binaries are independent of application source code. Keep the costly
+# download in its own stable stage so frontend/backend changes reuse this layer.
+# The server always launches Chromium in headless mode, so the headless shell is
+# sufficient and avoids shipping a second 400+ MB full Chromium build.
+#
+FROM ${DOCKER_REGISTRY}eclipse-temurin:21-jdk-jammy AS playwright-tools
+ARG PLAYWRIGHT_VERSION
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+WORKDIR /tmp/playwright-tools
+RUN curl -fsSL \
+        "https://repo.maven.apache.org/maven2/com/microsoft/playwright/playwright/${PLAYWRIGHT_VERSION}/playwright-${PLAYWRIGHT_VERSION}.jar" \
+        -o playwright.jar \
+    && curl -fsSL \
+        "https://repo.maven.apache.org/maven2/com/microsoft/playwright/driver/${PLAYWRIGHT_VERSION}/driver-${PLAYWRIGHT_VERSION}.jar" \
+        -o driver.jar \
+    && curl -fsSL \
+        "https://repo.maven.apache.org/maven2/com/microsoft/playwright/driver-bundle/${PLAYWRIGHT_VERSION}/driver-bundle-${PLAYWRIGHT_VERSION}.jar" \
+        -o driver-bundle.jar \
+    && curl -fsSL \
+        "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.14.0/gson-2.14.0.jar" \
+        -o gson.jar \
+    && java -cp "/tmp/playwright-tools/*" com.microsoft.playwright.CLI \
+        install chromium --only-shell --no-progress
+
+FROM ${DOCKER_REGISTRY}eclipse-temurin:21-jdk-jammy AS server-build
+ENV GRADLE_HOME=/opt/gradle
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip \
+    && curl -fsSL https://services.gradle.org/distributions/gradle-8.14.4-bin.zip -o /tmp/gradle.zip \
+    && unzip /tmp/gradle.zip -d /opt && mv /opt/gradle-8.14.4 /opt/gradle \
+    && rm /tmp/gradle.zip && rm -rf /var/lib/apt/lists/*
+ENV PATH="${GRADLE_HOME}/bin:${PATH}"
+WORKDIR /src
+COPY gradle/ gradle/
+COPY build.gradle settings.gradle ./
+COPY server/build.gradle server/settings.gradle server/
+COPY server/src/ server/src/
+
+# Compile and package the server in one Gradle invocation. A persistent build
+# directory lets Kotlin compile only changed sources after a backend edit.
+RUN --mount=type=cache,id=legado-gradle-user,target=/root/.gradle \
+    --mount=type=cache,id=legado-gradle-build,target=/src/server/build \
+    GRADLE_OPTS="-Dorg.gradle.jvmargs=-Xmx3g -Dorg.gradle.workers.max=4" \
+    gradle :server:compileKotlin :server:installDist \
+        --no-daemon --build-cache --configuration-cache \
+        --project-cache-dir=/root/.gradle/project-cache --console=plain \
+        -Plegado.skipWebBuild=true \
+        -Dorg.gradle.vfs.watch=false \
+    && cp -a /src/server/build/install/legado-server /src/server-dist
+
+COPY --from=web-build /src/web/dist/ /tmp/legado-web/static/
+RUN jar --create --file /tmp/legado-web-static.jar -C /tmp/legado-web static
+
+FROM ${DOCKER_REGISTRY}eclipse-temurin:17-jre-jammy
+ENV LEGADO_DATA_DIR=/data LEGADO_PORT=8080 LEGADO_SECURE_COOKIES=false
+ENV LEGADO_BROWSER_MAX_OLD_SPACE_MB=512
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+WORKDIR /app
+
+# These layers do not depend on application source. Keeping them before the final
+# app COPY avoids reinstalling hundreds of megabytes of OS packages each build.
+RUN --mount=type=bind,from=playwright-tools,source=/tmp/playwright-tools,target=/tmp/playwright-tools \
+    apt-get update \
+    && apt-get install -y --no-install-recommends gosu \
+    && groupadd --system legado \
+    && useradd --system --gid legado legado \
+    && java -cp "/tmp/playwright-tools/*" com.microsoft.playwright.CLI install-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=playwright-tools /opt/ms-playwright /opt/ms-playwright
+RUN chmod -R a+rX /opt/ms-playwright
+COPY --chmod=755 server/docker-entrypoint.sh /app/entrypoint.sh
+
+# Keep the server distribution independent of frontend changes. Static assets
+# live in a tiny extra classpath jar, so a frontend edit avoids both Gradle and
+# re-exporting the application distribution.
+COPY --from=server-build /src/server-dist/ ./
+COPY --from=server-build /tmp/legado-web-static.jar ./lib/
+RUN sed -i 's|^CLASSPATH=|CLASSPATH=$APP_HOME/lib/legado-web-static.jar:|' /app/bin/legado-server
+
+EXPOSE 8080
+EXPOSE 47832/udp
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["/app/bin/legado-server"]

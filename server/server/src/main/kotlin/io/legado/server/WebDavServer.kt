@@ -1,0 +1,892 @@
+package io.legado.server
+
+import io.ktor.http.*
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.content.PartData
+import io.ktor.http.content.forEachPart
+import io.ktor.server.application.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import io.ktor.server.sessions.*
+import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.copyTo
+import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.net.URI
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+
+private val PROPFIND = HttpMethod("PROPFIND")
+private val PROPPATCH = HttpMethod("PROPPATCH")
+private val MKCOL = HttpMethod("MKCOL")
+private val COPY = HttpMethod("COPY")
+private val MOVE = HttpMethod("MOVE")
+private val LOCK = HttpMethod("LOCK")
+private val UNLOCK = HttpMethod("UNLOCK")
+
+private const val WEBDAV_URI_PREFIX = "/webdav"
+private const val DAV_CLASSES = "1, 2"
+private const val DAV_ALLOW = "OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, PROPFIND, PROPPATCH, COPY, MOVE, LOCK, UNLOCK"
+private const val SUPPORTED_LOCK_XML =
+    "<D:lockentry><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry>"
+private const val DEFAULT_LOCK_SECONDS = 3600L
+private const val MAX_LOCK_SECONDS = 86_400L
+// COPY_BUFFER_BYTES 已随 Range 直出一起挪到 ByteRangeServing.kt（两份实现必然漂移）
+private const val WEBDAV_XML_TYPE = "application/xml"
+private const val UPLOAD_TEMP_PREFIX = ".webdav-upload-"
+private val WEBDAV_XML = ContentType.parse(WEBDAV_XML_TYPE).withCharset(Charsets.UTF_8)
+
+internal data class WebDavUsage(val files: Int, val directories: Int, val bytes: Long)
+/**
+ * WebDAV 存储根目录（数据目录下的 `webdav` 文件夹），客户端上传的数据全部原样落盘到该目录。
+ * 磁盘路径完全由 URL 路径推导，任何越界路径（`..`、反斜杠、空字节）都会被拒绝。
+ */
+class WebDavStorage(rootDirectory: Path) {
+    val root: Path = rootDirectory.toAbsolutePath().normalize()
+
+    init { Files.createDirectories(root) }
+
+    fun resolve(urlPath: String): Path? {
+        val segments = urlPath.split('/').filter { it.isNotEmpty() && it != "." }
+        if (segments.any { it == ".." || it.contains('\\') || it.contains('\u0000') }) return null
+        val candidate = segments.fold(root) { parent, segment -> parent.resolve(segment) }.normalize()
+        return candidate.takeIf { it.startsWith(root) }
+    }
+
+    fun children(directory: Path): List<Path> =
+        Files.newDirectoryStream(directory).use { stream -> stream.toList().sortedBy { it.fileName.toString() } }
+
+    /** 目录内容：目录优先，其次按名称排序（设置页面浏览用）。 */
+    fun list(directory: Path): List<Path> = children(directory).sortedWith(
+        compareByDescending<Path> { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
+            .thenBy { it.fileName.toString().lowercase() },
+    )
+
+    /** 统计已存数据（写入中的临时分片不计入）。 */
+    internal fun usage(): WebDavUsage {
+        var files = 0
+        var directories = 0
+        var bytes = 0L
+        Files.walkFileTree(root, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (dir != root) directories++
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (!file.fileName.toString().startsWith(UPLOAD_TEMP_PREFIX)) {
+                    files++
+                    bytes += attrs.size()
+                }
+                return FileVisitResult.CONTINUE
+            }
+        })
+        return WebDavUsage(files, directories, bytes)
+    }
+
+    fun deleteRecursively(path: Path) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return
+        if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
+            Files.deleteIfExists(path)
+            return
+        }
+        Files.walkFileTree(path, object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.deleteIfExists(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, error: IOException?): FileVisitResult {
+                if (error != null) throw error
+                Files.deleteIfExists(dir)
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
+
+    fun copyRecursively(source: Path, destination: Path) {
+        if (Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
+            Files.createDirectories(destination)
+            for (child in children(source)) copyRecursively(child, destination.resolve(child.fileName.toString()))
+        } else {
+            Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES)
+        }
+    }
+}
+
+/** WebDAV 写入锁（Class 2 的最小实现）：只登记与续租，不做强制互斥，避免客户端遗留锁导致后续写入失败。 */
+private class DavLock(val token: String, val owner: String?, val expiresAt: Long) {
+    fun timeoutSeconds(now: Long = System.currentTimeMillis()): Long = ((expiresAt - now) / 1000).coerceAtLeast(1)
+}
+
+private class WebDavLocks {
+    private val locks = ConcurrentHashMap<Path, DavLock>()
+
+    fun acquire(path: Path, owner: String?, timeoutSeconds: Long): DavLock {
+        prune()
+        val lock = DavLock("opaquelocktoken:${UUID.randomUUID()}", owner, System.currentTimeMillis() + timeoutSeconds * 1000)
+        locks[path] = lock
+        return lock
+    }
+
+    fun touch(path: Path, timeoutSeconds: Long): DavLock? {
+        prune()
+        val existing = locks[path] ?: return null
+        val extended = DavLock(existing.token, existing.owner, System.currentTimeMillis() + timeoutSeconds * 1000)
+        locks[path] = extended
+        return extended
+    }
+
+    fun release(path: Path, token: String): Boolean {
+        prune()
+        val existing = locks[path] ?: return false
+        if (existing.token != token) return false
+        locks.remove(path)
+        return true
+    }
+
+    fun active(path: Path): DavLock? {
+        prune()
+        return locks[path]
+    }
+
+    private fun prune() {
+        val now = System.currentTimeMillis()
+        locks.entries.removeIf { it.value.expiresAt <= now }
+    }
+}
+
+/**
+ * WebDAV 服务端入口：`/webdav` 与 `/webdav/<路径>` 同时映射到数据目录下的 `webdav` 文件夹；
+ * `/api/webdav/info` 为 Web 设置页面提供存储状态与目录列表。
+ */
+fun Route.webDavRoutes(auth: AuthService, storage: WebDavStorage, database: Database, coverCache: CoverCache? = null, runner: RuleRunner? = null) {
+    val locks = WebDavLocks()
+    // runner 用于**封面回源**：备份里的 `coverUrl` 常带过期签名（实测番茄 `x-expires` 早已过期 ⇒ 403），
+    // 失败时回书源详情页取一份新的封面地址再下载；没有 runner 就退化成"只试备份 URL"。
+    // `coverBackfillScope` 让补抓在**导入返回之后**继续跑（不限数量、不阻塞导入；随应用停止一起取消）。
+    val backupImporter = BackupImporter(
+        database, coverCache, runner,
+        logger = { message -> application.log.info(message) },
+        coverBackfillScope = application,
+    )
+    val backupExporter = BackupExporter(database)
+    route("/api/webdav") {
+        get("/info") { call.serveWebDavInfo(auth, storage) }
+        post("/import") { call.serveBackupImport(auth, storage, backupImporter) }
+        post("/import/preview") { call.serveBackupImportPreview(auth, storage, backupImporter) }
+        post("/import/upload") { call.serveBackupUpload(auth, backupImporter) }
+        post("/import/external/list") { call.serveExternalWebDavList(auth) }
+        post("/import/external") { call.serveExternalWebDavImport(auth, backupImporter) }
+        get("/export/settings") { call.serveBackupExportSettings(auth, database) }
+        put("/export/settings") { call.serveBackupExportSettingsUpdate(auth, database) }
+        post("/export") { call.serveBackupExport(auth, storage, backupExporter, database) }
+        post("/export/auto") { call.serveBackupExportAuto(auth, storage, backupExporter, database) }
+    }
+    route(WEBDAV_URI_PREFIX) { webDavEndpoints(auth, storage, locks) }
+    route("$WEBDAV_URI_PREFIX/{path...}") { webDavEndpoints(auth, storage, locks) }
+}
+
+private fun Route.webDavEndpoints(auth: AuthService, storage: WebDavStorage, locks: WebDavLocks) {
+    method(HttpMethod.Options) { handle { call.serveWebDavOptions() } }
+    method(PROPFIND) { handle { call.servePropfind(auth, storage, locks) } }
+    method(PROPPATCH) { handle { call.serveProppatch(auth, storage) } }
+    method(MKCOL) { handle { call.serveMkcol(auth, storage) } }
+    method(COPY) { handle { call.copyOrMove(auth, storage, locks, move = false) } }
+    method(MOVE) { handle { call.copyOrMove(auth, storage, locks, move = true) } }
+    method(LOCK) { handle { call.serveLock(auth, storage, locks) } }
+    method(UNLOCK) { handle { call.serveUnlock(auth, storage, locks) } }
+    get { call.serveGetFile(auth, storage) }
+    head { call.serveHeadFile(auth, storage) }
+    put { call.servePutFile(auth, storage) }
+    delete { call.serveDeleteResource(auth, storage) }
+}
+
+/**
+ * 备份导入：把存储区里的 Legado 备份包（`*.zip`）解出书源、替换净化规则、书架与阅读进度并落库。
+ * 归属页面写操作，因此按会话鉴权 + CSRF 双轨校验；外部客户端用 Basic 调用同样放行。
+ */
+private suspend fun ApplicationCall.serveBackupImport(auth: AuthService, storage: WebDavStorage, importer: BackupImporter) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val request = runCatching { receive<BackupImportRequest>() }.getOrNull()
+        ?: return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", "缺少备份文件路径"))
+    val target = storage.resolve(request.path.trim('/')) ?: return respond(HttpStatusCode.Forbidden)
+    if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+        return respond(HttpStatusCode.NotFound, ApiError("invalid_backup", "备份文件不存在"))
+    }
+    if (!target.fileName.toString().lowercase().endsWith(".zip")) {
+        return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", "只支持 .zip 备份包"))
+    }
+    val summary = runCatching { withContext(Dispatchers.IO) { importer.import(target) } }.getOrElse { error ->
+        return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", error.message ?: "备份包解析失败"))
+    }
+    application.log.info(
+        "webdav backup imported: {} (sources={}, rules={}, books={}, progress={})",
+        request.path,
+        summary.sources + summary.sourcesUpdated,
+        summary.rules + summary.rulesUpdated,
+        summary.books + summary.booksUpdated,
+        summary.progress,
+    )
+    respond(summary)
+}
+
+private suspend fun ApplicationCall.serveBackupImportPreview(auth: AuthService, storage: WebDavStorage, importer: BackupImporter) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val request = runCatching { receive<BackupImportRequest>() }.getOrNull()
+        ?: return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", "缺少备份文件路径"))
+    val target = storage.resolve(request.path.trim('/')) ?: return respond(HttpStatusCode.Forbidden)
+    if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+        return respond(HttpStatusCode.NotFound, ApiError("invalid_backup", "备份文件不存在"))
+    }
+    if (!target.fileName.toString().lowercase().endsWith(".zip")) {
+        return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", "只支持 .zip 备份包"))
+    }
+    val preview = runCatching { withContext(Dispatchers.IO) { importer.preview(target) } }.getOrElse { error ->
+        return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", error.message ?: "备份包解析失败"))
+    }
+    respond(preview)
+}
+
+/**
+ * 浏览器直接选择一个 Android 备份 ZIP 并导入。
+ *
+ * 文件流式写入临时文件，超过 256 MiB 立即拒绝；导入完成后无论成功失败都删除临时文件。
+ */
+private suspend fun ApplicationCall.serveBackupUpload(auth: AuthService, importer: BackupImporter) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    var temp: Path? = null
+    var originalName: String? = null
+    var failure: Throwable? = null
+    var fileParts = 0
+    try {
+        receiveMultipart().forEachPart { part ->
+            try {
+                if (part is PartData.FileItem) {
+                    fileParts++
+                    if (fileParts > 1) throw IllegalArgumentException("一次只能导入一个备份 ZIP")
+                    val name = part.originalFileName.orEmpty()
+                    if (!name.endsWith(".zip", ignoreCase = true)) {
+                        throw IllegalArgumentException("只支持 Android Legado 备份 ZIP")
+                    }
+                    originalName = name
+                    val target = Files.createTempFile("legado-backup-upload-", ".zip")
+                    temp = target
+                    Files.newByteChannel(
+                        target,
+                        StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE,
+                    ).use { output ->
+                        val copied = part.provider.invoke()
+                            .copyTo(output, ExternalWebDavClient.MAX_BACKUP_ZIP_BYTES + 1)
+                        if (copied == 0L) throw IllegalArgumentException("备份 ZIP 是空文件")
+                        if (copied > ExternalWebDavClient.MAX_BACKUP_ZIP_BYTES) {
+                            throw IllegalArgumentException("备份 ZIP 超过 256 MiB，已拒绝")
+                        }
+                    }
+                }
+            } catch (error: Throwable) {
+                if (failure == null) failure = error
+            } finally {
+                part.dispose()
+            }
+        }
+    } catch (error: Throwable) {
+        failure = error
+    }
+
+    try {
+        if (failure != null) {
+            respondApiError(
+                HttpStatusCode.BadRequest,
+                "invalid_backup",
+                failure.message ?: "备份 ZIP 上传失败",
+            )
+            return
+        }
+        val target = temp
+        if (fileParts == 0 || target == null) {
+            respondApiError(HttpStatusCode.BadRequest, "invalid_backup", "请选择备份 ZIP")
+            return
+        }
+        val summary = runCatching {
+            withContext(Dispatchers.IO) { importer.import(target) }
+        }.getOrElse { error ->
+            respondApiError(
+                HttpStatusCode.BadRequest,
+                "invalid_backup",
+                error.message ?: "备份包解析失败",
+            )
+            return
+        }
+        application.log.info(
+            "uploaded backup imported: {} (sources={}, rules={}, books={}, progress={})",
+            originalName,
+            summary.sources + summary.sourcesUpdated,
+            summary.rules + summary.rulesUpdated,
+            summary.books + summary.booksUpdated,
+            summary.progress,
+        )
+        respond(summary)
+    } finally {
+        temp?.let { Files.deleteIfExists(it) }
+    }
+}
+
+/** 连接任意外部 WebDAV，并列出其配置子目录下的 Android 备份。 */
+private suspend fun ApplicationCall.serveExternalWebDavList(auth: AuthService) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val request = runCatching { receive<ExternalWebDavConfig>() }.getOrNull()
+        ?: return respondApiError(HttpStatusCode.BadRequest, "invalid_webdav", "缺少 WebDAV 连接参数")
+    val response = runCatching {
+        withContext(Dispatchers.IO) { ExternalWebDavClient().list(request) }
+    }.getOrElse { error ->
+        return respondApiError(
+            HttpStatusCode.BadGateway,
+            "external_webdav_failed",
+            error.message ?: "连接 WebDAV 失败",
+        )
+    }
+    respond(response)
+}
+
+/** 从外部 WebDAV 下载一份备份 ZIP，再进入与本地文件相同的导入器。 */
+private suspend fun ApplicationCall.serveExternalWebDavImport(auth: AuthService, importer: BackupImporter) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val request = runCatching { receive<ExternalWebDavImportRequest>() }.getOrNull()
+        ?: return respondApiError(HttpStatusCode.BadRequest, "invalid_backup", "缺少外部 WebDAV 备份")
+    val client = ExternalWebDavClient()
+    var temp: Path? = null
+    try {
+        temp = runCatching {
+            withContext(Dispatchers.IO) { client.download(request.connection, request.href) }
+        }.getOrElse { error ->
+            respondApiError(
+                HttpStatusCode.BadGateway,
+                "external_webdav_failed",
+                error.message ?: "从 WebDAV 下载备份失败",
+            )
+            return
+        }
+        val downloaded = requireNotNull(temp)
+        val summary = runCatching {
+            withContext(Dispatchers.IO) { importer.import(downloaded) }
+        }.getOrElse { error ->
+            respondApiError(
+                HttpStatusCode.BadRequest,
+                "invalid_backup",
+                error.message ?: "备份包解析失败",
+            )
+            return
+        }
+        application.log.info(
+            "external webdav backup imported: {} (sources={}, rules={}, books={}, progress={})",
+            request.href,
+            summary.sources + summary.sourcesUpdated,
+            summary.rules + summary.rulesUpdated,
+            summary.books + summary.booksUpdated,
+            summary.progress,
+        )
+        respond(summary)
+    } finally {
+        temp?.let { Files.deleteIfExists(it) }
+    }
+}
+
+private suspend fun ApplicationCall.serveBackupExportSettings(auth: AuthService, database: Database) {
+    if (!requireWebDavAuth(auth)) return
+    respond(readBackupExportSettings(database))
+}
+
+private suspend fun ApplicationCall.serveBackupExportSettingsUpdate(auth: AuthService, database: Database) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val request = runCatching { receive<BackupExportSettingsUpdate>() }.getOrNull()
+        ?: return respond(HttpStatusCode.BadRequest, ApiError("invalid_backup", "缺少导出设置"))
+    val saved = runCatching { applyBackupExportSettingsUpdate(database, request) }.getOrElse { error ->
+        // 刻意用**不在四语字典里**的 code：字典里已有的 `invalid_backup` 会盖掉具体原因
+        // （用户只会看到「备份文件无效」），而这里真正可据以行动的是「时间要 HH:mm」这类细节。
+        return respondApiError(HttpStatusCode.BadRequest, "invalid_export_setting", error.message ?: "导出设置无效")
+    }
+    respond(saved)
+}
+
+/**
+ * 导出备份：把书源及其分组、书架及书籍分组、阅读进度打包成 Legado 格式的 zip，
+ * 写入 WebDAV 存储区（这样它会直接出现在「文件管理」列表里，可当场下载，
+ * 也能被手机 App 通过 WebDAV 取走）。
+ *
+ * 同名文件（同一天 + 同设备名）**直接覆盖** —— 重复导出应当得到一份最新的，而不是堆一堆副本。
+ */
+private suspend fun ApplicationCall.serveBackupExport(
+    auth: AuthService,
+    storage: WebDavStorage,
+    exporter: BackupExporter,
+    database: Database,
+) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val settings = readBackupExportSettings(database)
+    val outcome = runCatching { performBackupExport(storage, exporter, settings) }.getOrElse { error ->
+        return respond(
+            HttpStatusCode.InternalServerError,
+            ApiError("backup_export_failed", error.message ?: "备份导出失败"),
+        )
+    }
+    application.log.info(
+        "webdav backup exported: {} (sources={}, books={}, bookmarks={}, groups={}, {} bytes)",
+        outcome.target.fileName.toString(),
+        outcome.result.sources,
+        outcome.result.books,
+        outcome.result.bookmarks,
+        outcome.result.groups,
+        outcome.result.bytes.size,
+    )
+    respond(outcome.toPayload(storage))
+}
+
+/**
+ * 自动导出的触发点：**关闭网页** / **关闭正在阅读的书**。
+ *
+ * 是否真的导出由**服务端**按设置判定（客户端只上报「发生了触发」）—— 这样前端不必先拉一次设置，
+ * 也不给客户端「绕过开关直接写盘」的机会。
+ *
+ * 失败刻意**不返回 5xx**：触发时页面可能正在卸载，用户根本没有界面可以接错误；
+ * 后台行为失败只记日志并如实回报 `exported=false`。
+ */
+private suspend fun ApplicationCall.serveBackupExportAuto(
+    auth: AuthService,
+    storage: WebDavStorage,
+    exporter: BackupExporter,
+    database: Database,
+) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val trigger = request.queryParameters["trigger"].orEmpty()
+    val settings = readBackupExportSettings(database)
+    // 总开关（autoExport）优先：关掉时子开关一律不生效
+    val enabled = settings.autoExport && when (trigger) {
+        TRIGGER_PAGE_CLOSE -> settings.exportOnPageClose
+        TRIGGER_BOOK_CLOSE -> settings.exportOnBookClose
+        else -> false
+    }
+    if (!enabled) {
+        return respond(BackupAutoExportResult(exported = false, reason = "disabled"))
+    }
+    val outcome = runCatching { performBackupExport(storage, exporter, settings) }.getOrElse { error ->
+        application.log.warn("auto backup export failed ({}): {}", trigger, error.message)
+        return respond(BackupAutoExportResult(exported = false, reason = error.message ?: "failed"))
+    }
+    application.log.info("auto backup exported on {}: {}", trigger, outcome.target.fileName.toString())
+    val payload = outcome.toPayload(storage)
+    respond(
+        BackupAutoExportResult(
+            exported = true,
+            fileName = payload.fileName,
+            path = payload.path,
+            size = payload.size,
+        )
+    )
+}
+
+/** 落盘后的结果（文件名、绝对路径、各部分条数）已移到 [BackupExportScheduler.kt]。 */
+private suspend fun ApplicationCall.serveWebDavOptions() {
+    response.header(HttpHeaders.DAV, DAV_CLASSES)
+    response.header(HttpHeaders.Allow, DAV_ALLOW)
+    // Windows WebDAV 客户端（WebClient）要求该头才开放写入。
+    response.header("MS-Author-Via", "DAV")
+    respond(HttpStatusCode.OK)
+}
+
+private suspend fun ApplicationCall.servePropfind(auth: AuthService, storage: WebDavStorage, locks: WebDavLocks) {
+    if (!requireWebDavAuth(auth)) return
+    val urlPath = davPath()
+    val target = storage.resolve(urlPath) ?: return respond(HttpStatusCode.Forbidden)
+    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.NotFound)
+    val collection = Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)
+    val depth = request.headers[HttpHeaders.Depth]?.trim()?.lowercase() ?: "infinity"
+    // 与 nginx dav 模块一致：只支持 Depth 0/1，拒绝无限深度以免整棵目录树被递归扫描。
+    if (collection && depth == "infinity") return respondDavError(HttpStatusCode.Forbidden, "propfind-finite-depth")
+    val entries = buildList {
+        add(DavEntry(urlPath, target))
+        if (collection && depth == "1") {
+            storage.children(target).forEach { child ->
+                add(DavEntry(if (urlPath.isEmpty()) child.fileName.toString() else "$urlPath/${child.fileName}", child))
+            }
+        }
+    }
+    respondText(multistatusXml(entries, locks), WEBDAV_XML, HttpStatusCode.MultiStatus)
+}
+
+private suspend fun ApplicationCall.serveProppatch(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val urlPath = davPath()
+    val target = storage.resolve(urlPath) ?: return respond(HttpStatusCode.Forbidden)
+    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.NotFound)
+    // 不支持死属性（dead properties），按 RFC 4918 在 207 中回复失败状态。
+    respondText(proppatchRefusedXml(urlPath, Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)), WEBDAV_XML, HttpStatusCode.MultiStatus)
+}
+
+private suspend fun ApplicationCall.serveMkcol(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val target = storage.resolve(davPath())
+    if (target == null || target == storage.root) return respond(HttpStatusCode.Forbidden)
+    if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.MethodNotAllowed)
+    if (!Files.isDirectory(target.parent, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.Conflict)
+    try {
+        Files.createDirectory(target)
+    } catch (_: FileAlreadyExistsException) {
+        return respond(HttpStatusCode.MethodNotAllowed)
+    } catch (_: IOException) {
+        return respond(HttpStatusCode.Conflict)
+    }
+    respond(HttpStatusCode.Created)
+}
+
+private suspend fun ApplicationCall.serveGetFile(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth)) return
+    val urlPath = davPath()
+    val target = storage.resolve(urlPath) ?: return respond(HttpStatusCode.Forbidden)
+    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.NotFound)
+    if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+        respondText(directoryListingHtml(urlPath, target, storage), ContentType.Text.Html.withCharset(Charsets.UTF_8))
+        return
+    }
+    respondFileContent(target)
+}
+
+private suspend fun ApplicationCall.serveHeadFile(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth)) return
+    val target = storage.resolve(davPath()) ?: return respond(HttpStatusCode.Forbidden)
+    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.NotFound)
+    val length = if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) 0L else Files.size(target)
+    respond(HeadOnlyContent(length))
+}
+
+private suspend fun ApplicationCall.servePutFile(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val target = storage.resolve(davPath())
+    if (target == null || target == storage.root) return respond(HttpStatusCode.Forbidden)
+    if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.MethodNotAllowed)
+    val parent = target.parent
+    if (Files.exists(parent, LinkOption.NOFOLLOW_LINKS) && !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
+        return respond(HttpStatusCode.Conflict)
+    }
+    val existed = Files.exists(target, LinkOption.NOFOLLOW_LINKS)
+    withContext(Dispatchers.IO) {
+        Files.createDirectories(parent)
+        val temp = Files.createTempFile(parent, UPLOAD_TEMP_PREFIX, ".part")
+        try {
+            receiveStream().use { input ->
+                Files.newOutputStream(temp, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE).use { output ->
+                    input.copyTo(output, COPY_BUFFER_BYTES)
+                }
+            }
+            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (error: Throwable) {
+            Files.deleteIfExists(temp)
+            throw error
+        }
+    }
+    application.log.info("webdav upload stored: {} ({} bytes)", davPath(), runCatching { Files.size(target) }.getOrDefault(0L))
+    respond(if (existed) HttpStatusCode.NoContent else HttpStatusCode.Created)
+}
+
+private suspend fun ApplicationCall.serveDeleteResource(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val target = storage.resolve(davPath())
+    if (target == null || target == storage.root) return respond(HttpStatusCode.Forbidden)
+    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.NotFound)
+    withContext(Dispatchers.IO) { storage.deleteRecursively(target) }
+    application.log.info("webdav resource deleted: {}", davPath())
+    respond(HttpStatusCode.NoContent)
+}
+
+private suspend fun ApplicationCall.serveLock(auth: AuthService, storage: WebDavStorage, locks: WebDavLocks) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val urlPath = davPath()
+    val target = storage.resolve(urlPath) ?: return respond(HttpStatusCode.Forbidden)
+    val timeout = lockTimeoutSeconds(request.headers[HttpHeaders.Timeout])
+    val body = runCatching { receiveText() }.getOrDefault("")
+    // 空 body 的 LOCK 是 RFC 4918 的续租语义，沿用原锁令牌；否则建立新锁。
+    val lock = if (body.isBlank()) locks.touch(target, timeout) else null
+    val resolved = lock ?: locks.acquire(target, lockOwner(body), timeout)
+    var created = false
+    if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+        withContext(Dispatchers.IO) {
+            target.parent?.let { Files.createDirectories(it) }
+            runCatching { Files.createFile(target) }
+        }
+        created = true
+    }
+    response.header(HttpHeaders.LockToken, "<${resolved.token}>")
+    respondText(
+        lockDiscoveryXml(resolved, urlPath, Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)),
+        WEBDAV_XML,
+        if (created) HttpStatusCode.Created else HttpStatusCode.OK,
+    )
+}
+
+private suspend fun ApplicationCall.serveUnlock(auth: AuthService, storage: WebDavStorage, locks: WebDavLocks) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val target = storage.resolve(davPath())
+    val token = request.headers[HttpHeaders.LockToken]?.trim()?.trim('<', '>')
+    if (target == null || token.isNullOrBlank() || !locks.release(target, token)) return respond(HttpStatusCode.Conflict)
+    respond(HttpStatusCode.NoContent)
+}
+
+/** MOVE / COPY：Destination 指向本服务 `/webdav` 前缀之外的地址时按 RFC 4918 返回 502。 */
+private suspend fun ApplicationCall.copyOrMove(auth: AuthService, storage: WebDavStorage, locks: WebDavLocks, move: Boolean) {
+    if (!requireWebDavAuth(auth, write = true)) return
+    val source = storage.resolve(davPath())
+    if (source == null || source == storage.root) return respond(HttpStatusCode.Forbidden)
+    if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.NotFound)
+    val destinationHeader = request.headers[HttpHeaders.Destination] ?: return respond(HttpStatusCode.BadRequest)
+    val destination = destinationPath(storage, destinationHeader) ?: return respond(HttpStatusCode.BadGateway)
+    val overwrite = request.headers[HttpHeaders.Overwrite]?.trim()?.equals("F", ignoreCase = true) != true
+    // 源与目标相同、或目标位于源内部（自包含复制会无限递归）一律拒绝。
+    if (destination.startsWith(source)) return respond(HttpStatusCode.Forbidden)
+    if (!Files.isDirectory(destination.parent, LinkOption.NOFOLLOW_LINKS)) return respond(HttpStatusCode.Conflict)
+    val destinationExisted = Files.exists(destination, LinkOption.NOFOLLOW_LINKS)
+    if (destinationExisted && !overwrite) return respond(HttpStatusCode.PreconditionFailed)
+    val depthZero = request.headers[HttpHeaders.Depth]?.trim() == "0"
+    withContext(Dispatchers.IO) {
+        if (destinationExisted) storage.deleteRecursively(destination)
+        if (move) {
+            runCatching { Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE) }
+                .recoverCatching { Files.move(source, destination) }
+                .getOrThrow()
+            locks.active(source)?.let { locks.release(source, it.token) }
+        } else if (depthZero && Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
+            Files.createDirectories(destination)
+        } else {
+            storage.copyRecursively(source, destination)
+        }
+    }
+    application.log.info("webdav {} completed: {} -> {}", if (move) "move" else "copy", davPath(), destinationHeader)
+    respond(if (destinationExisted) HttpStatusCode.NoContent else HttpStatusCode.Created)
+}
+
+private data class DavEntry(val urlPath: String, val path: Path)
+
+private class HeadOnlyContent(private val length: Long) : OutgoingContent.NoContent() {
+    override val status: HttpStatusCode get() = HttpStatusCode.OK
+    override val headers: Headers get() = Headers.build { append(HttpHeaders.ContentLength, length.toString()) }
+}
+
+/**
+ * 请求对应的 WebDAV 相对路径。
+ * 注意：Ktor 的 `{path...}` 尾卡参数只捕获首段（/webdav/a/b 得到 "a"），因此这里从原始请求 URI 推导。
+ */
+private fun ApplicationCall.davPath(): String = runCatching {
+    request.path().removePrefix(WEBDAV_URI_PREFIX).decodeURLPart()
+}.getOrDefault("").trim('/')
+
+private suspend fun ApplicationCall.requireWebDavAuth(auth: AuthService, write: Boolean = false): Boolean {
+    if (auth.verifyBasicAuthorization(request.headers[HttpHeaders.Authorization])) return true
+    val session = sessions.get<UserSession>()
+    if (session != null) {
+        val csrf = auth.csrf(session)
+        if (csrf != null) {
+            // 浏览器（Web 设置页）走会话鉴权：写操作必须带 CSRF 头，避免被跨站请求伪造。
+            if (!write || request.headers[AuthService.CSRF_HEADER] == csrf) return true
+            respondApiError(HttpStatusCode.Forbidden, "csrf_invalid", "请求验证失败")
+            return false
+        }
+    }
+    response.header(HttpHeaders.WWWAuthenticate, "Basic realm=\"Legado WebDAV\", charset=\"UTF-8\"")
+    respondApiError(HttpStatusCode.Unauthorized, "unauthenticated", "WebDAV 需要管理员密码认证")
+    return false
+}
+
+/** Web 设置页面所需的存储状态与当前目录内容。 */
+private suspend fun ApplicationCall.serveWebDavInfo(auth: AuthService, storage: WebDavStorage) {
+    if (!requireWebDavAuth(auth)) return
+    val relative = request.queryParameters["path"].orEmpty().trim('/')
+    val target = storage.resolve(relative)
+    if (target == null) return respondApiError(HttpStatusCode.BadRequest, "invalid_path", "路径无效")
+    if (!Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+        return respondApiError(HttpStatusCode.NotFound, "not_found", "目录不存在")
+    }
+    val usage = withContext(Dispatchers.IO) { storage.usage() }
+    val entries = withContext(Dispatchers.IO) { storage.list(target) }.map { child ->
+        val directory = Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)
+        WebDavEntry(
+            name = child.fileName.toString(),
+            path = if (relative.isEmpty()) child.fileName.toString() else "$relative/${child.fileName}",
+            directory = directory,
+            size = if (directory) 0L else runCatching { Files.size(child) }.getOrDefault(0L),
+            modifiedAt = runCatching { Files.getLastModifiedTime(child, LinkOption.NOFOLLOW_LINKS).toMillis() }.getOrDefault(0L),
+        )
+    }
+    respond(
+        WebDavInfoResponse(
+            url = WEBDAV_URI_PREFIX,
+            directory = storage.root.toString(),
+            path = relative,
+            parent = when {
+                relative.isEmpty() -> null
+                relative.contains('/') -> relative.substringBeforeLast('/')
+                else -> ""
+            },
+            fileCount = usage.files,
+            directoryCount = usage.directories,
+            totalBytes = usage.bytes,
+            entries = entries,
+        )
+    )
+}
+
+private suspend fun ApplicationCall.respondDavError(status: HttpStatusCode, condition: String) {
+    respondText(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:error xmlns:D=\"DAV:\"><D:$condition/></D:error>",
+        WEBDAV_XML,
+        status,
+    )
+}
+
+/**
+ * GET 文件：支持单段 Range 断点续传，其余情况整文件流式下发。
+ *
+ * 实现已**整体提取**到 [respondFileRange]（与有声书 `GET /api/audio/{key}` 共用同一份手写 Range），
+ * 这里只保留"WebDAV 不加 ETag / 不加 Cache-Control"这一点差异。
+ */
+private suspend fun ApplicationCall.respondFileContent(file: Path) {
+    respondFileRange(file, ContentType.defaultForPath(file))
+}
+
+private fun destinationPath(storage: WebDavStorage, header: String): Path? {
+    val rawPath = if (header.startsWith("http://", ignoreCase = true) || header.startsWith("https://", ignoreCase = true)) {
+        runCatching { URI(header).rawPath }.getOrNull() ?: return null
+    } else {
+        header.substringBefore('?')
+    }
+    if (rawPath != WEBDAV_URI_PREFIX && !rawPath.startsWith("$WEBDAV_URI_PREFIX/")) return null
+    val decoded = runCatching { rawPath.decodeURLPart() }.getOrNull() ?: return null
+    return storage.resolve(decoded.removePrefix(WEBDAV_URI_PREFIX))
+}
+
+private fun lockTimeoutSeconds(header: String?): Long {
+    val requested = header?.split(',')
+        ?.mapNotNull { part -> part.trim().removePrefix("Second-").toLongOrNull() }
+        ?.maxOrNull() ?: DEFAULT_LOCK_SECONDS
+    return requested.coerceIn(60L, MAX_LOCK_SECONDS)
+}
+
+private fun lockOwner(body: String): String? {
+    val owner = Regex("<[A-Za-z0-9]*:?owner[^>]*>(.*?)</[A-Za-z0-9]*:?owner>", RegexOption.DOT_MATCHES_ALL)
+        .find(body)?.groupValues?.get(1)?.replace(Regex("<[^>]*>"), "")?.trim()
+    return owner?.takeIf { it.isNotEmpty() }?.take(512)
+}
+
+private fun multistatusXml(entries: List<DavEntry>, locks: WebDavLocks): String {
+    val xml = StringBuilder("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:multistatus xmlns:D=\"DAV:\">\n")
+    for (entry in entries) {
+        val collection = Files.isDirectory(entry.path, LinkOption.NOFOLLOW_LINKS)
+        val attributes = Files.readAttributes(entry.path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        xml.append("  <D:response>\n")
+        xml.append("    <D:href>").append(xmlEscape(davHref(entry.urlPath, collection))).append("</D:href>\n")
+        xml.append("    <D:propstat>\n      <D:prop>\n")
+        xml.append("        <D:displayname>").append(xmlEscape(entry.path.fileName?.toString().orEmpty())).append("</D:displayname>\n")
+        xml.append("        <D:resourcetype>").append(if (collection) "<D:collection/>" else "").append("</D:resourcetype>\n")
+        xml.append("        <D:getlastmodified>").append(httpDate(attributes.lastModifiedTime().toInstant())).append("</D:getlastmodified>\n")
+        xml.append("        <D:creationdate>").append(DateTimeFormatter.ISO_INSTANT.format(attributes.creationTime().toInstant())).append("</D:creationdate>\n")
+        if (collection) {
+            xml.append("        <D:getcontenttype>httpd/unix-directory</D:getcontenttype>\n")
+        } else {
+            xml.append("        <D:getcontentlength>").append(attributes.size()).append("</D:getcontentlength>\n")
+            xml.append("        <D:getcontenttype>").append(xmlEscape(ContentType.defaultForPath(entry.path).toString())).append("</D:getcontenttype>\n")
+        }
+        xml.append("        <D:supportedlock>").append(SUPPORTED_LOCK_XML).append("</D:supportedlock>\n")
+        xml.append("        <D:lockdiscovery>").append(activeLockXml(locks.active(entry.path))).append("</D:lockdiscovery>\n")
+        xml.append("      </D:prop>\n      <D:status>HTTP/1.1 200 OK</D:status>\n    </D:propstat>\n")
+        xml.append("  </D:response>\n")
+    }
+    xml.append("</D:multistatus>")
+    return xml.toString()
+}
+
+private fun proppatchRefusedXml(urlPath: String, collection: Boolean): String = buildString {
+    append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<D:multistatus xmlns:D=\"DAV:\">\n")
+    append("  <D:response>\n    <D:href>").append(xmlEscape(davHref(urlPath, collection))).append("</D:href>\n")
+    append("    <D:propstat>\n      <D:prop/>\n      <D:status>HTTP/1.1 403 Forbidden</D:status>\n    </D:propstat>\n  </D:response>\n")
+    append("</D:multistatus>")
+}
+
+private fun lockDiscoveryXml(lock: DavLock, urlPath: String, collection: Boolean): String =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery>" +
+        activeLockXml(lock, davHref(urlPath, collection)) +
+        "</D:lockdiscovery></D:prop>"
+
+private fun activeLockXml(lock: DavLock?, lockRootHref: String = ""): String {
+    if (lock == null) return ""
+    return buildString {
+        append("<D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>")
+        append("<D:depth>infinity</D:depth>")
+        lock.owner?.let { append("<D:owner>").append(xmlEscape(it)).append("</D:owner>") }
+        append("<D:timeout>Second-").append(lock.timeoutSeconds()).append("</D:timeout>")
+        append("<D:locktoken><D:href>").append(xmlEscape(lock.token)).append("</D:href></D:locktoken>")
+        if (lockRootHref.isNotEmpty()) append("<D:lockroot><D:href>").append(xmlEscape(lockRootHref)).append("</D:href></D:lockroot>")
+        append("</D:activelock>")
+    }
+}
+
+private fun davHref(urlPath: String, collection: Boolean): String {
+    val encoded = urlPath.split('/').filter { it.isNotEmpty() }.joinToString("/") { it.encodeURLPathPart() }
+    val base = if (encoded.isEmpty()) "$WEBDAV_URI_PREFIX/" else "$WEBDAV_URI_PREFIX/$encoded"
+    return if (collection && !base.endsWith("/")) "$base/" else base
+}
+
+private fun directoryListingHtml(urlPath: String, directory: Path, storage: WebDavStorage): String = buildString {
+    append("<!doctype html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">")
+    append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+    append("<title>").append(xmlEscape(davHref(urlPath, true))).append("</title>")
+    append("<style>body{margin:0;padding:24px;font-family:system-ui,-apple-system,\"Segoe UI\",sans-serif;background:#0f1115;color:#e6e8eb}")
+    append("h1{font-size:15px;font-weight:600;margin:0 0 16px}a{color:#7dd3fc;text-decoration:none}a:hover{text-decoration:underline}")
+    append("ul{list-style:none;margin:0;padding:0}li{padding:6px 0;border-bottom:1px solid #232733;font-size:13px;display:flex;justify-content:space-between;gap:16px}")
+    append(".size{color:#8b95a5;font-variant-numeric:tabular-nums}</style></head><body>")
+    append("<h1>").append(xmlEscape(davHref(urlPath, true))).append("</h1><ul>")
+    if (urlPath.isNotEmpty()) append("<li><a href=\"../\">../</a><span class=\"size\"></span></li>")
+    for (child in storage.children(directory)) {
+        val childPath = if (urlPath.isEmpty()) child.fileName.toString() else "$urlPath/${child.fileName}"
+        val isDirectory = Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)
+        append("<li><a href=\"").append(xmlEscape(davHref(childPath, isDirectory))).append("\">")
+        append(xmlEscape(child.fileName.toString())).append(if (isDirectory) "/" else "").append("</a>")
+        append("<span class=\"size\">").append(if (isDirectory) "-" else humanSize(Files.size(child))).append("</span></li>")
+    }
+    append("</ul></body></html>")
+}
+
+private fun humanSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "%.1f KiB".format(bytes / 1024.0)
+    bytes < 1024L * 1024 * 1024 -> "%.1f MiB".format(bytes / (1024.0 * 1024))
+    else -> "%.2f GiB".format(bytes / (1024.0 * 1024 * 1024))
+}
+
+private fun httpDate(instant: Instant): String = DateTimeFormatter.RFC_1123_DATE_TIME.format(instant.atZone(ZoneOffset.UTC))
+
+private fun xmlEscape(value: String): String = buildString(value.length) {
+    for (ch in value) when (ch) {
+        '&' -> append("&amp;")
+        '<' -> append("&lt;")
+        '>' -> append("&gt;")
+        '"' -> append("&quot;")
+        '\'' -> append("&apos;")
+        else -> append(ch)
+    }
+}

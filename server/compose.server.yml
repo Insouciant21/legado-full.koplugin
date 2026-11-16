@@ -1,0 +1,35 @@
+services:
+  legado-server:
+    image: legado-server-local:20261116-workflow-redesign-v13
+    container_name: legado-server
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+      # Local-only images do not benefit from attestation manifests, and
+      # generating them adds time to every export.
+      provenance: false
+      sbom: false
+    restart: unless-stopped
+    # Docker Desktop runs Linux containers in a VM, so host networking is not
+    # reachable from the physical LAN. Publish both ports from the VM instead.
+    ports:
+      - "28095:28095/tcp"
+      - "47832:47832/udp"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in the private 0600 env file}
+      LEGADO_HOST: "0.0.0.0"
+      LEGADO_PORT: "28095"
+      LEGADO_SECURE_COOKIES: "false"
+      LEGADO_LAN_DISCOVERY: "true"
+      LEGADO_LAN_DISCOVERY_PORT: "47832"
+      LEGADO_SERVER_NAME: ${LEGADO_SERVER_NAME:-LAN-Kindle-PC}
+      LEGADO_AUTO_CACHE: "true"
+      LEGADO_KINDLE_AUTO_PUBLISH: "true"
+      JAVA_OPTS: "-Xms256m -Xmx2g -XX:ActiveProcessorCount=4 -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8"
+    volumes:
+      - legado-server-data:/data
+
+volumes:
+  legado-server-data:
+    name: legado-server-data
+    external: true

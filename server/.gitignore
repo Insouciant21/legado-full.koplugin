@@ -1,0 +1,33 @@
+*.iml
+.gradle
+local.properties
+.DS_Store
+/build
+build/
+/captures
+.externalNativeBuild
+/release
+/tmp
+node_modules
+node_modules/
+**/node_modules/
+/app/app
+/app/google
+/app/gradle.properties
+.idea/
+# Kotlin 2.0
+.kotlin/
+.cxx
+.vscode
+# local runtime web bundle (copied from web/dist)
+server/src/main/resources/static/
+.env
+.data/
+.agents/
+.worktrees/
+# 运行期数据（SQLite 库、封面缓存、WebDAV 上传件等），严禁提交
+data/
+*.log
+server.log
+
+

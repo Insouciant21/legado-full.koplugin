@@ -1,0 +1,141 @@
+plugins {
+    alias libs.plugins.kotlin.jvm
+    alias libs.plugins.kotlin.serialization
+    id 'application'
+}
+
+
+group = 'io.legado'
+version = '0.1.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+}
+
+application {
+    applicationName = 'legado-server'
+    mainClass = 'io.legado.server.ApplicationKt'
+}
+
+tasks.register('fatJar', Jar) {
+    archiveBaseName.set('legado-server')
+    archiveClassifier.set('all')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes(
+            'Main-Class': 'io.legado.server.ApplicationKt',
+            'Implementation-Title': 'Legado Server',
+            'Implementation-Version': project.version
+        )
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    with tasks.jar
+}
+
+def webProjectDir = file("${rootProject.projectDir}/web")
+def webDistDir = new File(webProjectDir, 'dist')
+def webNodeModules = new File(webProjectDir, 'node_modules')
+def webPackageJson = new File(webProjectDir, 'package.json')
+def webIndexHtml = new File(webProjectDir, 'index.html')
+def webViteConfig = new File(webProjectDir, 'vite.config.ts')
+def webSourceDir = new File(webProjectDir, 'src')
+def skipWebBuild = providers.gradleProperty('legado.skipWebBuild')
+    .map { it.toBoolean() }
+    .getOrElse(false)
+
+tasks.register('buildWeb') {
+    description = "Builds the web frontend using npm."
+    group = "build"
+
+    if (webSourceDir.exists()) inputs.dir(webSourceDir)
+    if (webPackageJson.exists()) inputs.file(webPackageJson)
+    if (webIndexHtml.exists()) inputs.file(webIndexHtml)
+    if (webViteConfig.exists()) inputs.file(webViteConfig)
+    outputs.dir(webDistDir)
+
+    doLast {
+        if (skipWebBuild) {
+            System.out.println("Skipping web build because legado.skipWebBuild=true")
+            return
+        }
+
+        def runWebCommand = { List<String> command ->
+            def process = new ProcessBuilder(command)
+                .directory(webProjectDir)
+                .inheritIO()
+                .start()
+            if (process.waitFor() != 0) {
+                throw new GradleException("Web command failed: ${command.join(' ')}")
+            }
+        }
+        def isWindows = System.getProperty('os.name', '')
+            .toLowerCase(Locale.ROOT)
+            .contains('windows')
+        def hasNpm = false
+        try {
+            def process = new ProcessBuilder(isWindows ? ['cmd', '/c', 'where', 'npm'] : ['which', 'npm']).start()
+            hasNpm = (process.waitFor() == 0)
+        } catch (Exception ignored) {
+            hasNpm = false
+        }
+
+        if (hasNpm && webPackageJson.exists()) {
+            if (webNodeModules.exists()) {
+                System.out.println("Building web frontend with npm...")
+                runWebCommand(isWindows ? ['cmd', '/c', 'npm', 'run', 'build'] : ['npm', 'run', 'build'])
+            } else if (webDistDir.exists() && new File(webDistDir, 'index.html').exists()) {
+                System.out.println("Using pre-built web assets from ${webDistDir} (node_modules not found, skipping npm build)")
+            } else {
+                System.out.println("Installing web frontend dependencies and building with npm...")
+                runWebCommand(isWindows ? ['cmd', '/c', 'npm', 'install', '--ignore-scripts', '--no-audit', '--fund=false'] : ['npm', 'install', '--ignore-scripts', '--no-audit', '--fund=false'])
+                runWebCommand(isWindows ? ['cmd', '/c', 'npm', 'run', 'build'] : ['npm', 'run', 'build'])
+            }
+        } else if (webDistDir.exists()) {
+            System.out.println("Using pre-built web assets from ${webDistDir}")
+        } else {
+            System.err.println("WARNING: Neither npm nor pre-built web/dist was found. Web static files will not be bundled!")
+        }
+    }
+}
+
+processResources {
+    dependsOn tasks.named('buildWeb')
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    from(webDistDir) {
+        into("static")
+    }
+}
+
+dependencies {
+    implementation "com.microsoft.playwright:playwright:1.64.0"
+    implementation "io.ktor:ktor-server-cio:3.4.3"
+    implementation "io.ktor:ktor-server-core:3.4.3"
+    implementation "io.ktor:ktor-server-content-negotiation:3.4.3"
+    implementation "io.ktor:ktor-serialization-kotlinx-json:3.4.3"
+    implementation "io.ktor:ktor-server-sessions:3.4.3"
+    implementation "io.ktor:ktor-server-websockets:3.4.3"
+    implementation "io.ktor:ktor-server-status-pages:3.4.3"
+    implementation "org.xerial:sqlite-jdbc:3.49.1.0"
+    implementation "org.jsoup:jsoup:1.18.3"
+    implementation "cn.wanghaomiao:JsoupXpath:2.5.3"
+    implementation "com.jayway.jsonpath:json-path:2.9.0"
+    implementation "org.mozilla:rhino:1.8.0"
+    implementation "org.slf4j:slf4j-simple:2.0.16"
+    implementation "org.apache.commons:commons-compress:1.27.1"
+    implementation "com.github.junrar:junrar:7.5.5"
+    implementation libs.okhttp
+    // 简繁转换：与 Android 使用**同一个库同一套词表**（`ChineseUtils.t2s/s2t`），
+    // 否则「服务器转出来的和手机不一样」这种差异无解。
+    implementation "com.github.liuyueyi.quick-chinese-transfer:quick-transfer-core:0.2.17"
+}
+

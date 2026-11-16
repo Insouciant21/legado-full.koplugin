@@ -1,0 +1,23 @@
+pluginManagement {
+    repositories {
+        google()
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        // JitPack：简繁转换库（`quick-transfer-core`）只发布在 JitPack，
+        // 而它正是 Android 侧使用的那一个 —— 用它才能保证转换结果与手机逐字一致。
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+rootProject.name = 'legado-server'
+
+include ':server'
+

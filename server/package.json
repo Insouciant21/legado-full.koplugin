@@ -1,0 +1,27 @@
+{
+  "name": "legado-server",
+  "version": "1.0.0",
+  "description": "Legado headless source processing, media cache, and Kindle sync server",
+  "keywords": [
+    "legado",
+    "legado3",
+    "reader",
+    "book-source",
+    "headless",
+    "ktor",
+    "kotlin",
+    "react",
+    "pwa",
+    "webdav",
+    "docker"
+  ],
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lukelzlz/legado-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lukelzlz/legado-server/issues"
+  },
+  "homepage": "https://github.com/lukelzlz/legado-server#readme"
+}
