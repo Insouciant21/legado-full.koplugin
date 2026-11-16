@@ -1,8 +1,8 @@
 """A dependency-free reference evaluator for common Legado source rules.
 
 The Kindle implementation will use the same capability boundaries in Lua.  A
-small Python evaluator is useful for fixtures and source compatibility checks
-without requiring Android, a browser, or network access during development.
+small Python evaluator is useful for source compatibility checks without
+requiring Android, a browser, or network access during development.
 It intentionally refuses JavaScript and XPath instead of pretending that a
 partial implementation is compatible.
 """

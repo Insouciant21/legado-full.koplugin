@@ -2,18 +2,42 @@
 .env.*
 __pycache__/
 *.py[cod]
-.pytest_cache/
 .mypy_cache/
 .ruff_cache/
 dist/
 build/
 *.egg-info/
 artifacts/
-testdata/
 .zcode/
 *.zip
 *.sqlite
 *.sqlite3
+*.log
+
+# Server subtree was merged as ordinary source. Keep build outputs and local
+# runtime state out of the Kindle repository.
+server/.gradle/
+server/.kotlin/
+server/build/
+server/server/build/
+server/local.properties
+server/.idea/
+server/.cxx/
+server/.externalNativeBuild/
+server/captures/
+server/release/
+server/tmp/
+server/node_modules/
+server/**/node_modules/
+server/web/dist/
+server/web/tsconfig.tsbuildinfo
+server/server/src/main/resources/static/
+server/.env
+server/.data/
+server/.agents/
+server/.worktrees/
+server/data/
+server.log
 
 # Native libraries are rebuilt by make plugin-zip for the target ABI.
 *.so
@@ -21,3 +45,10 @@ testdata/
 # Local KPW4 rendering captures are development artifacts.
 /legado-emoji-*.png
 tmp/
+
+android-reference/
+
+# Generated gettext catalogs are rebuilt from their .po sources.
+/messages.mo
+/plugin/*/l10n/*/*.mo
+!/plugin/legado-server.koplugin/l10n/zh_CN/legado-server.mo

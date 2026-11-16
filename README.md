@@ -51,6 +51,9 @@ unzip -o /mnt/us/legado.koplugin.zip -d /mnt/us/koreader/plugins
 
 重启 KOReader 后，在 `Legado` 菜单中使用插件。
 
+`server/` 是合并进来的 Legado Server 子树。构建该子树时，先进入 `server/`
+目录，再按其 README 使用 `./gradlew` 和 `npm --prefix web`。
+
 ## 导入备份并开始阅读
 
 1. 将 Android Legado 导出的备份 ZIP 复制到 Kindle。

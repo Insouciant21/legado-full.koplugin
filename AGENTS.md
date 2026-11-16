@@ -3,6 +3,12 @@
 给在本仓库工作的编码代理的实操备忘。项目结构见 README.md，导入边界见
 docs/backup-format.md。
 
+## Android 行为参照
+
+- 书源行为以工作区内 `android-reference/` 的 Android Legado Sigma 实现为准，服务端和前端实现应保持其参数、边界和错误处理语义。
+- 书源定义、启停状态、分组和规则不是验证用的临时数据，不得为了绕过实现问题而改写。
+- 保留书源处理能力、漫画、有声书和 Android 备份导入；产品实现不依赖历史验证脚本或运行证据。
+
 ## gettext 的 `_` 绝不能被循环遮蔽
 
 KOReader 插件模块普遍以 `local _ = require("gettext")` 引入翻译函数
@@ -25,13 +31,12 @@ for item_index, item in ipairs(items) do
 end
 ```
 
-真实案例（2026-11-10）：main.lua 的 `showWebDAVDirectory` 里 `for _, item`
-使循环体内的 `_("Folder")` 抛出
-`attempt to call local '_' (a number value)`，WebDAV 目录列表无法打开。
+如果 `showWebDAVDirectory` 里的循环使用 `for _, item`，循环体内的
+`_("Folder")` 会抛出 `attempt to call local '_' (a number value)`，WebDAV
+目录列表无法打开。
 
 注意 `luajit -b` 语法检查查不出这类错误（遮蔽是合法语法，只有运行路径触发）。
-写完循环后要在宿主机上真正执行一次相关函数——纯函数模块可以模仿
-tools/test-webdav-parse.lua 的 package.preload 桩模式做宿主机冒烟测试。
+写完循环后应在目标宿主机上执行相关功能路径；本仓库不保留自动化验证脚本。
 
 ## 真机调试备忘（USBNet SSH 可达时）
 
