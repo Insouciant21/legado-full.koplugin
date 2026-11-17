@@ -1,6 +1,6 @@
 services:
   legado-server:
-    image: legado-server-local:20261116-workflow-redesign-v13
+    image: legado-server-local:20261117-webui-redesign-v1
     container_name: legado-server
     build:
       context: .
