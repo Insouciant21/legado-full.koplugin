@@ -25,6 +25,11 @@ end
 local function fraction(value)
     return type(value) == "number" and value == value and math.max(0, math.min(1, value)) or nil
 end
+local function matches_remote(version, local_progress, remote_progress)
+    return type(version) == "table" and type(remote_progress.progress_version) == "string"
+        and version.device_seq == local_progress.device_seq
+        and version.progress_version == remote_progress.progress_version
+end
 local function xpointer_fragment(value)
     return type(value) == "string" and tonumber(value:match("/DocFragment%[(%d+)%]")) or nil
 end
@@ -59,11 +64,13 @@ function Reader:session()
     local path = self:_file()
     if type(path) ~= "string" then return nil end
     if self.active and self.active.path == path then return self.active end
-    local state = self.store:reader_state()
+    if self.unmanaged_path == path then return nil end
+    local state, err = self.store:reader_state()
     if state and state.path == path and state.book_id and state.chapter_id then
         self.active = state
         return state
     end
+    if not err then self.unmanaged_path = path end
 end
 
 function Reader:_is_epub_session(session)
@@ -241,38 +248,25 @@ function Reader:reading_progress(book, session, progress_snapshot)
         end
         if not position then position = self:chapter_position(book, session.chapter_id) end
     end
+    if not position and progress_snapshot == nil then
+        progress_snapshot = self.store:progress_snapshot()
+    end
     if not position then
-        local pending = progress_snapshot
-            and progress_snapshot.pending[book.book_id]
-            or (not progress_snapshot and self.store:pending_progress_position(book.book_id))
+        local pending = progress_snapshot and progress_snapshot.pending[book.book_id]
         if pending then
             position = progress_position(pending)
             ratio = pending.chapter_progress
         end
     end
     if not position then
-        local local_progress = progress_snapshot
-            and progress_snapshot.positions[book.book_id]
-            or (not progress_snapshot and self.store:progress_position(book.book_id))
+        local local_progress = progress_snapshot and progress_snapshot.positions[book.book_id]
         local remote_progress = type(book.progress) == "table" and book.progress or nil
         local local_position = local_progress
             and progress_position(local_progress) or nil
         local remote_position = remote_progress
             and progress_position(remote_progress) or nil
-        local matches_remote = false
-        if local_position and remote_position then
-            if progress_snapshot then
-                local version = progress_snapshot.versions[book.book_id]
-                matches_remote = type(version) == "table"
-                    and type(remote_progress.progress_version) == "string"
-                    and version.device_seq == local_progress.device_seq
-                    and version.progress_version == remote_progress.progress_version
-            else
-                matches_remote = self.store:progress_position_matches_remote(
-                    book.book_id, remote_progress) == true
-            end
-        end
-        if local_position and remote_position and matches_remote then
+        local version = progress_snapshot and progress_snapshot.versions[book.book_id]
+        if local_position and remote_position and matches_remote(version, local_progress, remote_progress) then
             position, ratio = local_position, local_progress.chapter_progress
         elseif remote_position then
             position, ratio = remote_position, remote_progress.chapter_progress
@@ -314,7 +308,7 @@ function Reader:preserve_settings(path, book_id)
     return true
 end
 
-function Reader:_open_epub(book, chapter, options)
+function Reader:_open_epub(book, chapter, options, progress)
     local path = self.store:epub_path(book.book_id)
     if not self.store:book_epub_valid(book, true) then
         return nil, _("The whole-book EPUB is not available locally.")
@@ -327,8 +321,10 @@ function Reader:_open_epub(book, chapter, options)
         chapter_progress = 0,
     }
     if not options.from_start then
-        local pending = self.store:pending_progress_position(book.book_id)
-        local local_progress = self.store:progress_position(book.book_id)
+        if captured then progress = self.store:progress_snapshot() end
+        local pending = progress and progress.pending[book.book_id]
+        local local_progress = progress and progress.positions[book.book_id]
+        local version = progress and progress.versions[book.book_id]
         local remote_progress = type(book.progress) == "table" and book.progress or nil
         if pending and pending.chapter_id == chapter.chapter_id then
             restore.chapter_progress = pending.chapter_progress
@@ -337,7 +333,7 @@ function Reader:_open_epub(book, chapter, options)
             end
         elseif options.resume and local_progress and local_progress.chapter_id == chapter.chapter_id
                 and remote_progress and remote_progress.chapter_id == chapter.chapter_id
-                and self.store:progress_position_matches_remote(book.book_id, remote_progress) then
+                and matches_remote(version, local_progress, remote_progress) then
             restore.chapter_progress = local_progress.chapter_progress
             restore.local_position = local_progress.local_position
         elseif options.resume and remote_progress and remote_progress.chapter_id == chapter.chapter_id then
@@ -384,9 +380,19 @@ function Reader:_open_epub(book, chapter, options)
 end
 
 function Reader:open(book_id, lua_position, options)
-    options = options or {}
     local book, err = self.store:book(book_id)
     if not book then return nil, err end
+    return self:_open_book(book, lua_position, options or {})
+end
+
+function Reader:_open_book(book, lua_position, options)
+    local book_id = book.book_id
+    local progress = not options.from_start and self.store:progress_snapshot() or false
+    if lua_position == nil and options.resume then
+        local resume = self:reading_progress(book, nil, progress)
+        if not resume then return nil, _("No chapters have been published yet.") end
+        lua_position = resume.lua_position
+    end
     if type(lua_position) ~= "number" or lua_position ~= math.floor(lua_position)
             or lua_position < 1 or lua_position > #book.chapters then
         return nil, _("Chapter selection is outside the local table of contents.")
@@ -394,7 +400,7 @@ function Reader:open(book_id, lua_position, options)
     local chapter = book.chapters[lua_position]
     if chapter.chapter_index ~= lua_position - 1 then return nil, _("Invalid chapter index in the local table of contents.") end
     if book.epub and not self.store:is_null(book.epub) then
-        return self:_open_epub(book, chapter, options)
+        return self:_open_epub(book, chapter, options, progress)
     end
     local path, path_err = self.store:reading_path(book_id, chapter)
     if not path then return nil, path_err end
@@ -405,14 +411,16 @@ function Reader:open(book_id, lua_position, options)
     if options.from_start then
         restore = { chapter_progress = 0 }
     else
-        local pending = self.store:pending_progress_position(book_id)
-        local local_progress = self.store:progress_position(book_id)
+        if captured then progress = self.store:progress_snapshot() end
+        local pending = progress and progress.pending[book_id]
+        local local_progress = progress and progress.positions[book_id]
+        local version = progress and progress.versions[book_id]
         local remote_progress = type(book.progress) == "table" and book.progress or nil
         if pending and pending.chapter_id == chapter.chapter_id then
             restore = { chapter_progress = pending.chapter_progress }
         elseif local_progress and local_progress.chapter_id == chapter.chapter_id
                 and remote_progress and remote_progress.chapter_id == chapter.chapter_id
-                and self.store:progress_position_matches_remote(book_id, remote_progress) then
+                and matches_remote(version, local_progress, remote_progress) then
             restore = { chapter_progress = local_progress.chapter_progress, local_position = local_progress.local_position }
         elseif options.resume and remote_progress and remote_progress.chapter_id == chapter.chapter_id then
             restore = { chapter_progress = fraction(remote_progress.chapter_progress) }
@@ -473,8 +481,9 @@ function Reader:measure()
 end
 
 function Reader:capture()
+    if not self.device_id then return false end
     local measured = self:measure()
-    if not measured or not self.device_id then return false end
+    if not measured then return false end
     local previous = self.last_saved
     if previous and previous.session.path == measured.session.path and previous.ratio == measured.ratio
             and previous.local_position.xpointer == measured.local_position.xpointer then return false end
@@ -504,10 +513,11 @@ function Reader:page_changed()
     self.scheduler:scheduleIn(10, self.capture_job)
 end
 
-function Reader:close()
+function Reader:close(silent)
     self:cancel_capture()
     local saved, err = self:capture()
-    if saved == nil and self.on_error then self.on_error(err) end
+    if saved == nil and not silent and self.on_error then self.on_error(err) end
+    return saved, err
 end
 
 function Reader:advance(offset)
@@ -520,7 +530,7 @@ function Reader:advance(offset)
     if not current then return nil, _("The current chapter is no longer in the published table of contents.") end
     local next_position = current + offset
     if next_position < 1 or next_position > #book.chapters then return false end
-    return self:open(book.book_id, next_position, { from_start = true })
+    return self:_open_book(book, next_position, { from_start = true })
 end
 
 function Reader:install_hooks()

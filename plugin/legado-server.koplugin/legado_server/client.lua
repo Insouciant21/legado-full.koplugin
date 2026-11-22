@@ -146,8 +146,12 @@ function Client:_request(method, path, payload, unauthenticated, sink, max_bytes
     if not decoded or type(value) ~= "table" then
         return nil, { code = "invalid_json", message = "server returned invalid JSON", retryable = false }
     end
-    response.body = nil
-    collectgarbage("collect")
+    -- A large shelf response creates both a raw JSON buffer and a Lua graph.
+    -- Leave small status, inbox and progress replies to normal Lua GC.
+    if #(response.body or "") >= 1024 * 1024 then
+        response.body = nil
+        collectgarbage("collect")
+    end
     return value
 end
 
@@ -307,6 +311,9 @@ function Client:pull_inbox()
         need(response.protocol_version == 1 and type(response.next_cursor) == "string"
             and response.next_cursor:match("^%d+$") and type(response.deliveries) == "table",
             "invalid pushed-book inbox response")
+        if response.next_cursor == cursor and #response.deliveries == 0 then
+            return { downloaded = 0, failed = 0 }
+        end
         local results, downloaded_titles, failed_count = self.json.array(), {}, 0
         for delivery_index, delivery in ipairs(response.deliveries) do
             local ok, failure = pcall(function()
@@ -393,19 +400,26 @@ function Client:sync()
     return checked(function()
         assert(self.store, "sync storage is required")
         local acked, ack_err = self:ack_pending()
-        if not acked then return nil, ack_err end
-        local sync_meta, state_err = self.store:sync_meta()
-        if not sync_meta then return nil, { code = "local_state_invalid", message = state_err, retryable = false } end
-        local cursor = sync_meta.cursor
-        sync_meta = nil
-        collectgarbage("collect")
-        local path = "/api/v1/sync" .. (cursor and ("?cursor=" .. encode_query(cursor)) or "")
-        local response, err = self:_request("GET", path)
-        if not response and err.status == 410 and err.code == "cursor_expired" then
-            response, err = self:_request("GET", "/api/v1/sync")
-            if response and response.reset ~= true then return nil, { code = "invalid_reset", message = "server did not return a complete reset snapshot", retryable = false } end
+        -- The server can prune a pending batch after a restore or restart.
+        -- Replace it with a verified full snapshot before advancing the cursor.
+        local needs_reset = not acked and ack_err.status == 409 and ack_err.code == "sync_ack_mismatch"
+        if not acked and not needs_reset then return nil, ack_err end
+        local cursor
+        if not needs_reset then
+            local sync_meta, state_err = self.store:sync_meta()
+            if not sync_meta then return nil, { code = "local_state_invalid", message = state_err, retryable = false } end
+            if sync_meta.cursor ~= "0" then cursor = sync_meta.cursor end
+        end
+        local path = "/api/v1/sync?shelf_groups=1"
+        local response, err = self:_request("GET", path .. (cursor and ("&cursor=" .. encode_query(cursor)) or ""))
+        if cursor and not response and err.status == 410 and err.code == "cursor_expired" then
+            cursor = nil
+            response, err = self:_request("GET", path)
         end
         if not response then return nil, err end
+        if not cursor and response.reset ~= true then
+            return nil, { code = "invalid_reset", message = "server did not return a complete reset snapshot", retryable = false }
+        end
         if type(response.books) ~= "table" then return nil, { code = "invalid_sync", message = "sync book list is missing", retryable = false } end
         if type(response.bundles) ~= "table" then return nil, { code = "invalid_sync", message = "sync bundle list is missing", retryable = false } end
         local epub_count = 0
@@ -425,16 +439,18 @@ function Client:sync()
                     return nil, { code = "epub_failed", message = install_err, retryable = true }
                 end
                 epub_count = epub_count + 1
-                collectgarbage("collect")
             end
         end
         for bundle_index, descriptor in ipairs(response.bundles) do
             local installed, install_err = self.store:install_bundle(descriptor, function(sink, offset) return self:download_bundle(descriptor, sink, offset) end)
             if not installed then return nil, { code = "bundle_failed", message = install_err, retryable = true } end
         end
-        collectgarbage("collect")
         local applied, changed = self.store:apply_sync(response)
         if not applied then return nil, { code = "snapshot_failed", message = changed, retryable = true } end
+        local groups_saved, groups_err = self.store:save_shelf_reading_groups(response.shelf_groups)
+        if not groups_saved then
+            return nil, { code = "local_write_failed", message = groups_err, retryable = true }
+        end
         local confirmed, confirm_err = self:ack_pending()
         if not confirmed then return nil, confirm_err end
         return { synced = true, changed = changed, bundles = #response.bundles, epubs = epub_count }

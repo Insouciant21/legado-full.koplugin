@@ -3,23 +3,52 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
-local Menu = require("ui/widget/menu")
+local MenuPage = require("legado_server/menu_page")
 local ConfirmBox = require("ui/widget/confirmbox")
 local NetworkMgr = require("ui/network/manager")
-local Trapper = require("ui/trapper")
+local Background = require("legado_server/background")
 local Store = require("legado_server/store")
 local Client = require("legado_server/client")
 local Discovery = require("legado_server/discovery")
 local Reader = require("legado_server/reader")
 local logger = require("logger")
 local json = require("rapidjson")
+local time = require("ui/time")
 local T = require("ffi/util").template
 local _ = require("gettext")
 
 local Plugin = InputContainer:extend{ name = "legado_server", is_doc_only = false }
-local INBOX_CHECK_INTERVAL = 15 * 60
-local AUTO_SYNC_INTERVAL = 5 * 60
 local AUTO_RETRY_INTERVAL = 30
+-- KOReader recreates the plugin when switching between the reader and file
+-- manager. Keep one schedule and one worker for the entire KOReader process.
+local automatic_tasks = {
+    sync = { interval = 5 * 60, setting = "auto_sync" },
+    inbox = { interval = 15 * 60, setting = "auto_inbox" },
+}
+local active_plugin
+local worker_running = false
+
+local function cancel_automatic(task)
+    if task.callback then
+        UIManager:unschedule(task.callback)
+        task.callback = nil
+    end
+end
+
+local function finish_automatic(kind, result)
+    local task = automatic_tasks[kind]
+    local delay = task.interval
+    if result.ok then
+        task.retry_delay, task.retry_at = nil, nil
+    else
+        delay = math.min(task.interval, (task.retry_delay or AUTO_RETRY_INTERVAL / 2) * 2)
+        task.retry_delay = delay
+        task.retry_at = time.now() + time.s(delay)
+        logger.warn("Legado server background", kind, "failed:", tostring(result.code or "unknown"),
+            tostring(result.message or ""), "retry in", delay, "seconds")
+    end
+    if active_plugin then active_plugin:scheduleAutomatic(kind, delay) end
+end
 
 local function local_device_name()
     local loaded, Device = pcall(require, "device")
@@ -84,15 +113,16 @@ function Plugin:init()
     else
         self.storage_error = tostring(value)
     end
+    active_plugin = self
     if self.ui.menu then self.ui.menu:registerToMainMenu(self) end
-    self:scheduleInboxCheck(5)
-    self:scheduleAutoSync(5)
+    if not automatic_tasks.sync.callback then self:scheduleAutomatic("sync", 5) end
+    if not automatic_tasks.inbox.callback then self:scheduleAutomatic("inbox", 5) end
 end
 
 function Plugin:addToMainMenu(items)
     items.legado_server = {
         text = _("Legado server"),
-        sorting_hint = "main",
+        sorting_hint = "tools",
         sub_item_table = self:getMainMenuItems(),
     }
 end
@@ -233,118 +263,125 @@ function Plugin:withServerClient(operation)
         timeout = 1.5,
         port = settings.discovery_port,
     })
-    if not server then return result, err end
-    settings.server_url = server.server_url
-    settings.server_name = server.server_name
-    settings.discovery_port = server.discovery_port
-    local saved, save_err = self.store:save_settings(settings)
+    if not server or server.server_url == settings.server_url then return result, err end
+    local saved, save_err = self.store:update_settings(function(current)
+        current.server_url = server.server_url
+        current.server_name = server.server_name
+        current.discovery_port = server.discovery_port
+    end)
     if not saved then return nil, { code = "local_write_failed", message = save_err, retryable = true } end
-    self.settings = settings
-    self:invalidateMainMenuSummary()
-    return operation(client_for(settings))
+    return operation(client_for(saved))
 end
 
-function Plugin:run(message, task, finished, options)
-    options = options or {}
-    local automatic = options.automatic == true
-    if self.worker_running then
-        if not automatic then self:info(_("A server operation is already running.")) end
-        return false
+function Plugin:run(message, task, finished, automatic_kind)
+    local function run_task()
+        local called, result, err = pcall(task)
+        if called and result then return { ok = true, result = result } end
+        return {
+            ok = false,
+            code = type(err) == "table" and err.code or nil,
+            message = type(err) == "table" and err.message or tostring(err or result),
+        }
+    end
+    local function finish(result)
+        worker_running = false
+        if active_plugin then active_plugin:invalidateMainMenuSummary() end
+        for kind, scheduled in pairs(automatic_tasks) do
+            if scheduled.waiting then
+                scheduled.waiting = nil
+                if active_plugin then active_plugin:scheduleAutomatic(kind, 1) end
+            end
+        end
+        if automatic_kind then
+            finish_automatic(automatic_kind, result)
+        elseif result and active_plugin == self then
+            if not result.ok then
+                self:info(self:error_text(result))
+            elseif finished then
+                finished(result.result)
+            end
+        end
     end
     local function execute()
-        if self.worker_running then return false end
-        self.worker_running = true
-        if self.reader then self.reader:close() end
+        if self ~= active_plugin or self.suspended then return end
+        if worker_running then
+            if not automatic_kind then self:info(_("A server operation is already running.")) end
+            return
+        end
+        worker_running = true
+        if self.reader then
+            local saved, err = self.reader:close(automatic_kind ~= nil)
+            if automatic_kind and saved == nil then
+                logger.warn("Legado server could not save local reading progress:", tostring(err))
+            end
+        end
+        if automatic_kind then
+            Background.run(run_task, finish)
+            return
+        end
+        local Trapper = require("ui/trapper")
         Trapper:wrap(function()
-            local trap_widget
-            if not automatic then trap_widget = message end
             local completed, payload = Trapper:dismissableRunInSubprocess(function()
-                local called, result, err = pcall(task)
-                if called and result then return json.encode{ ok = true, result = result } end
-                return json.encode{
-                    ok = false,
-                    code = type(err) == "table" and err.code or nil,
-                    message = type(err) == "table" and err.message or tostring(err or result),
-                }
-            end, trap_widget, true)
-            self.worker_running = false
-            if not completed then return end
+                return json.encode(run_task())
+            end, message, true)
+            if not completed then
+                finish(nil)
+                return
+            end
             local decoded, result = pcall(json.decode, payload or "")
             if not decoded or type(result) ~= "table" then
-                if not automatic then self:info(_("Server operation returned no result.")) end
-                return
+                result = { ok = false, message = _("Server operation returned no result.") }
             end
-            if not result.ok then
-                if automatic then
-                    logger.warn("Legado server background operation failed:",
-                        tostring(result.code or "unknown"), tostring(result.message or ""))
-                else
-                    self:info(self:error_text(result))
-                end
-                return
-            end
-            if finished then finished(result.result) end
+            finish(result)
         end)
-        return true
     end
-    if automatic then return execute() end
-    NetworkMgr:runWhenConnected(execute)
+    if worker_running then
+        if not automatic_kind then self:info(_("A server operation is already running.")) end
+        return false
+    end
+    if automatic_kind then
+        execute()
+    else
+        NetworkMgr:runWhenConnected(execute)
+    end
     return true
 end
 
 function Plugin:autoInboxEnabled()
-    if not self.store then return false end
-    local settings = self.store:settings() or {}
-    return settings.auto_inbox ~= false
+    return self.settings ~= nil and self.settings.auto_inbox ~= false
 end
 
 function Plugin:setAutoInbox(enabled)
     if not self.store then self:info(self.storage_error); return end
-    local settings = self.store:settings()
-    if not settings then self:info(_("Cannot save push settings.")); return end
-    settings.auto_inbox = enabled == true
-    local saved, err = self.store:save_settings(settings)
+    local saved, err = self.store:update_settings(function(settings)
+        settings.auto_inbox = enabled == true
+    end)
     if not saved then self:info(err); return end
+    self.settings = saved
     self:invalidateMainMenuSummary()
     if enabled then
-        self:scheduleInboxCheck(1)
+        self:scheduleAutomatic("inbox", 1)
     else
-        if self.inbox_check_job then
-            UIManager:unschedule(self.inbox_check_job)
-            self.inbox_check_job = nil
-        end
-        if self.inbox_retry_job then
-            UIManager:unschedule(self.inbox_retry_job)
-            self.inbox_retry_job = nil
-        end
+        cancel_automatic(automatic_tasks.inbox)
     end
 end
 
 function Plugin:autoSyncEnabled()
-    if not self.store then return false end
-    local settings = self.store:settings() or {}
-    return settings.auto_sync ~= false
+    return self.settings ~= nil and self.settings.auto_sync ~= false
 end
 
 function Plugin:setAutoSync(enabled)
     if not self.store then self:info(self.storage_error); return end
-    local settings = self.store:settings()
-    if not settings then self:info(_("Cannot save automatic sync settings.")); return end
-    settings.auto_sync = enabled == true
-    local saved, err = self.store:save_settings(settings)
+    local saved, err = self.store:update_settings(function(settings)
+        settings.auto_sync = enabled == true
+    end)
     if not saved then self:info(err); return end
+    self.settings = saved
     self:invalidateMainMenuSummary()
     if enabled then
-        self:scheduleAutoSync(1)
+        self:scheduleAutomatic("sync", 1)
     else
-        if self.auto_sync_job then
-            UIManager:unschedule(self.auto_sync_job)
-            self.auto_sync_job = nil
-        end
-        if self.auto_sync_retry_job then
-            UIManager:unschedule(self.auto_sync_retry_job)
-            self.auto_sync_retry_job = nil
-        end
+        cancel_automatic(automatic_tasks.sync)
     end
 end
 
@@ -380,78 +417,45 @@ function Plugin:isNetworkReady()
     return false
 end
 
-function Plugin:scheduleInboxCheck(delay)
-    if not self:autoInboxEnabled() then return end
-    delay = delay or INBOX_CHECK_INTERVAL
-    if self.inbox_check_job then
-        if delay >= INBOX_CHECK_INTERVAL then return end
-        UIManager:unschedule(self.inbox_check_job)
-        self.inbox_check_job = nil
-    end
-    logger.dbg("Legado server inbox timer scheduled in", tostring(delay), "seconds")
-    self.inbox_check_job = UIManager:scheduleIn(delay, function()
-        logger.dbg("Legado server inbox timer fired")
-        self.inbox_check_job = nil
-        self:autoCheckInbox()
-        self:scheduleInboxCheck(INBOX_CHECK_INTERVAL)
-    end)
+function Plugin:canScheduleAutomatic(kind)
+    return self == active_plugin and not self.suspended and not self.storage_error
+        and self.settings and self.settings.server_url and self.settings.device_token
+        and self.settings[automatic_tasks[kind].setting] ~= false
+        and (kind ~= "inbox" or not self.ui.document)
 end
 
-function Plugin:scheduleAutoSync(delay)
-    if not self:autoSyncEnabled() then return end
-    delay = delay or AUTO_SYNC_INTERVAL
-    if self.auto_sync_job then
-        if delay >= AUTO_SYNC_INTERVAL then return end
-        UIManager:unschedule(self.auto_sync_job)
-        self.auto_sync_job = nil
+function Plugin:scheduleAutomatic(kind, delay)
+    if not self:canScheduleAutomatic(kind) then return end
+    local task = automatic_tasks[kind]
+    local when = time.now() + time.s(delay)
+    if task.retry_at and when < task.retry_at then when = task.retry_at end
+    if task.callback and task.when <= when then return end
+    cancel_automatic(task)
+    -- unschedule() takes the original callback, not schedule()'s return value.
+    task.when = when
+    task.callback = function()
+        task.callback = nil
+        if active_plugin then active_plugin:runAutomatic(kind) end
     end
-    logger.dbg("Legado server sync timer scheduled in", tostring(delay), "seconds")
-    self.auto_sync_job = UIManager:scheduleIn(delay, function()
-        logger.dbg("Legado server sync timer fired")
-        self.auto_sync_job = nil
-        self:autoSync()
-        self:scheduleAutoSync(AUTO_SYNC_INTERVAL)
-    end)
+    UIManager:schedule(when, task.callback)
 end
 
-function Plugin:autoCheckInbox()
-    if self.ui.document or not self:autoInboxEnabled() then return end
+function Plugin:runAutomatic(kind)
+    if not self:canScheduleAutomatic(kind) then return end
+    local retry_at = automatic_tasks[kind].retry_at
+    if retry_at and time.now() < retry_at then
+        self:scheduleAutomatic(kind, 0)
+        return
+    end
+    if worker_running then
+        automatic_tasks[kind].waiting = true
+        return
+    end
     if not self:isNetworkReady() then
-        self:scheduleInboxCheck(AUTO_RETRY_INTERVAL)
+        self:scheduleAutomatic(kind, AUTO_RETRY_INTERVAL)
         return
     end
-    if self.worker_running then
-        if not self.inbox_retry_job then
-            self.inbox_retry_job = UIManager:scheduleIn(AUTO_RETRY_INTERVAL, function()
-                self.inbox_retry_job = nil
-                self:autoCheckInbox()
-            end)
-        end
-        return
-    end
-    local settings = self.store and self.store:settings()
-    if not settings or not settings.device_token then return end
-    self:pullInbox(true)
-end
-
-function Plugin:autoSync()
-    if not self:autoSyncEnabled() then return end
-    if not self:isNetworkReady() then
-        self:scheduleAutoSync(AUTO_RETRY_INTERVAL)
-        return
-    end
-    if self.worker_running then
-        if not self.auto_sync_retry_job then
-            self.auto_sync_retry_job = UIManager:scheduleIn(AUTO_RETRY_INTERVAL, function()
-                self.auto_sync_retry_job = nil
-                self:autoSync()
-            end)
-        end
-        return
-    end
-    local settings = self.store and self.store:settings()
-    if not settings or not settings.device_token then return end
-    self:sync(true)
+    if kind == "sync" then self:sync(true) else self:pullInbox(true) end
 end
 
 function Plugin:pullInbox(automatic)
@@ -461,42 +465,38 @@ function Plugin:pullInbox(automatic)
             return self:withServerClient(function(client) return client:pull_inbox() end)
         end,
         function(result)
-            self:invalidateMainMenuSummary()
-            if automatic and result.downloaded == 0 and result.failed == 0 then return end
             if result.failed > 0 then
                 self:info(T(_("Pushed books: %1 downloaded, %2 will retry."), result.downloaded, result.failed))
             else
                 self:info(T(_("Pushed books received: %1"), result.downloaded))
             end
         end,
-        { automatic = automatic }
+        automatic and "inbox" or nil
     )
 end
 
 function Plugin:sync(automatic)
     self:run(_("Syncing bookshelf and reading progress…"), function()
-        return self:withServerClient(function(client)
-            local synced, sync_err = client:sync_all()
-            if not synced then
+        local synced, sync_err = self:withServerClient(function(client) return client:sync_all() end)
+        if not synced then
+            if self.store then
                 self.store:record_sync_result(type(sync_err) == "table" and sync_err.message or tostring(sync_err), nil)
-                return nil, sync_err
             end
-            local saved, save_err = self.store:record_sync_result(nil, synced.conflicts)
-            if not saved then
-                return nil, { code = "local_write_failed", message = save_err, retryable = true }
-            end
-            return synced
-        end)
+            return nil, sync_err
+        end
+        local saved, save_err = self.store:record_sync_result(nil, synced.conflicts)
+        if not saved then
+            return nil, { code = "local_write_failed", message = save_err, retryable = true }
+        end
+        return synced
     end, function(result)
-        self:invalidateMainMenuSummary()
-        if automatic then return end
         if result.conflict_count > 0 then
             self:info(T(_("Sync complete. %1 progress events sent; %2 conflicts need attention."),
                 result.progress_sent, result.conflict_count))
         else
             self:info(T(_("Sync complete. %1 progress events sent."), result.progress_sent))
         end
-    end, { automatic = automatic == true })
+    end, automatic and "sync" or nil)
 end
 
 function Plugin:sendProgress()
@@ -583,7 +583,7 @@ function Plugin:showSyncCenter()
             end,
         },
     }
-    menu = Menu:new{
+    menu = MenuPage:new{
         title = _("Sync Center"),
         item_table = items,
         items_per_page = 8,
@@ -648,7 +648,7 @@ function Plugin:showServer()
             },
         }
     end
-    menu = Menu:new{
+    menu = MenuPage:new{
         title = _("Server"),
         item_table = items,
         items_per_page = 8,
@@ -672,16 +672,15 @@ function Plugin:renderConflicts(conflicts)
     local items = {}
     for conflict_index, conflict in ipairs(conflicts) do
         items[#items + 1] = {
-            text = tostring(conflict.title or conflict.book_id),
-            mandatory = T(_("Server: %1 · Kindle: %2"),
+            text = tostring(conflict.title or conflict.book_id) .. " · " .. T(_("Server: %1 · Kindle: %2"),
                 conflict_position_text(conflict.current), conflict_position_text(conflict.candidate)),
             conflict = conflict,
         }
     end
-    local menu
-    menu = Menu:new{
+    local menu = MenuPage:new{
         title = _("Reading progress conflicts"),
         item_table = items,
+        items_max_lines = 3,
         onMenuSelect = function(instance, item)
             UIManager:close(instance)
             local conflict = item.conflict
@@ -749,8 +748,9 @@ function Plugin:showBooks()
     if #books == 0 then self:info(_("No published books are stored. Publish from the WebUI and sync this Kindle.")); return end
     local active = self.reader and self.reader:session()
     local active_book_id = active and active.book_id or nil
-    local progress_snapshot = self.store:progress_snapshot()
-    local items = {}
+    local progress_snapshot = self.store:progress_snapshot() or false
+    local synced_groups = self.store:shelf_reading_groups()
+    local items_by_group = { all = {}, read = {}, unread = {}, reading = {} }
     for book_index, book in ipairs(books) do
         local progress = self.reader and self.reader:reading_progress(
             book, active_book_id == book.book_id and active or false, progress_snapshot)
@@ -758,19 +758,33 @@ function Plugin:showBooks()
             and T(_("%1/%2 · %3%"), progress.lua_position, progress.total_chapters,
                 display_percent(progress.percent)) or _("No chapters")
         local author = type(book.author) == "string" and book.author ~= "" and book.author or nil
-        items[#items + 1] = {
+        local item = {
             text = author and (book.title .. "\n" .. author) or book.title,
             mandatory = progress_text,
             book_id = book.book_id,
             bold = active_book_id == book.book_id,
         }
+        items_by_group.all[#items_by_group.all + 1] = item
+        local groups = synced_groups and synced_groups[book.book_id]
+        if not synced_groups then
+            -- Offline shelves and older servers only provide the published TOC and position.
+            local index = progress and progress.chapter_index or 0
+            local total = book.chapter_count
+            groups = {
+                unread = index == 0 and (not progress or progress.chapter_progress == 0),
+                reading = total > 0 and index > 0 and index < total - 1,
+                read = total > 0 and index >= total - 1,
+            }
+        end
+        if type(groups) == "table" then
+            if groups.read then items_by_group.read[#items_by_group.read + 1] = item end
+            if groups.unread then items_by_group.unread[#items_by_group.unread + 1] = item end
+            if groups.reading then items_by_group.reading[#items_by_group.reading + 1] = item end
+        end
     end
-    local menu
-    menu = Menu:new{
-        title = _("My Books\nTap to resume · Hold for chapters"),
-        item_table = items,
-        items_per_page = 12,
-        items_max_lines = 3,
+    local Bookshelf = require("legado_server/bookshelf")
+    local menu = Bookshelf:new{
+        items_by_group = items_by_group,
         onMenuSelect = function(instance, item)
             UIManager:close(instance)
             self:openBook(item.book_id)
@@ -785,11 +799,7 @@ function Plugin:showBooks()
 end
 
 function Plugin:openBook(book_id)
-    local book, err = self.store:book(book_id)
-    if not book then self:info(err); return end
-    local position = self.reader:current_position(book)
-    if not position then self:info(_("No chapters have been published yet.")); return end
-    local opened, open_err = self.reader:open(book_id, position, { resume = true })
+    local opened, open_err = self.reader:open(book_id, nil, { resume = true })
     if not opened then self:info(open_err) end
 end
 
@@ -817,16 +827,20 @@ function Plugin:showPushedBooks()
     local items = {
         {
             text = _("Check for new pushes"),
-            mandatory = books and T(_("Count: %1"), #books) or nil,
+            mandatory = T(_("Count: %1"), #books),
             action = "pull",
         },
     }
     for book_index, book in ipairs(books) do
-        for file_index, file in ipairs(book.files or {}) do
-            local label = #book.files > 1 and (book.title .. " [" .. tostring(file_index) .. "]") or book.title
+        local files = book.files or {}
+        local multiple_files = #files > 1
+        local author = type(book.author) == "string" and book.author ~= "" and book.author or nil
+        for file_index, file in ipairs(files) do
+            -- KOReader subtracts the full width of the right-hand label from the title column.
+            local label = multiple_files and type(file.file_name) == "string" and file.file_name or book.title
             items[#items + 1] = {
-                text = book.author and (label .. "\n" .. book.author) or label,
-                mandatory = file.file_name,
+                text = author and (label .. " · " .. author) or label,
+                mandatory = multiple_files and T("%1/%2", file_index, #files) or nil,
                 path = file.path,
             }
         end
@@ -834,11 +848,10 @@ function Plugin:showPushedBooks()
     if #books == 0 then
         items[#items + 1] = {
             text = _("No pushed books have been received."),
-            mandatory = _("Empty"),
+            dim = true,
         }
     end
-    local menu
-    menu = Menu:new{
+    local menu = MenuPage:new{
         title = T(_("Pushed Books · %1"), #books),
         item_table = items,
         items_per_page = 12,
@@ -847,10 +860,10 @@ function Plugin:showPushedBooks()
             if item.action == "pull" then
                 UIManager:close(instance)
                 self:pullInbox(false)
-                return
+            elseif item.path then
+                UIManager:close(instance)
+                self:openPushed(item.path)
             end
-            UIManager:close(instance)
-            self:openPushed(item.path)
         end,
     }
     UIManager:show(menu)
@@ -873,7 +886,7 @@ function Plugin:showChapters(book_id, parent_menu)
         }
     end
     items.current = current
-    local menu = Menu:new{
+    local menu = MenuPage:new{
         title = book.title .. "\n" .. _("Table of Contents"),
         item_table = items,
         items_per_page = 12,
@@ -919,8 +932,8 @@ function Plugin:pairDiscovered(server)
             self.reader.device_id = self.settings.device_id
             self:invalidateMainMenuSummary()
             self:info(T(_("Kindle paired with %1."), server.server_name))
-            self:scheduleInboxCheck(1)
-            self:scheduleAutoSync(1)
+            self:scheduleAutomatic("sync", 1)
+            self:scheduleAutomatic("inbox", 1)
         end)
     end, true)
 end
@@ -933,15 +946,14 @@ function Plugin:showDiscoveredServers(servers)
     local items = {}
     for server_index, server in ipairs(servers) do
         items[#items + 1] = {
-            text = server.server_name,
-            mandatory = server.server_url,
+            text = server.server_name .. " · " .. server.server_url,
             server = server,
         }
     end
-    local menu
-    menu = Menu:new{
+    local menu = MenuPage:new{
         title = _("Legado servers on this LAN"),
         item_table = items,
+        items_max_lines = 3,
         onMenuSelect = function(instance, item)
             UIManager:close(instance)
             self:pairDiscovered(item.server)
@@ -966,7 +978,7 @@ function Plugin:findServer()
 end
 
 function Plugin:forgetServer(parent_menu)
-    if self.worker_running then self:info(_("Wait for the current server operation to finish.")); return end
+    if worker_running then self:info(_("Wait for the current server operation to finish.")); return end
     if not self.store then self:info(self.storage_error); return end
     local settings = self.store:settings() or {}
     if not settings.device_token and not settings.device_id and not settings.server_id then
@@ -977,6 +989,7 @@ function Plugin:forgetServer(parent_menu)
         text = _("Forget the server pairing? Downloaded books and reading state will be kept on this Kindle."),
         ok_text = _("Forget"),
         ok_callback = function()
+            if worker_running then self:info(_("Wait for the current server operation to finish.")); return end
             local cleared, clear_err = self.store:forget_server_pairing()
             if not cleared then self:info(clear_err); return end
             settings.server_url = nil
@@ -987,6 +1000,10 @@ function Plugin:forgetServer(parent_menu)
             local saved, save_err = self.store:save_settings(settings)
             if not saved then self:info(save_err); return end
             self.settings = settings
+            for kind, task in pairs(automatic_tasks) do
+                cancel_automatic(task)
+                task.retry_at, task.retry_delay = nil, nil
+            end
             if self.reader then self.reader.device_id = nil end
             self:invalidateMainMenuSummary()
             if parent_menu then UIManager:close(parent_menu) end
@@ -1017,8 +1034,8 @@ function Plugin:showPairing()
                 self.reader.device_id = self.settings.device_id
                 self:invalidateMainMenuSummary()
                 self:info(_("Kindle paired. Sync published books to begin."))
-                self:scheduleInboxCheck(1)
-                self:scheduleAutoSync(1)
+                self:scheduleAutomatic("sync", 1)
+                self:scheduleAutomatic("inbox", 1)
             end)
         end, true)
     end)
@@ -1027,29 +1044,40 @@ end
 function Plugin:onReaderReady() if self.reader then self.reader:ready() end end
 function Plugin:onPageUpdate()
     if self.reader then self.reader:page_changed() end
-    self:scheduleAutoSync(AUTO_SYNC_INTERVAL)
 end
 function Plugin:onPosUpdate()
     if self.reader then self.reader:page_changed() end
-    self:scheduleAutoSync(AUTO_SYNC_INTERVAL)
 end
-function Plugin:onSaveSettings() if self.reader and not self.worker_running then self.reader:capture() end end
+function Plugin:onSaveSettings() if self.reader and not worker_running then self.reader:capture() end end
 function Plugin:onCloseDocument()
-    if self.reader then self.reader:close() end
-    self:scheduleInboxCheck(3)
-    self:scheduleAutoSync(1)
+    if self.reader and self.reader:session() then
+        self.reader:close()
+        self:scheduleAutomatic("sync", 1)
+    end
+end
+function Plugin:onCloseWidget()
+    if self.reader then self.reader:cancel_capture() end
+    if self == active_plugin then active_plugin = nil end
 end
 function Plugin:onSuspend()
+    self.suspended = true
+    if self == active_plugin then
+        cancel_automatic(automatic_tasks.sync)
+        cancel_automatic(automatic_tasks.inbox)
+    end
     if self.reader then self.reader:close() end
-    self:scheduleAutoSync(1)
 end
 function Plugin:onResume()
-    self:scheduleInboxCheck(2)
-    self:scheduleAutoSync(2)
+    self.suspended = false
+    self:scheduleAutomatic("sync", 2)
+    self:scheduleAutomatic("inbox", 2)
 end
 function Plugin:onNetworkConnected()
-    self:scheduleInboxCheck(2)
-    self:scheduleAutoSync(2)
+    if self ~= active_plugin then return end
+    for kind, task in pairs(automatic_tasks) do
+        task.retry_at, task.retry_delay = nil, nil
+        self:scheduleAutomatic(kind, 2)
+    end
 end
 
 return Plugin

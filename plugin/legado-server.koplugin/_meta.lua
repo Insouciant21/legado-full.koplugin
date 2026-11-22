@@ -47,5 +47,5 @@ local _ = GetText
 return {
     fullname = _("Legado server"),
     description = _("Sync published books and read offline with KOReader"),
-version = "0.3.4",
+    version = "0.3.10",
 }

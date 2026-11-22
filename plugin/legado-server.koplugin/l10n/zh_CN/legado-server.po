@@ -427,13 +427,25 @@ msgstr "%1/%2 · %3%"
 msgid "No chapters"
 msgstr "无章节"
 
-#: plugin/legado-server.koplugin/main.lua:772
-msgid ""
-"My Books\n"
-"Tap to resume · Hold for chapters"
-msgstr ""
-"我的书架\n"
-"点按续读 · 长按目录"
+#: plugin/legado-server.koplugin/legado_server/bookshelf.lua:73
+msgid "Tap to resume · Hold for chapters"
+msgstr "点按续读 · 长按目录"
+
+msgctxt "Bookshelf tab"
+msgid "All"
+msgstr "全部"
+
+msgctxt "Bookshelf tab"
+msgid "Read"
+msgstr "已读"
+
+msgctxt "Bookshelf tab"
+msgid "Unread"
+msgstr "未读"
+
+msgctxt "Bookshelf tab"
+msgid "Reading"
+msgstr "在读"
 
 #: plugin/legado-server.koplugin/main.lua:793
 #: plugin/legado-server.koplugin/main.lua:865

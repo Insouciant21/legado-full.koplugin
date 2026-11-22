@@ -3,6 +3,7 @@
 local Digest = require("legado_server/digest")
 local Store = {}
 Store.__index = Store
+local JSON_LIMIT = 16 * 1024 * 1024
 
 local function checked(callback)
     local ok, value, other = pcall(callback)
@@ -68,6 +69,7 @@ function Store.new(options)
         root = options.root:gsub("/+$", ""),
         fs = options.fs or require("legado_server/fs").new(),
         json = options.json or require("rapidjson"),
+        use_native_book_lookup = not options.fs,
         digest_file = options.digest_file or Digest.file,
         archive_open = options.archive_open,
         max_bundle_bytes = options.max_bundle_bytes or 16 * 1024 * 1024,
@@ -93,7 +95,7 @@ end
 function Store:_load(name, default)
     local path = self.root .. "/" .. name .. ".json"
     if not self.fs:exists(path) then return copy(default) end
-    local data, err = self.fs:read(path, 16 * 1024 * 1024)
+    local data, err = self.fs:read(path, JSON_LIMIT)
     need(data, err)
     local ok, decoded = pcall(self.json.decode, data)
     need(ok and type(decoded) == "table", "invalid persisted " .. name)
@@ -132,6 +134,17 @@ function Store:save_settings(settings)
     return checked(function() return self:_save("settings", settings) end)
 end
 
+function Store:update_settings(update)
+    return checked(function()
+        return self.fs:with_lock(self.root .. "/settings-update.lock", function()
+            local settings = self:_load("settings", {})
+            update(settings)
+            need(self:_save("settings", settings))
+            return settings
+        end)
+    end)
+end
+
 -- Clear protocol state that belongs to one server/device pairing. Published
 -- content, pushed books and local reading positions intentionally remain.
 function Store:forget_server_pairing()
@@ -147,6 +160,7 @@ function Store:forget_server_pairing()
         state.conflict_count = 0
         state.conflicts = self:array()
         need(self:_save("state", state))
+        need(self:save_shelf_reading_groups(nil))
 
         local inbox = self:inbox_state()
         inbox.cursor = "0"
@@ -267,6 +281,7 @@ function Store:confirm_inbox_ack(cursor)
         need(type(cursor) == "string" and cursor:match("^%d+$"), "invalid inbox acknowledgement")
         local state = self:inbox_state()
         need(state, "cannot load pushed-book state")
+        if state.cursor == cursor then return true end
         state.cursor = cursor
         return self:_save("inbox", state)
     end)
@@ -402,13 +417,19 @@ function Store:_apply_sync_meta(state, meta)
     return state
 end
 
-function Store:_sync_meta()
+function Store:_sync_meta(read_only)
     return checked(function()
-        local revision = self:_load("state-revision", {})
         local meta = self:_load("sync-meta", {})
+        if read_only then
+            if self:_valid_sync_meta(meta) then return meta end
+            return self:state()
+        end
+        local revision = self:_load("state-revision", {})
+        local metadata = self:_state_metadata()
         if self:_valid_sync_meta(meta)
-                and type(revision.revision) == "string"
-                and revision.revision == meta.state_revision then
+                and revision.revision == meta.state_revision
+                and metadata and revision.size == metadata.size
+                and revision.modification == metadata.modification then
             return meta
         end
 
@@ -417,7 +438,6 @@ function Store:_sync_meta()
         -- the KB-sized sidecar.
         local state = self:state()
         need(state, "cannot migrate synchronization metadata")
-        local metadata = self:_state_metadata()
         need(metadata, "cannot inspect published shelf state")
         local revision_value = state.state_revision
             or ("legacy-" .. tostring(metadata.size) .. "-"
@@ -438,24 +458,9 @@ function Store:sync_meta()
     return self:_sync_meta()
 end
 
-function Store:_update_shelf_sync_metadata(meta)
-    local cache = self._shelf_index_cache
-    if cache then
-        cache.conflict_count = meta.conflict_count or 0
-        cache.last_sync_at = meta.last_sync_at
-        cache.last_sync_error = meta.last_sync_error
-    end
-    local loaded, index = pcall(self._load, self, "shelf-index")
-    if not loaded or type(index) ~= "table" then return end
-    index.conflict_count = meta.conflict_count or 0
-    index.last_sync_at = meta.last_sync_at
-    index.last_sync_error = meta.last_sync_error
-    pcall(self._save, self, "shelf-index", index)
-end
-
-function Store:_write_shelf_index(state)
+function Store:_write_shelf_index(state, metadata)
     local snapshot = self:_summarize_state(state)
-    local metadata = self:_state_metadata()
+    metadata = metadata or self:_state_metadata()
     need(metadata, "cannot inspect published shelf state")
     local value = {
         protocol_version = 1,
@@ -480,7 +485,7 @@ end
 
 function Store:_shelf_snapshot(active_book_id)
     local metadata = self:_state_metadata()
-    need(metadata, "published shelf state is unavailable")
+    if not metadata then return { books = {}, conflict_count = 0 } end
     local cache = self._shelf_index_cache
     if not cache or cache.source_size ~= metadata.size
             or cache.source_modification ~= metadata.modification then
@@ -501,7 +506,7 @@ function Store:_shelf_snapshot(active_book_id)
         else
             local state, state_err = self:state()
             need(state, state_err)
-            need(self:_write_shelf_index(state))
+            need(self:_write_shelf_index(state, metadata))
             cache = self._shelf_index_cache
             state = nil
             collectgarbage("collect")
@@ -533,12 +538,46 @@ function Store:book_summaries()
     end)
 end
 
+function Store:shelf_reading_groups()
+    return checked(function() return self:_load("shelf-reading-groups") end)
+end
+
+-- Group membership follows the server shelf independently of the downloaded EPUBs.
+function Store:save_shelf_reading_groups(groups)
+    return checked(function()
+        if self:is_null(groups) then
+            return self.fs:remove(self.root .. "/shelf-reading-groups.json")
+        end
+        need(type(groups) == "table", "invalid shelf reading groups")
+        local previous = self:shelf_reading_groups()
+        local changed = previous == nil
+        for book_id, group in pairs(groups) do
+            need(identifier(book_id) and type(group) == "table" and type(group.read) == "boolean"
+                and type(group.reading) == "boolean" and type(group.unread) == "boolean", "invalid shelf reading group")
+            local old = previous and previous[book_id]
+            changed = changed or type(old) ~= "table" or old.read ~= group.read
+                or old.reading ~= group.reading or old.unread ~= group.unread
+        end
+        if not changed then
+            for book_id in pairs(previous) do
+                if groups[book_id] == nil then
+                    changed = true
+                    break
+                end
+            end
+        end
+        if changed then return self:_save("shelf-reading-groups", groups) end
+        return true
+    end)
+end
+
 -- Menu badges need one shelf parse for several counters. Return only summary
 -- scalars and the one currently open book so the full chapter graph can be
 -- released immediately after the menu is built.
 function Store:dashboard(active_book_id)
     return checked(function()
         local shelf = self:_shelf_snapshot(active_book_id)
+        local sync = self:_sync_meta(true) or shelf
         local progress = self:_progress()
         local pending = {}
         for event_index, event in ipairs(progress.pending) do
@@ -563,21 +602,43 @@ function Store:dashboard(active_book_id)
             },
             inbox_count = inbox_count,
             pending_progress = #progress.pending,
-            conflict_count = shelf.conflict_count,
-            last_sync_at = shelf.last_sync_at,
-            last_sync_error = shelf.last_sync_error,
+            conflict_count = sync.conflict_count or 0,
+            last_sync_at = sync.last_sync_at,
+            last_sync_error = sync.last_sync_error,
             paired = not self:is_null(settings.server_url) and not self:is_null(settings.device_token),
             server_name = not self:is_null(settings.server_name) and settings.server_name or nil,
         }
-        collectgarbage("collect")
         return dashboard
     end)
 end
 
 function Store:book(book_id)
+    local unavailable = "published book is not available locally"
+    if not identifier(book_id) then return nil, unavailable end
+    if self.use_native_book_lookup and type(self.json.Document) == "function" then
+        return checked(function()
+            local metadata = self:_state_metadata()
+            if not metadata then return nil, unavailable end
+            need(metadata.size <= JSON_LIMIT, "local file exceeds size limit")
+            -- Parse the file in RapidJSON. Only convert the requested book and
+            -- chapters into Lua tables, without allocating all other books.
+            local document = self.json.Document()
+            local parsed, err = document:parseFile(self.root .. "/state.json")
+            local valid = parsed and document:get("/protocol_version") == 1
+            local pointer = "/books/" .. book_id:gsub("~", "~0"):gsub("/", "~1")
+            local book = valid and document:get(pointer) or nil
+            document = nil
+            -- LuaJIT cannot account for allocations inside the RapidJSON DOM.
+            if metadata.size >= 1024 * 1024 then collectgarbage("collect") end
+            need(parsed, err)
+            need(valid, "unsupported local shelf version")
+            if type(book) ~= "table" or book.book_id ~= book_id then return nil, unavailable end
+            return book
+        end)
+    end
     local state, err = self:state()
     if not state then return nil, err end
-    return state.books[book_id], "published book is not available locally"
+    return state.books[book_id], unavailable
 end
 
 function Store:content_path(hash)
@@ -645,7 +706,6 @@ function Store:install_book_epub(book_id, descriptor, fetch)
                 need(self:_record_epub_verification(book_id, descriptor))
                 return true
             end
-            need(self.fs:remove(target))
         end
         local pending = target .. ".part"
         local resume = self.fs:exists(pending) and self.fs:size(pending) or 0
@@ -969,7 +1029,6 @@ function Store:confirm_ack(response)
         meta.last_sync_id = meta.pending_ack.sync_id
         meta.pending_ack = nil
         need(self:_save("sync-meta", meta))
-        self:_update_shelf_sync_metadata(meta)
         return true
     end)
 end
@@ -1018,20 +1077,6 @@ function Store:queue_progress(device_id, event, local_position)
     end)
 end
 
-function Store:progress_position(book_id)
-    return checked(function() return self:_progress().positions[book_id] end)
-end
-
-function Store:pending_progress_position(book_id)
-    return checked(function()
-        local data, latest = self:_progress(), nil
-        for event_index, event in ipairs(data.pending) do
-            if event.book_id == book_id then latest = event end
-        end
-        return latest
-    end)
-end
-
 function Store:progress_snapshot()
     return checked(function()
         local data = self:_progress()
@@ -1044,17 +1089,6 @@ function Store:progress_snapshot()
             positions = data.positions,
             versions = data.versions,
         }
-    end)
-end
-
-function Store:progress_position_matches_remote(book_id, remote)
-    return checked(function()
-        if type(remote) ~= "table" or not identifier(remote.progress_version) then return false end
-        local data = self:_progress()
-        local version, position = data.versions[book_id], data.positions[book_id]
-        return type(version) == "table" and type(position) == "table"
-            and version.device_seq == position.device_seq
-            and version.progress_version == remote.progress_version
     end)
 end
 
@@ -1074,7 +1108,7 @@ end
 
 function Store:sync_status()
     return checked(function()
-        local meta, meta_err = self:_sync_meta()
+        local meta, meta_err = self:_sync_meta(true)
         need(meta, meta_err)
         local progress, progress_err = self:progress_summary()
         need(progress, progress_err)
@@ -1106,7 +1140,6 @@ function Store:record_sync_result(error_message, conflicts)
             meta.conflict_count = #conflicts
         end
         need(self:_save("sync-meta", meta))
-        self:_update_shelf_sync_metadata(meta)
         return true
     end)
 end
@@ -1119,7 +1152,6 @@ function Store:record_conflicts(conflicts)
         meta.conflicts = copy(conflicts)
         meta.conflict_count = #conflicts
         need(self:_save("sync-meta", meta))
-        self:_update_shelf_sync_metadata(meta)
         return true
     end)
 end
