@@ -1,8 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Button,
+  Checkbox,
+  Collapse,
+  Group,
+  Menu,
+  Modal,
+  Paper,
+  Popover,
+  ScrollArea,
+  Select,
+  Stack,
+  Text,
+  TextInput,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { api, type ImportResponse, type NetworkImportPreview } from './api'
 import { Icon } from './icons'
-import { ButtonSpinner } from './ButtonSpinner'
 
 /** 「不分组」用的哨兵：与真实分组名区分开。 */
 const NO_GROUP = ''
@@ -104,22 +121,6 @@ export const NetworkImportModal: React.FC<NetworkImportModalProps> = ({
     void runPreview(initialUrl)
   }, [initialUrl, localMode, runPreview])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      // 本弹窗可能被挂在**外层弹窗的遮罩内部**（例如内置浏览器里点「更新书源」线路唤出），
-      // 因此必须把 Escape 就地吃掉，避免继续传播给外层监听。
-      //
-      // ⚠️ 注意 `stopImmediatePropagation()` 只能拦住**注册更晚**的监听器：同一个 target 上
-      // 的监听器按注册顺序触发，外层的 useEffect 先跑 ⇒ 它的监听器先注册。
-      // 真正防住连带关闭的是外层不注册 Escape（现状如此，实测已验证），这里只是兜底。
-      event.stopImmediatePropagation()
-      onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
-
   const selectable = useMemo(
     () => (preview?.sources ?? []).filter(item => item.status !== 'invalid'),
     [preview],
@@ -168,106 +169,130 @@ export const NetworkImportModal: React.FC<NetworkImportModalProps> = ({
   const groupLabel = effectiveGroup || t('source.networkImportKeepGroup', '沿用原分组')
 
   return (
-    // ⚠️ `stopPropagation` 不是可选项：本弹窗被挂成**外层弹窗遮罩的 DOM 子节点**
-    // （SourceLoginModal 里 `<div className="modal-backdrop" onClick={onClose}>` → 本弹窗），
-    // 不阻止冒泡的话，点一下本弹窗的遮罩会连带把外层登录弹窗与内置浏览器**一起关掉**。
-    // 实测复现：点击前 login/webview/network 三层都在，点击后三层的遮罩数从 3 变 0。
-    <div className="modal-backdrop" onClick={event => { event.stopPropagation(); onClose() }}>
-      <div className="network-import-modal" onClick={event => event.stopPropagation()}>
-        <header className="network-import-header">
-          <h3 className="network-import-title">{t('source.networkImportTitle', '导入书源')}</h3>
-          <div className="network-import-header-actions">
-            <button
-              type="button"
-              className="network-import-group-btn"
-              title={t('source.networkImportCustomGroupHint', '选择本次导入的目标分组')}
-              onClick={() => { setGroupOpen(open => !open); setMenuOpen(false) }}
-            >
-              {t('source.networkImportCustomGroup', '自定义源分组')}
-              {effectiveGroup ? <span className="network-import-group-current">{groupLabel}</span> : null}
-            </button>
-            <button
-              type="button"
-              className="network-import-more-btn"
-              aria-label={t('common.more', '更多')}
-              onClick={() => { setMenuOpen(open => !open); setGroupOpen(false) }}
-            >
-              <Icon name="more" />
-            </button>
-          </div>
-        </header>
+    <Modal
+      opened
+      onClose={onClose}
+      size="lg"
+      zIndex={360}
+      withCloseButton={false}
+      padding="lg"
+    >
+      <Stack gap="md">
+        <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+          <Group gap="xs">
+            <Icon name="cloudDownload" size={18} />
+            <Text fw={700} size="lg">{t('source.networkImportTitle', '导入书源')}</Text>
+          </Group>
 
-        {groupOpen && (
-          <div className="network-import-popover">
-            <select
-              className="network-import-group-select"
-              value={groupChoice}
-              onChange={event => setGroupChoice(event.target.value)}
+          <Group gap="xs">
+            <Popover
+              opened={groupOpen}
+              onChange={setGroupOpen}
+              position="bottom-end"
+              width={290}
+              shadow="md"
+              withinPortal={false}
+              zIndex={380}
             >
-              <option value={NO_GROUP}>{t('source.networkImportKeepGroup', '沿用原分组')}</option>
-              {groups.filter(Boolean).map(name => <option key={name} value={name}>{name}</option>)}
-              <option value={NEW_GROUP}>{t('source.networkImportNewGroup', '新建分组…')}</option>
-            </select>
-            {groupChoice === NEW_GROUP && (
-              <input
-                className="network-import-group-input"
-                placeholder={t('source.networkImportGroupNamePlaceholder', '输入新分组名')}
-                value={newGroupName}
-                onChange={event => setNewGroupName(event.target.value)}
-              />
-            )}
-            <p className="network-import-popover-hint">
-              {t('source.networkImportGroupHint', '不手动选择时，新书源沿用文件分组，已有书源保留当前分组。')}
-            </p>
-          </div>
+              <Popover.Target>
+                <Button
+                  size="xs"
+                  variant={effectiveGroup ? 'light' : 'default'}
+                  color={effectiveGroup ? 'brand' : 'gray'}
+                  leftSection={<Icon name="folder" size={14} />}
+                  onClick={() => { setGroupOpen(open => !open); setMenuOpen(false) }}
+                  title={t('source.networkImportCustomGroupHint', '选择本次导入的目标分组')}
+                >
+                  {t('source.networkImportCustomGroup', '自定义源分组')}
+                  {effectiveGroup ? `：${groupLabel}` : ''}
+                </Button>
+              </Popover.Target>
+              <Popover.Dropdown>
+                <Stack gap="xs">
+                  <Select
+                    size="xs"
+                    label={t('source.targetGroup', '目标分组')}
+                    comboboxProps={{ withinPortal: false }}
+                    value={groupChoice}
+                    onChange={value => setGroupChoice(value ?? NO_GROUP)}
+                    data={[
+                      { value: NO_GROUP, label: t('source.networkImportKeepGroup', '沿用原分组') },
+                      ...groups.filter(Boolean).map(name => ({ value: name, label: name })),
+                      { value: NEW_GROUP, label: t('source.networkImportNewGroup', '新建分组…') },
+                    ]}
+                  />
+                  {groupChoice === NEW_GROUP && (
+                    <TextInput
+                      size="xs"
+                      placeholder={t('source.networkImportGroupNamePlaceholder', '输入新分组名')}
+                      value={newGroupName}
+                      onChange={event => setNewGroupName(event.target.value)}
+                    />
+                  )}
+                  <Text size="xs" c="dimmed">
+                    {t('source.networkImportGroupHint', '不手动选择时，新书源沿用文件分组，已有书源保留当前分组。')}
+                  </Text>
+                </Stack>
+              </Popover.Dropdown>
+            </Popover>
+
+            <Menu opened={menuOpen} onChange={setMenuOpen} position="bottom-end" withinPortal={false} zIndex={380}>
+              <Menu.Target>
+                <ActionIcon variant="subtle" color="gray" aria-label={t('common.more', '更多')}>
+                  <Icon name="more" size={16} />
+                </ActionIcon>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item leftSection={<Icon name="check" size={14} />} onClick={() => { selectAll(); setMenuOpen(false) }}>
+                  {t('source.networkImportSelectAll', '全选')}
+                </Menu.Item>
+                <Menu.Item leftSection={<Icon name="close" size={14} />} onClick={() => { clearAll(); setMenuOpen(false) }}>
+                  {t('source.networkImportDeselectAll', '取消全选')}
+                </Menu.Item>
+                <Menu.Item leftSection={<Icon name="refresh" size={14} />} onClick={() => { invert(); setMenuOpen(false) }}>
+                  {t('source.networkImportInvert', '反选')}
+                </Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
+
+            <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label={t('common.close', '关闭')}>
+              <Icon name="close" size={16} />
+            </ActionIcon>
+          </Group>
+        </Group>
+
+        {localMode ? (
+          <TextInput
+            value={localLabel ?? t('source.localImportLabel', '本地文件')}
+            readOnly
+            disabled
+            leftSection={<Icon name="file" size={15} />}
+            aria-label={t('source.localImportLabel', '本地文件')}
+          />
+        ) : (
+          <Group gap="xs" align="flex-start" wrap="nowrap">
+            <TextInput
+              style={{ flex: 1 }}
+              placeholder="https://example.com/book-sources.json"
+              value={url}
+              leftSection={<Icon name="globe" size={15} />}
+              onChange={event => { setUrl(event.target.value); setPreview(null); setSelected(new Set()) }}
+              onKeyDown={event => { if (event.key === 'Enter') void runPreview(url) }}
+            />
+            <Button
+              loading={fetching}
+              onClick={() => void runPreview(url)}
+              leftSection={!fetching ? <Icon name="cloudDownload" size={15} /> : undefined}
+            >
+              {fetching ? t('source.networkImportFetching', '拉取中…') : t('source.networkImportFetch', '拉取')}
+            </Button>
+          </Group>
         )}
 
-        {menuOpen && (
-          <div className="network-import-popover network-import-menu">
-            <button type="button" className="subtle-button" onClick={() => { selectAll(); setMenuOpen(false) }}>{t('source.networkImportSelectAll', '全选')}</button>
-            <button type="button" className="subtle-button" onClick={() => { clearAll(); setMenuOpen(false) }}>{t('source.networkImportDeselectAll', '取消全选')}</button>
-            <button type="button" className="subtle-button" onClick={() => { invert(); setMenuOpen(false) }}>{t('source.networkImportInvert', '反选')}</button>
-          </div>
-        )}
-
-        <div className="network-import-body">
-          {localMode ? (
-            // 本地文件模式：没有地址可填，这一行退化为「来源文件名」的只读展示，
-            // 让用户一眼看出这批条目是从哪个文件读出来的。
-            <div className="network-import-url-row">
-              <input
-                className="network-import-url-input"
-                value={localLabel ?? t('source.localImportLabel', '本地文件')}
-                readOnly
-                disabled
-                aria-label={t('source.localImportLabel', '本地文件')}
-              />
-            </div>
-          ) : (
-            <div className="network-import-url-row">
-              <input
-                className="network-import-url-input"
-                placeholder="https://example.com/book-sources.json"
-                value={url}
-                onChange={event => { setUrl(event.target.value); setPreview(null); setSelected(new Set()) }}
-                onKeyDown={event => { if (event.key === 'Enter') void runPreview(url) }}
-              />
-              <button
-                type="button"
-                className={`network-import-fetch-btn ${fetching ? 'is-loading' : ''}`}
-                disabled={fetching}
-                aria-busy={fetching}
-                onClick={() => void runPreview(url)}
-              >
-                {fetching && <ButtonSpinner size={12} />}
-                {fetching ? t('source.networkImportFetching', '拉取中…') : t('source.networkImportFetch', '拉取')}
-              </button>
-            </div>
-          )}
-
-          {preview && (
-            <>
-              <p className="network-import-summary">
+        {preview && (
+          <Stack gap="sm">
+            <Alert variant="light" color="brand" p="xs">
+              <Text size="xs" fw={500}>
                 {t('source.networkImportSummary', {
                   total: preview.total,
                   newCount: preview.newCount,
@@ -275,79 +300,103 @@ export const NetworkImportModal: React.FC<NetworkImportModalProps> = ({
                   invalidCount: preview.invalidCount,
                   defaultValue: `共 ${preview.total} 条：新增 ${preview.newCount}，更新 ${preview.updateCount}，不可导入 ${preview.invalidCount}`,
                 })}
-              </p>
-              <div className="network-import-list">
+              </Text>
+            </Alert>
+
+            <ScrollArea.Autosize mah={360} offsetScrollbars>
+              <Stack gap={6}>
                 {preview.sources.map(item => {
                   const invalid = item.status === 'invalid'
                   const checked = selected.has(item.index)
+                  const expanded = detailIndex === item.index && !invalid
                   return (
-                    <div key={item.index} className={`network-import-row ${invalid ? 'is-invalid' : ''}`}>
-                      <label className="network-import-row-main">
-                        <input
-                          type="checkbox"
-                          className="network-import-check"
+                    <Paper key={item.index} p="xs" withBorder radius="sm" style={{ opacity: invalid ? 0.65 : 1 }}>
+                      <Group justify="space-between" wrap="nowrap" gap="xs">
+                        <Checkbox
                           checked={checked}
                           disabled={invalid}
                           onChange={() => toggleOne(item.index)}
+                          label={<Text size="sm" fw={500} lineClamp={1}>{item.name}</Text>}
+                          style={{ flex: 1, minWidth: 0 }}
                         />
-                        <span className="network-import-name" title={item.name}>{item.name}</span>
-                      </label>
-                      <span className={`network-import-badge is-${item.status}`}>
-                        {invalid
-                          ? t('source.networkImportBadgeInvalid', '不可导入')
-                          : item.status === 'update'
-                            ? t('source.networkImportBadgeUpdate', '更新')
-                            : t('source.networkImportBadgeNew', '新增')}
-                      </span>
-                      {invalid ? (
-                        <span className="network-import-reason" title={item.reason ?? undefined}>{item.reason}</span>
-                      ) : (
-                        <button
-                          type="button"
-                          className="network-import-detail-btn"
-                          title={t('source.networkImportDetail', '查看书源详情')}
-                          aria-label={t('source.networkImportDetail', '查看书源详情')}
-                          onClick={() => setDetailIndex(detailIndex === item.index ? null : item.index)}
-                        >
-                          <Icon name="edit" />
-                        </button>
-                      )}
-                      {detailIndex === item.index && !invalid && (
-                        <div className="network-import-detail">
-                          <span>{t('source.networkImportFieldUrl', '地址')}：{item.url || '—'}</span>
-                        </div>
-                      )}
-                    </div>
+                        <Group gap={6} wrap="nowrap">
+                          <Badge
+                            size="xs"
+                            variant="light"
+                            color={invalid ? 'red' : item.status === 'update' ? 'blue' : 'teal'}
+                          >
+                            {invalid
+                              ? t('source.networkImportBadgeInvalid', '不可导入')
+                              : item.status === 'update'
+                                ? t('source.networkImportBadgeUpdate', '更新')
+                                : t('source.networkImportBadgeNew', '新增')}
+                          </Badge>
+                          {invalid ? (
+                            <Text size="xs" c="red" maw={140} truncate title={item.reason ?? undefined}>
+                              {item.reason}
+                            </Text>
+                          ) : (
+                            <ActionIcon
+                              size="sm"
+                              variant="subtle"
+                              color="gray"
+                              title={t('source.networkImportDetail', '查看书源详情')}
+                              aria-label={t('source.networkImportDetail', '查看书源详情')}
+                              onClick={() => setDetailIndex(detailIndex === item.index ? null : item.index)}
+                            >
+                              <Icon name="edit" size={14} />
+                            </ActionIcon>
+                          )}
+                        </Group>
+                      </Group>
+                      <Collapse in={expanded}>
+                        <Text size="xs" c="dimmed" mt={6} pl={28} style={{ wordBreak: 'break-all' }}>
+                          {t('source.networkImportFieldUrl', '地址')}：{item.url || '—'}
+                        </Text>
+                      </Collapse>
+                    </Paper>
                   )
                 })}
-              </div>
-              <button type="button" className="network-import-selectall-pill" onClick={clearAll}>
-                {t('source.networkImportDeselectAllCount', {
-                  selected: selected.size,
-                  total: selectable.length,
-                  defaultValue: `取消全选（${selected.size}/${selectable.length}）`,
-                })}
-              </button>
-            </>
-          )}
-        </div>
+              </Stack>
+            </ScrollArea.Autosize>
 
-        <footer className="network-import-footer">
-          <button type="button" className="network-import-cancel-btn" onClick={onClose}>
+            <Group justify="space-between" align="center">
+              <Button
+                size="xs"
+                variant="light"
+                color="gray"
+                disabled={selectable.length === 0}
+                onClick={selectable.length > 0 && selected.size === selectable.length ? clearAll : selectAll}
+              >
+                {selectable.length > 0 && selected.size === selectable.length
+                  ? t('source.networkImportDeselectAllCount', {
+                      selected: selected.size,
+                      total: selectable.length,
+                      defaultValue: `取消全选（${selected.size}/${selectable.length}）`,
+                    })
+                  : t('source.networkImportSelectAllCount', {
+                      selected: selected.size,
+                      total: selectable.length,
+                      defaultValue: `全选（${selected.size}/${selectable.length}）`,
+                    })}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+
+        <Group justify="flex-end" gap="sm" pt="xs" style={{ borderTop: '1px solid var(--line)' }}>
+          <Button variant="default" onClick={onClose}>
             {t('common.cancel', '取消')}
-          </button>
-          <button
-            type="button"
-            className={`network-import-confirm-btn ${committing ? 'is-loading' : ''}`}
+          </Button>
+          <Button
+            loading={committing}
             disabled={!preview || committing || fetching}
-            aria-busy={committing}
             onClick={() => void handleConfirm()}
           >
-            {committing && <ButtonSpinner size={12} />}
             {committing ? t('common.loading', '处理中…') : t('source.networkImportConfirm', '确认')}
-          </button>
-        </footer>
-      </div>
-    </div>
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
   )
 }

@@ -20,6 +20,9 @@ fun Route.staticWeb() {
     val respondIndex: suspend (ApplicationCall) -> Unit = { call ->
         respondNoCache(call, "static/index.html", ContentType.Text.Html.withCharset(Charsets.UTF_8))
     }
+    val respondPage: suspend (ApplicationCall, String) -> Unit = { call, page ->
+        respondNoCache(call, "static/$page/index.html", ContentType.Text.Html.withCharset(Charsets.UTF_8))
+    }
 
     get("/index.html") { respondIndex(call) }
     head("/index.html") { respondIndex(call) }
@@ -33,8 +36,25 @@ fun Route.staticWeb() {
     get("/manifest.json") { respondNoCache(call, "static/manifest.webmanifest", ContentType.parse("application/manifest+json")) }
     head("/manifest.json") { respondNoCache(call, "static/manifest.webmanifest", ContentType.parse("application/manifest+json")) }
 
-    staticResources("/assets", "static/assets")
+    staticResources("/assets", "static/assets") {
+        enableAutoHeadResponse()
+        modify { _, call ->
+            call.response.header(HttpHeaders.CacheControl, "public, max-age=31536000, immutable")
+        }
+    }
+    staticResources("/_astro", "static/_astro") {
+        enableAutoHeadResponse()
+        modify { _, call ->
+            call.response.header(HttpHeaders.CacheControl, "public, max-age=31536000, immutable")
+        }
+    }
     staticResources("/", "static")
+    listOf("library", "sources", "devices", "reader").forEach { page ->
+        get("/$page") { respondPage(call, page) }
+        head("/$page") { respondPage(call, page) }
+        get("/$page/") { respondPage(call, page) }
+        head("/$page/") { respondPage(call, page) }
+    }
     get("/") { respondIndex(call) }
     head("/") { respondIndex(call) }
 }

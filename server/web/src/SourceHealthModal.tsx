@@ -1,6 +1,21 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  Card,
+  Group,
+  Modal,
+  Progress,
+  ScrollArea,
+  Stack,
+  Tabs,
+  Text,
+  TextInput,
+  Tooltip,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
-import { api, SourceHealthCheckItem, SourceHealthCheckResponse, SourceSummary } from './api'
+import { api, SourceHealthCheckItem, SourceSummary } from './api'
 import { Icon } from './icons'
 
 interface SourceHealthModalProps {
@@ -179,182 +194,178 @@ export function SourceHealthModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-card source-health-modal" onClick={e => e.stopPropagation()}>
-        <header className="modal-header">
-          <div className="health-modal-title">
-            <Icon name="activity" />
-            <div>
-              <h2>{t('source.healthCheckTitle', '书源连通性与健康体检')}</h2>
-              <small>
+    <Modal
+      opened
+      onClose={onClose}
+      size="xl"
+      withCloseButton={false}
+      padding="lg"
+    >
+      <Stack gap="md">
+        <Group justify="space-between" align="flex-start" wrap="nowrap" pb="sm" style={{ borderBottom: '1px solid var(--line)' }}>
+          <Group gap="sm" align="center">
+            <Icon name="activity" size={20} className={running ? 'spin' : undefined} />
+            <Stack gap={2}>
+              <Text fw={700} size="lg">{t('source.healthCheckTitle', '书源连通性与健康体检')}</Text>
+              <Text size="xs" c="dimmed">
                 {running
                   ? t('source.probingHostConnectivity', { time: (durationMs / 1000).toFixed(1), defaultValue: `正在并发探测书源 Host 与入口连通性 (${(durationMs / 1000).toFixed(1)}s)...` })
                   : t('source.healthSummaryDone', { total: stats.total, time: (durationMs / 1000).toFixed(1), defaultValue: `共检测 ${stats.total} 个书源 · 用时 ${(durationMs / 1000).toFixed(1)}s` })}
-              </small>
-            </div>
-          </div>
-          <button type="button" className="close-button" onClick={onClose} aria-label={t('common.close', '关闭')}>
-            <Icon name="close" />
-          </button>
-        </header>
+              </Text>
+            </Stack>
+          </Group>
+          <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label={t('common.close', '关闭')}>
+            <Icon name="close" size={16} />
+          </ActionIcon>
+        </Group>
 
-        {/* Progress bar */}
-        <div className="health-progress-wrap">
-          <div
-            className={`health-progress-bar ${running ? 'running' : ''}`}
-            style={{ width: running ? '100%' : '100%' }}
+        <Progress
+          value={running ? 100 : progress.total > 0 ? Math.round((progress.checked / progress.total) * 100) : 100}
+          animated={running}
+          striped={running}
+          color={stats.failed > 0 && !running ? 'gold' : 'brand'}
+          size="sm"
+          radius="xl"
+        />
+
+        <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+          <Tabs value={activeTab} onChange={value => setActiveTab((value as TabFilter) ?? 'all')} variant="pills">
+            <Tabs.List>
+              <Tabs.Tab value="all">
+                {t('source.allCount', { count: stats.total, defaultValue: `全部 (${stats.total})` })}
+              </Tabs.Tab>
+              <Tabs.Tab value="valid" color="teal">
+                {t('source.statusValid', { count: stats.valid, defaultValue: `正常 (${stats.valid})` })}
+              </Tabs.Tab>
+              <Tabs.Tab value="slow" color="gold">
+                {t('source.statusSlow', { count: stats.slow, defaultValue: `迟缓 (${stats.slow})` })}
+              </Tabs.Tab>
+              <Tabs.Tab value="failed" color="red">
+                {t('source.statusFailed', { count: stats.failed, defaultValue: `失效 (${stats.failed})` })}
+              </Tabs.Tab>
+            </Tabs.List>
+          </Tabs>
+
+          <TextInput
+            size="xs"
+            leftSection={<Icon name="search" size={14} />}
+            placeholder={t('source.searchHealthResults', '搜索检测结果...')}
+            value={filterQuery}
+            onChange={e => setFilterQuery(e.target.value)}
+            style={{ minWidth: 200 }}
           />
-        </div>
+        </Group>
 
-        {/* Stats and Filter Tabs */}
-        <div className="health-stats-tabs">
-          <div className="health-tabs">
-            <button
-              type="button"
-              className={`health-tab-btn ${activeTab === 'all' ? 'active' : ''}`}
-              onClick={() => setActiveTab('all')}
-            >
-              {t('source.allCount', { count: stats.total, defaultValue: `全部 (${stats.total})` })}
-            </button>
-            <button
-              type="button"
-              className={`health-tab-btn tab-valid ${activeTab === 'valid' ? 'active' : ''}`}
-              onClick={() => setActiveTab('valid')}
-            >
-              {t('source.statusValid', { count: stats.valid, defaultValue: `🟢 正常 (${stats.valid})` })}
-            </button>
-            <button
-              type="button"
-              className={`health-tab-btn tab-slow ${activeTab === 'slow' ? 'active' : ''}`}
-              onClick={() => setActiveTab('slow')}
-            >
-              {t('source.statusSlow', { count: stats.slow, defaultValue: `🟡 迟缓 (${stats.slow})` })}
-            </button>
-            <button
-              type="button"
-              className={`health-tab-btn tab-failed ${activeTab === 'failed' ? 'active' : ''}`}
-              onClick={() => setActiveTab('failed')}
-            >
-              {t('source.statusFailed', { count: stats.failed, defaultValue: `🔴 失效 (${stats.failed})` })}
-            </button>
-          </div>
-          <div className="health-search-input">
-            <Icon name="search" />
-            <input
-              type="text"
-              placeholder={t('source.searchHealthResults', '搜索检测结果...')}
-              value={filterQuery}
-              onChange={e => setFilterQuery(e.target.value)}
-            />
-          </div>
-        </div>
-
-        {/* Action Quick Bar */}
-        <div className="health-actions-bar">
-          <div className="health-actions-left">
-            <button
-              type="button"
-              className="subtle-button"
+        <Group justify="space-between" wrap="wrap" gap="xs">
+          <Group gap="xs">
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<Icon name="refresh" size={14} className={running ? 'spin' : ''} />}
               onClick={() => void startCheck()}
               disabled={running || busyAction !== null}
             >
-              <Icon name="refresh" className={running ? 'spin' : ''} />
-              <span>{running ? t('source.checking', '体检中...') : t('source.recheckAll', '重新全量体检')}</span>
-            </button>
+              {running ? t('source.checking', '体检中...') : t('source.recheckAll', '重新全量体检')}
+            </Button>
             {stats.failed > 0 && !running && (
-              <button
-                type="button"
-                className="subtle-button"
+              <Button
+                size="xs"
+                variant="light"
+                color="gold"
                 onClick={handleRetryFailed}
                 disabled={busyAction !== null}
               >
-                <span>{t('source.retryFailed', { count: stats.failed, defaultValue: `重试失效项 (${stats.failed})` })}</span>
-              </button>
+                {t('source.retryFailed', { count: stats.failed, defaultValue: `重试失效项 (${stats.failed})` })}
+              </Button>
             )}
-          </div>
+          </Group>
           {stats.failed > 0 && (
-            <div className="health-actions-right">
-              <button
-                type="button"
-                className="secondary-button"
+            <Group gap="xs">
+              <Button
+                size="xs"
+                variant="light"
+                color="gray"
+                loading={busyAction === 'disable_failed'}
                 onClick={() => void handleBatchDisableFailed()}
                 disabled={running || busyAction !== null}
               >
-                <span>{t('source.disableFailed', { count: stats.failed, defaultValue: `一键停用失效源 (${stats.failed})` })}</span>
-              </button>
-              <button
-                type="button"
-                className="danger-button"
+                {t('source.disableFailed', { count: stats.failed, defaultValue: `一键停用失效源 (${stats.failed})` })}
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                loading={busyAction === 'delete_failed'}
                 onClick={() => void handleBatchDeleteFailed()}
                 disabled={running || busyAction !== null}
               >
-                <span>{t('source.deleteFailed', { count: stats.failed, defaultValue: `一键删除失效源 (${stats.failed})` })}</span>
-              </button>
-            </div>
+                {t('source.deleteFailed', { count: stats.failed, defaultValue: `一键删除失效源 (${stats.failed})` })}
+              </Button>
+            </Group>
           )}
-        </div>
+        </Group>
 
-        {/* Results List */}
-        <div className="health-results-list">
+        <ScrollArea.Autosize mah="54vh" offsetScrollbars>
           {filteredResults.length === 0 ? (
-            <div className="health-empty-state">
-              <p>{running ? t('source.probingInProgress', '正在努力探测中...') : t('source.noMatchingHealthResults', '无符合筛选条件的结果')}</p>
-            </div>
+            <Text size="sm" c="dimmed" ta="center" py="xl">
+              {running ? t('source.probingInProgress', '正在努力探测中...') : t('source.noMatchingHealthResults', '无符合筛选条件的结果')}
+            </Text>
           ) : (
-            filteredResults.map(item => {
-              const isOk = item.ok
-              const isSlow = item.statusCategory === 'slow'
-              const isBlocked = item.statusCategory === 'blocked'
-              const isFailed = item.statusCategory === 'failed'
+            <Stack gap="xs" pr={4}>
+              {filteredResults.map(item => {
+                const isSlow = item.statusCategory === 'slow'
+                const isBlocked = item.statusCategory === 'blocked'
+                const isFailed = item.statusCategory === 'failed'
 
-              let badgeClass = 'badge-valid'
-              let badgeText = t('source.badgeValid', '连通正常')
-              if (isSlow) {
-                badgeClass = 'badge-slow'
-                badgeText = t('source.badgeSlow', '响应较慢')
-              } else if (isBlocked) {
-                badgeClass = 'badge-blocked'
-                badgeText = t('source.badgeRestricted', '访问受限')
-              } else if (isFailed) {
-                badgeClass = 'badge-failed'
-                badgeText = t('source.badgeFailed', '连接失效')
-              }
+                let badgeColor: 'teal' | 'gold' | 'orange' | 'red' = 'teal'
+                let badgeText = t('source.badgeValid', '连通正常')
+                if (isSlow) {
+                  badgeColor = 'gold'
+                  badgeText = t('source.badgeSlow', '响应较慢')
+                } else if (isBlocked) {
+                  badgeColor = 'orange'
+                  badgeText = t('source.badgeRestricted', '访问受限')
+                } else if (isFailed) {
+                  badgeColor = 'red'
+                  badgeText = t('source.badgeFailed', '连接失效')
+                }
 
-              return (
-                <article key={item.id} className={`health-item-card ${item.statusCategory}`}>
-                  <div className="health-item-main">
-                    <div className="health-item-top">
-                      <strong className="health-item-name">{item.name}</strong>
-                      <span className={`health-badge ${badgeClass}`}>{badgeText}</span>
-                      {item.latencyMs > 0 && (
-                        <span className="health-latency">{item.latencyMs}ms</span>
-                      )}
-                      {item.statusCode > 0 && (
-                        <span className="health-code">HTTP {item.statusCode}</span>
-                      )}
-                    </div>
-                    <div className="health-item-url" title={item.id}>
-                      {item.id}
-                    </div>
-                    {item.error && <p className="health-item-error">{item.error}</p>}
-                  </div>
-                  <div className="health-item-actions">
-                    <button
-                      type="button"
-                      className="subtle-button icon-only"
-                      title={t('source.singleRetest', '单独重测')}
-                      onClick={() => handleRetrySingle(item.id)}
-                      disabled={running}
-                    >
-                      <Icon name="refresh" />
-                    </button>
-                  </div>
-                </article>
-              )
-            })
+                return (
+                  <Card key={item.id} p="sm" withBorder radius="md">
+                    <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm">
+                      <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
+                        <Group gap="xs" wrap="wrap">
+                          <Text size="sm" fw={600} truncate>{item.name}</Text>
+                          <Badge size="xs" variant="light" color={badgeColor}>{badgeText}</Badge>
+                          {item.latencyMs > 0 && (
+                            <Badge size="xs" variant="outline" color="gray">{item.latencyMs}ms</Badge>
+                          )}
+                          {item.statusCode > 0 && (
+                            <Badge size="xs" variant="outline" color="gray">HTTP {item.statusCode}</Badge>
+                          )}
+                        </Group>
+                        <Text size="xs" c="dimmed" truncate title={item.id}>{item.id}</Text>
+                        {item.error && <Text size="xs" c="red">{item.error}</Text>}
+                      </Stack>
+                      <Tooltip label={t('source.singleRetest', '单独重测')}>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          onClick={() => handleRetrySingle(item.id)}
+                          disabled={running}
+                          aria-label={t('source.singleRetest', '单独重测')}
+                        >
+                          <Icon name="refresh" size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Group>
+                  </Card>
+                )
+              })}
+            </Stack>
           )}
-        </div>
-      </div>
-    </div>
+        </ScrollArea.Autosize>
+      </Stack>
+    </Modal>
   )
 }

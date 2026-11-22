@@ -16,14 +16,14 @@
 
 ## 项目简介
 
-**Legado Server** 是基于 Kotlin JVM、Ktor 和 SQLite 的独立后端。精简后的 React WebUI 保留书源管理、搜书、目录与正文查看、书架管理、TXT/EPUB 导出和 Android 配置导入。Kindle 阅读仍由 KOReader 插件承担；其他后端管理能力通过 API 保留。
+**Legado Server** 是基于 Kotlin JVM、Ktor 和 SQLite 的独立后端。精简后的 Astro WebUI 使用 React 交互岛，保留书源管理、搜书、目录与正文查看、书架管理、TXT/EPUB 导出和 Android 配置导入。Kindle 阅读仍由 KOReader 插件承担；其他后端管理能力通过 API 保留。
 
 ## 核心能力
 
 | 模块 | 说明 |
 | --- | --- |
 | **书源处理** | 保留 Legado 书源导入导出、分组、检索、调试、登录凭据、详情、目录和正文解析 API；Rhino、Jsoup 和 JsonPath 运行在 JVM 沙箱中。书源校验（Android「校验书源」的同一条链路：源地址/搜索/发现/详情/目录/正文 + 失效分组、`respondTime`、`// Error:` 注释回写）走 `POST /api/sources/check`。 |
-| **React 精简 WebUI** | 保留书源管理、搜索、目录/正文查看、书架、导出、Kindle 配对/推送状态与自动上架状态，以及本地 ZIP / 外部 WebDAV 配置导入；不展示替换规则、漫画和有声前台入口。 |
+| **Astro + React WebUI** | Astro 负责静态页面、路由和按页面加载边界，React 负责搜索、书源、书架、设备任务与阅读器交互；保留 Kindle 配对/推送状态、自动上架状态，以及本地 ZIP / 外部 WebDAV 配置导入。 |
 | **Kindle 同步与推送** | 保留 `/api/v1` Kindle Sync Protocol v1：配对授权、逐本上架、增量同步、整本 EPUB 校验、双向阅读进度和冲突解决。自动上架会等待全书缓存完成后生成不可变 EPUB；设备联网时主动领取，支持 Range 续传、SHA-256 校验、原子安装和逐设备确认。 |
 | **书架导出** | `POST /api/bookshelf/export` 为书架中的文字书创建 TXT 或 EPUB 2.0 导出任务；缺失正文沿用 Android `WebBook.getContent` 链路抓取并最多尝试 3 次，单章失败仍保留目录结构并以 `null` 占位。默认逐章、单书排队；`parallel=true` 时单书最多 9 章并发，多书任务始终按提交顺序串行。EPUB 支持 NCX 卷层级、`epubScope` 选择章节以及 `epubSize` 拆分文件。`/export-epub` 保留为 EPUB 快捷别名。 |
 | **漫画** | 后端 API 保留漫画书籍入库、章节解析、图片代理、内容寻址缓存、预取、配额统计与清除能力；精简 WebUI 不提供漫画阅读器。 |

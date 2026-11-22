@@ -48,7 +48,7 @@ export function BookCover({
   const sources = coverSources({ coverKey, coverUrl })
   const [index, setIndex] = useState(0)
   if (index >= sources.length) {
-    return <span className={fallbackClassName}>{name.slice(0, 1)}</span>
+    return <span className={fallbackClassName || 'legado-cover-fallback'}>{name.slice(0, 1) || '书'}</span>
   }
   return (
     <img

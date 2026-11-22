@@ -1,5 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react'
+import { Alert, Button, Center, Group, Paper, Stack, Text } from '@mantine/core'
 import { i18n } from './i18n'
+import { Icon } from './icons'
 
 interface Props {
   children: ReactNode
@@ -28,15 +30,14 @@ export class ErrorBoundary extends Component<Props, State> {
   private handleReset = () => {
     this.setState({ hasError: false, error: null })
     if (typeof window !== 'undefined') {
-      location.hash = '#shelf'
-      location.reload()
+      location.replace('/library/')
     }
   }
 
   private handleBackToShelf = () => {
     this.setState({ hasError: false, error: null })
     if (typeof window !== 'undefined') {
-      location.hash = '#shelf'
+      location.assign('/library/')
     }
   }
 
@@ -46,39 +47,30 @@ export class ErrorBoundary extends Component<Props, State> {
         return this.props.fallback
       }
       return (
-        <div className="error-boundary-screen" style={{
-          padding: '48px 24px',
-          textAlign: 'center',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '60vh',
-          gap: '16px',
-        }}>
-          <h2 style={{ fontSize: '20px', fontWeight: 600 }}>{i18n.t('errorBoundary.title')}</h2>
-          <p style={{ color: 'var(--muted, #888)', maxWidth: '480px', fontSize: '14px', lineHeight: 1.6 }}>
-            {this.state.error?.message || i18n.t('errorBoundary.desc')}
-          </p>
-          <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={this.handleReset}
-              style={{ padding: '8px 18px', cursor: 'pointer' }}
-            >
-              {i18n.t('errorBoundary.retry')}
-            </button>
-            <button
-              type="button"
-              className="subtle-button"
-              onClick={this.handleBackToShelf}
-              style={{ padding: '8px 18px', cursor: 'pointer' }}
-            >
-              {i18n.t('errorBoundary.backHome')}
-            </button>
-          </div>
-        </div>
+        <Center mih="60vh" p="lg">
+          <Paper p="xl" radius="lg" withBorder maw={480} w="100%">
+            <Stack gap="md" align="center" ta="center">
+              <Alert
+                color="red"
+                variant="light"
+                icon={<Icon name="alert" size={18} />}
+                title={i18n.t('errorBoundary.title')}
+                w="100%"
+                ta="left"
+              >
+                <Text size="sm">{this.state.error?.message || i18n.t('errorBoundary.desc')}</Text>
+              </Alert>
+              <Group gap="sm">
+                <Button onClick={this.handleReset}>
+                  {i18n.t('errorBoundary.retry')}
+                </Button>
+                <Button variant="default" onClick={this.handleBackToShelf}>
+                  {i18n.t('errorBoundary.backHome')}
+                </Button>
+              </Group>
+            </Stack>
+          </Paper>
+        </Center>
       )
     }
 

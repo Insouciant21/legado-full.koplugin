@@ -1,12 +1,30 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import type { ReactNode } from 'react'
+import { useEffect } from 'react'
+import {
+  ActionIcon,
+  AppShell,
+  Badge,
+  Box,
+  Button,
+  Divider,
+  Group,
+  Menu,
+  NavLink,
+  ScrollArea,
+  SegmentedControl,
+  Stack,
+  Text,
+  ThemeIcon,
+  Tooltip,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { Icon } from './icons'
 import { Logo } from './Logo'
 import type { ReaderSettings } from './readerSettings'
 import { api } from './api'
+import type { AppPage } from './appRoutes'
 
-export type AppPage = 'sources' | 'library' | 'shelf' | 'devices' | 'reader'
+export type { AppPage } from './appRoutes'
 
 export interface AppHeaderProps {
   page: AppPage
@@ -18,6 +36,7 @@ export interface AppHeaderProps {
   onNavigate: (page: AppPage) => void
   onOpenConfigImport: () => void
   onLogout: () => void
+  children?: ReactNode
 }
 
 export const APP_THEMES: ReadonlyArray<{ id: ReaderSettings['theme']; name: string; key: string }> = [
@@ -43,41 +62,9 @@ export function AppHeader({
   onNavigate,
   onOpenConfigImport,
   onLogout,
+  children,
 }: AppHeaderProps) {
   const { t } = useTranslation()
-  const [menuOpen, setMenuOpen] = useState(false)
-
-  const menuButtonRef = useRef<HTMLButtonElement>(null)
-  const menuContainerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!menuOpen) return
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setMenuOpen(false)
-      }
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node
-      if (
-        menuContainerRef.current &&
-        !menuContainerRef.current.contains(target) &&
-        !menuButtonRef.current?.contains(target)
-      ) {
-        setMenuOpen(false)
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('pointerdown', handlePointerDown)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('pointerdown', handlePointerDown)
-    }
-  }, [menuOpen])
 
   useEffect(() => {
     if (page !== 'devices') return
@@ -107,7 +94,6 @@ export function AppHeader({
 
   const handleLogout = () => {
     if (window.confirm(t('header.logoutConfirm'))) {
-      setMenuOpen(false)
       onLogout()
     }
   }
@@ -116,168 +102,205 @@ export function AppHeader({
     onSettingsChange({ ...settings, theme })
   }
 
-  const canUseDOM = typeof document !== 'undefined'
-
-  const menuDropdownContent = menuOpen ? (
-    <div className={`header-menu-portal-wrapper theme-${settings.theme}`}>
-      <div
-        className="header-menu-backdrop"
-        onClick={() => setMenuOpen(false)}
-        aria-hidden="true"
-      />
-      <div className={`header-menu-dropdown theme-${settings.theme}`} ref={menuContainerRef} role="menu" aria-label={t('header.functionMenu')}>
-        <div className="menu-header">
-          <div className="menu-status-badge">
-            <span className="menu-status-dot" />
-            <span className="menu-header-title">{t('header.serviceLoggedIn')}</span>
-          </div>
-        </div>
-
-        <div className="menu-section">
-          <div className="menu-section-label">{t('header.themeSection')}</div>
-          <div className="menu-theme-grid" role="radiogroup" aria-label={t('header.themeSection')}>
-            {APP_THEMES.map(themeItem => {
-              const isSelected = settings.theme === themeItem.id
-              return (
-                <button
-                  key={themeItem.id}
-                  type="button"
-                  className={`menu-theme-btn theme-option-${themeItem.id} ${isSelected ? 'selected' : ''}`}
-                  role="radio"
-                  aria-checked={isSelected}
-                  onClick={() => handleThemeChange(themeItem.id)}
-                >
-                  <span className={`theme-swatch theme-swatch-${themeItem.id}`} />
-                  <span className="theme-name">{t(themeItem.key, themeItem.name)}</span>
-                  {isSelected && <Icon name="check" className="theme-check-icon" />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className="menu-divider" />
-
-        <div className="menu-section">
-          <button
-            type="button"
-            className="menu-item-btn"
-            role="menuitem"
-            onClick={() => {
-              setMenuOpen(false)
-              onOpenConfigImport()
-            }}
-          >
-            <Icon name="importFile" />
-            <span>{t('header.webdav', '备份导入')}</span>
-          </button>
-        </div>
-
-        <div className="menu-divider" />
-
-        <div className="menu-section">
-          <button
-            type="button"
-            className="menu-logout-btn"
-            role="menuitem"
-            onClick={handleLogout}
-          >
-            <Icon name="logOut" />
-            <span>{t('header.logout')}</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  ) : null
+  const navBadge = (id: (typeof APP_NAVIGATION)[number]['id']) => {
+    if (id === 'library' && searching) {
+      return (
+        <Tooltip label={t('header.searchingInBackground')}>
+          <Badge size="xs" variant="dot" color="brand">搜索中</Badge>
+        </Tooltip>
+      )
+    }
+    if ((id === 'shelf' || id === 'devices') && taskCount > 0) {
+      return (
+        <Badge size="xs" variant="filled" color="gold" radius="xl">
+          {taskCount > 99 ? '99+' : taskCount}
+        </Badge>
+      )
+    }
+    return undefined
+  }
 
   return (
-    <header className="app-page-header">
-      <div className="app-sidebar-brand">
-        <button
-          type="button"
-          className="app-brand"
-          onClick={() => onNavigate('library')}
-          aria-label={t('login.brand')}
-        >
-          <span className="app-brand-mark"><Logo size={28} /></span>
-          <span className="app-brand-copy">
-            <strong>{t('login.brand')}</strong>
-            <small>你的私人阅读服务器</small>
-          </span>
-        </button>
-      </div>
+    <AppShell
+      navbar={{ width: 236, breakpoint: 'md', collapsed: { mobile: true } }}
+      header={{ height: { base: 58, md: 0 } }}
+      padding={{ base: 'sm', sm: 'md', md: 'xl' }}
+    >
+      <AppShell.Header hiddenFrom="md" px="sm">
+        <Group h="100%" justify="space-between" wrap="nowrap" gap="xs">
+          <Button
+            variant="subtle"
+            color="gray"
+            px={6}
+            onClick={() => onNavigate('library')}
+            leftSection={<Logo size={24} />}
+            aria-label={t('login.brand')}
+            style={{ flexShrink: 0 }}
+            styles={{ label: { fontWeight: 700, color: 'var(--ink)' } }}
+          >
+            <Text span visibleFrom="sm" fw={700} size="sm" c="var(--ink)">
+              {t('login.brand')}
+            </Text>
+          </Button>
 
-      <div className="app-nav-section">
-        <span className="app-nav-label">工作台</span>
-        <nav aria-label={t('header.mainNav')}>
-          {APP_NAVIGATION.map(item => (
-            <button
-              key={item.id}
-              type="button"
-              className={page === item.id ? 'active' : ''}
-              data-nav={item.id}
-              aria-current={page === item.id ? 'page' : undefined}
-              onClick={() => onNavigate(item.id)}
-            >
-              <span className="app-nav-icon" aria-hidden="true">
-                <Icon name={item.icon} />
-              </span>
-              <span className="app-nav-copy">
-                <strong>{t(item.labelKey, item.fallback)}</strong>
-              </span>
-              {item.id === 'library' && searching && (
-                <span
-                  className="nav-search-indicator"
-                  title={t('header.searchingInBackground')}
-                  aria-label={t('header.searchingInBackground')}
-                />
-              )}
-              {(item.id === 'shelf' || item.id === 'devices') && taskCount > 0 && (
-                <span
-                  className="nav-task-count"
-                  title={`${taskCount} 项后台任务`}
-                  aria-label={`${taskCount} 项后台任务`}
+          <Group gap={4} wrap="nowrap" style={{ overflowX: 'auto', minWidth: 0 }}>
+            {APP_NAVIGATION.map(item => {
+              const active = page === item.id
+              return (
+                <Button
+                  key={item.id}
+                  size="xs"
+                  variant={active ? 'light' : 'subtle'}
+                  color={active ? 'brand' : 'gray'}
+                  px={10}
+                  onClick={() => onNavigate(item.id)}
+                  leftSection={<Icon name={item.icon} size={14} />}
+                  rightSection={(item.id === 'shelf' || item.id === 'devices') && taskCount > 0 ? (
+                    <Badge size="xs" variant="filled" color="gold" px={5} radius="xl">
+                      {taskCount > 99 ? '99+' : taskCount}
+                    </Badge>
+                  ) : undefined}
+                  style={{ flexShrink: 0 }}
                 >
-                  {taskCount > 99 ? '99+' : taskCount}
-                </span>
-              )}
-            </button>
-          ))}
-        </nav>
-      </div>
+                  {t(item.labelKey, item.fallback)}
+                </Button>
+              )
+            })}
+          </Group>
 
-      <div className="header-connection-card">
-        <span className="header-connection-icon"><Icon name="activity" /></span>
-        <span>
-          <strong>{t('header.serviceLoggedIn', '服务已连接')}</strong>
-          <small>找书、阅读、书源与任务同步</small>
-        </span>
-        <i aria-hidden="true" />
-      </div>
+          <Menu position="bottom-end" withinPortal shadow="md" width={240}>
+            <Menu.Target>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                size="lg"
+                aria-label={t('header.openMenu')}
+              >
+                <Icon name="menu" size={18} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Label>{t('header.themeSection')}</Menu.Label>
+              <Box px="xs" pb="xs">
+                <SegmentedControl
+                  fullWidth
+                  size="xs"
+                  value={settings.theme}
+                  onChange={value => handleThemeChange(value as ReaderSettings['theme'])}
+                  data={APP_THEMES.map(item => ({
+                    value: item.id,
+                    label: t(item.key, item.name),
+                  }))}
+                />
+              </Box>
+              <Menu.Divider />
+              <Menu.Item
+                leftSection={<Icon name="importFile" size={15} />}
+                onClick={onOpenConfigImport}
+              >
+                {t('header.webdav', '备份导入')}
+              </Menu.Item>
+              <Menu.Item
+                color="red"
+                leftSection={<Icon name="logOut" size={15} />}
+                onClick={handleLogout}
+              >
+                {t('header.logout')}
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        </Group>
+      </AppShell.Header>
 
-      <div className="header-sidebar-tools" aria-label={t('header.functionMenu', '功能菜单')}>
-        <button type="button" onClick={onOpenConfigImport}>
-          <Icon name="importFile" />
-          <span>{t('header.webdav', '备份导入')}</span>
-        </button>
-      </div>
+      <AppShell.Navbar p="md">
+        <AppShell.Section>
+          <Group
+            gap="sm"
+            px={6}
+            py={4}
+            style={{ cursor: 'pointer' }}
+            onClick={() => onNavigate('library')}
+          >
+            <Logo size={28} />
+            <Stack gap={0}>
+              <Text fw={700} size="md" lh={1.2}>{t('login.brand')}</Text>
+              <Text size="xs" c="dimmed">私人阅读工作台</Text>
+            </Stack>
+          </Group>
+        </AppShell.Section>
 
-      <div className="header-actions">
-        <button
-          type="button"
-          ref={menuButtonRef}
-          className={`header-menu-btn ${menuOpen ? 'active' : ''}`}
-          aria-label={menuOpen ? t('header.closeMenu') : t('header.openMenu')}
-          aria-expanded={menuOpen}
-          aria-haspopup="true"
-          onClick={() => setMenuOpen(prev => !prev)}
-        >
-          <Icon name="menu" />
-          <span>{menuOpen ? t('header.closeMenu') : t('header.openMenu')}</span>
-        </button>
+        <AppShell.Section grow component={ScrollArea} my="lg">
+          <Stack gap={4} component="nav" aria-label={t('header.mainNav')}>
+            <Text size="xs" fw={700} c="dimmed" px="sm" mb={4} tt="uppercase" lts={0.8}>
+              工作台
+            </Text>
+            {APP_NAVIGATION.map(item => (
+              <NavLink
+                key={item.id}
+                active={page === item.id}
+                label={t(item.labelKey, item.fallback)}
+                leftSection={<Icon name={item.icon} size={17} />}
+                rightSection={navBadge(item.id)}
+                onClick={() => onNavigate(item.id)}
+                variant="light"
+                color="brand"
+                style={{ borderRadius: 8, fontWeight: page === item.id ? 600 : 500 }}
+              />
+            ))}
+          </Stack>
+        </AppShell.Section>
 
-        {menuDropdownContent && (canUseDOM ? createPortal(menuDropdownContent, document.body) : menuDropdownContent)}
-      </div>
-    </header>
+        <AppShell.Section>
+          <Stack gap="sm">
+            <Divider />
+            <Stack gap={6}>
+              <Text size="xs" fw={600} c="dimmed" px={4}>
+                {t('header.themeSection', '界面主题')}
+              </Text>
+              <SegmentedControl
+                fullWidth
+                size="xs"
+                value={settings.theme}
+                onChange={value => handleThemeChange(value as ReaderSettings['theme'])}
+                data={APP_THEMES.map(item => ({
+                  value: item.id,
+                  label: t(item.key, item.name),
+                }))}
+              />
+            </Stack>
+
+            <Stack gap={4}>
+              <NavLink
+                label={t('header.webdav', '备份导入')}
+                leftSection={<Icon name="importFile" size={16} />}
+                onClick={onOpenConfigImport}
+                style={{ borderRadius: 8 }}
+              />
+              <NavLink
+                label={t('header.logout', '退出登录')}
+                leftSection={<Icon name="logOut" size={16} />}
+                onClick={handleLogout}
+                style={{ borderRadius: 8, color: 'var(--danger)' }}
+              />
+            </Stack>
+
+            <Group gap="xs" px={8} py={6} style={{ borderRadius: 8, background: 'var(--surface)' }}>
+              <ThemeIcon size={22} radius="xl" variant="light" color="brand">
+                <Icon name="wifi" size={12} />
+              </ThemeIcon>
+              <Stack gap={0} style={{ minWidth: 0 }}>
+                <Text size="xs" fw={600} truncate>{t('header.serviceLoggedIn', '服务已连接')}</Text>
+              </Stack>
+            </Group>
+          </Stack>
+        </AppShell.Section>
+      </AppShell.Navbar>
+
+      <AppShell.Main>
+        <Box maw={1320} mx="auto" w="100%">
+          {children}
+        </Box>
+      </AppShell.Main>
+    </AppShell>
   )
 }

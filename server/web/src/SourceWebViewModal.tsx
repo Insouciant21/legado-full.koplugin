@@ -1,6 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Center,
+  Group,
+  Loader,
+  Modal,
+  Paper,
+  Stack,
+  Text,
+  TextInput,
+  Tooltip,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { api } from './api'
+import { Icon } from './icons'
 import {
   isBubbleResult,
   mergeBubbleResult,
@@ -24,6 +41,7 @@ interface SourceWebViewModalProps {
    * 调用方据此打开「网络导入」弹窗。
    */
   onImportOnline?: (url: string) => void
+  childModalOpen?: boolean
 }
 
 type NavState = { list: string[]; index: number }
@@ -45,6 +63,7 @@ export const SourceWebViewModal: React.FC<SourceWebViewModalProps> = ({
   onLoggedIn,
   onSettingsSaved,
   onImportOnline,
+  childModalOpen = false,
 }) => {
   const { t } = useTranslation()
   const [token, setToken] = useState('')
@@ -105,8 +124,6 @@ export const SourceWebViewModal: React.FC<SourceWebViewModalProps> = ({
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => { void flushRef.current() }, 300)
   }, [])
-
-  const currentUrl = nav.list[nav.index] ?? ''
 
   // 建立代理会话
   useEffect(() => {
@@ -252,124 +269,188 @@ export const SourceWebViewModal: React.FC<SourceWebViewModalProps> = ({
   }
 
   return (
-    // is-blurless：关掉毛玻璃。实测 backdrop-filter + 内部 iframe 持续重绘 = 8 FPS
-    // （hover 动画卡成幻灯片），两层都去掉后回到 58 FPS。详见 app.css 的注释。
-    <div className="modal-backdrop is-blurless" onClick={onClose}>
-      <div className="source-webview-dialog" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div className="source-webview-toolbar">
-          <div className="source-webview-nav-group">
-            <button
-              type="button"
-              className="source-webview-icon-btn"
-              title={t('source.browserBack', '后退')}
-              disabled={!canGoBack}
-              onClick={() => canGoBack && navigate(nav.list[nav.index - 1])}
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              className="source-webview-icon-btn"
-              title={t('source.browserForward', '前进')}
-              disabled={!canGoForward}
-              onClick={() => canGoForward && navigate(nav.list[nav.index + 1])}
-            >
-              ›
-            </button>
-            <button
-              type="button"
-              className="source-webview-icon-btn"
-              title={t('source.browserRefresh', '刷新')}
-              disabled={!token}
-              onClick={() => {
-                setLoading(true)
-                setNavSeq(seq => seq + 1)
-              }}
-            >
-              ⟳
-            </button>
-            <button
-              type="button"
-              className="source-webview-icon-btn"
-              title={t('source.browserHome', '回到登录页')}
-              disabled={!startUrl}
-              onClick={() => navigate(startUrl)}
-            >
-              ⌂
-            </button>
-          </div>
+    <Modal
+      opened
+      onClose={onClose}
+      size="min(1040px, 95vw)"
+      padding={0}
+      withCloseButton={false}
+      closeOnEscape={!childModalOpen}
+      closeOnClickOutside={!childModalOpen}
+      trapFocus={!childModalOpen}
+      zIndex={320}
+      overlayProps={{ backgroundOpacity: 0.48, blur: 0 }}
+      styles={{
+        content: { overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '90vh' },
+        body: { padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+      }}
+    >
+      <Paper
+        withBorder={false}
+        p="xs"
+        radius={0}
+        style={{ borderBottom: '1px solid var(--line)', background: 'var(--surface)' }}
+      >
+        <Group gap="xs" wrap="nowrap">
+          <Group gap={4} wrap="nowrap">
+            <Tooltip label={t('source.browserBack', '后退')}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                disabled={!canGoBack}
+                onClick={() => canGoBack && navigate(nav.list[nav.index - 1])}
+                aria-label={t('source.browserBack', '后退')}
+              >
+                <Icon name="arrowLeft" size={16} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label={t('source.browserForward', '前进')}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                disabled={!canGoForward}
+                onClick={() => canGoForward && navigate(nav.list[nav.index + 1])}
+                aria-label={t('source.browserForward', '前进')}
+              >
+                <Icon name="arrowRight" size={16} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label={t('source.browserRefresh', '刷新')}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                disabled={!token}
+                onClick={() => {
+                  setLoading(true)
+                  setNavSeq(seq => seq + 1)
+                }}
+                aria-label={t('source.browserRefresh', '刷新')}
+              >
+                <Icon name="refresh" size={15} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label={t('source.browserHome', '回到登录页')}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                disabled={!startUrl}
+                onClick={() => navigate(startUrl)}
+                aria-label={t('source.browserHome', '回到登录页')}
+              >
+                <Icon name="home" size={15} />
+              </ActionIcon>
+            </Tooltip>
+          </Group>
 
-          <form className="source-webview-address-form" onSubmit={submitAddress}>
-            <input
-              className="source-webview-address"
+          <form onSubmit={submitAddress} style={{ flex: 1, minWidth: 0 }}>
+            <TextInput
+              size="xs"
               value={addressDraft}
               spellCheck={false}
               onChange={e => setAddressDraft(e.target.value)}
               placeholder={t('source.browserUrlPlaceholder', '输入该书源站点内的网址')}
+              leftSection={<Icon name="globe" size={13} />}
+              styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
             />
           </form>
 
-          <div className="source-webview-actions">
+          <Group gap="xs" wrap="nowrap">
             {cookieCount !== null && (
-              <span className="source-webview-cookie-badge" title={t('source.capturedCookieCount', '已捕获的 Cookie 域名数')}>
-                🍪 {cookieCount}
-              </span>
+              <Tooltip label={t('source.capturedCookieCount', '已捕获的 Cookie 域名数')}>
+                <Badge
+                  variant="light"
+                  color="brand"
+                  leftSection={<Icon name="cookie" size={12} />}
+                >
+                  {cookieCount}
+                </Badge>
+              </Tooltip>
             )}
-            <button
-              type="button"
-              className="source-webview-icon-btn"
-              title={t('source.openInNewTab', '在新标签页打开')}
-              disabled={!pageSrc}
-              onClick={() => pageSrc && window.open(pageSrc, '_blank', 'noopener,noreferrer')}
-            >
-              ⧉
-            </button>
-            <button
-              type="button"
-              className="primary-button source-webview-login-btn"
-              disabled={busy || !token}
+            <Tooltip label={t('source.openInNewTab', '在新标签页打开')}>
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                disabled={!pageSrc}
+                onClick={() => pageSrc && window.open(pageSrc, '_blank', 'noopener,noreferrer')}
+                aria-label={t('source.openInNewTab', '在新标签页打开')}
+              >
+                <Icon name="externalLink" size={15} />
+              </ActionIcon>
+            </Tooltip>
+            <Button
+              size="xs"
+              color="brand"
+              loading={busy}
+              disabled={!token}
+              leftSection={<Icon name="check" size={14} />}
               onClick={handleCheckLogin}
             >
-              {busy ? t('source.loginChecking', '检测中...') : `✓ ${t('source.loginCompleted', '登录完成')}`}
-            </button>
-            <button type="button" className="source-webview-icon-btn" title={t('common.close', '关闭')} onClick={onClose}>
-              ✕
-            </button>
-          </div>
-        </div>
+              {busy ? t('source.loginChecking', '检测中...') : t('source.loginCompleted', '登录完成')}
+            </Button>
+            <Tooltip label={t('common.close', '关闭')}>
+              <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label={t('common.close', '关闭')}>
+                <Icon name="close" size={16} />
+              </ActionIcon>
+            </Tooltip>
+          </Group>
+        </Group>
+      </Paper>
 
-        <div className="source-webview-body">
-          {error ? (
-            <div className="source-webview-placeholder error">
-              <div className="source-webview-placeholder-title">{t('source.cannotOpenBrowser', '无法打开内置浏览器')}</div>
-              <div className="source-webview-placeholder-text">{error}</div>
-              <div className="source-webview-placeholder-text">
-                {t('source.cannotOpenBrowserHint', '可在书源中补全 loginUrl 后重试，或改用「快捷填入 Cookie / 一键同步书签」方式。')}
-              </div>
-            </div>
-          ) : (
-            <>
-              {loading && <div className="source-webview-loading">{t('source.openingSourceSite', { name: sourceName, defaultValue: `正在打开 ${sourceName} ...` })}</div>}
-              {pageSrc && (
-                <iframe
-                  key={navSeq}
-                  ref={iframeRef}
-                  className="source-webview-frame"
-                  title={t('source.sourceSiteLoginTitle', { name: sourceName, defaultValue: `${sourceName} 登录` })}
-                  src={pageSrc}
-                  sandbox="allow-forms allow-scripts allow-popups allow-modals allow-downloads"
-                  referrerPolicy="no-referrer"
-                  onLoad={() => setLoading(false)}
-                />
-              )}
-            </>
-          )}
-        </div>
+      <Box pos="relative" style={{ flex: 1, minHeight: 'min(66vh, 620px)', background: 'var(--canvas)' }}>
+        {error ? (
+          <Center h="100%" p="xl">
+            <Alert
+              color="red"
+              variant="light"
+              icon={<Icon name="alert" size={18} />}
+              title={t('source.cannotOpenBrowser', '无法打开内置浏览器')}
+              maw={480}
+            >
+              <Stack gap="xs">
+                <Text size="sm">{error}</Text>
+                <Text size="xs" c="dimmed">
+                  {t('source.cannotOpenBrowserHint', '可在书源中补全 loginUrl 后重试，或改用「快捷填入 Cookie / 一键同步书签」方式。')}
+                </Text>
+              </Stack>
+            </Alert>
+          </Center>
+        ) : (
+          <>
+            {loading && (
+              <Center
+                pos="absolute"
+                inset={0}
+                style={{ zIndex: 2, background: 'color-mix(in srgb, var(--surface) 84%, transparent)' }}
+              >
+                <Group gap="sm">
+                  <Loader size="sm" />
+                  <Text size="sm" c="dimmed">
+                    {t('source.openingSourceSite', { name: sourceName, defaultValue: `正在打开 ${sourceName} ...` })}
+                  </Text>
+                </Group>
+              </Center>
+            )}
+            {pageSrc && (
+              <iframe
+                key={navSeq}
+                ref={iframeRef}
+                title={t('source.sourceSiteLoginTitle', { name: sourceName, defaultValue: `${sourceName} 登录` })}
+                src={pageSrc}
+                sandbox="allow-forms allow-scripts allow-popups allow-modals allow-downloads"
+                referrerPolicy="no-referrer"
+                onLoad={() => setLoading(false)}
+                style={{ width: '100%', height: '100%', minHeight: 'min(66vh, 620px)', border: 0, display: 'block', background: '#fff' }}
+              />
+            )}
+          </>
+        )}
+      </Box>
 
-        <div className="source-webview-footnote">
+      <Box px="md" py="xs" style={{ borderTop: '1px solid var(--line)', background: 'var(--sidebar-bg)' }}>
+        <Text size="xs" c="dimmed">
           {t('source.browserFootnote', '页面由服务端代理渲染（站点 JS 在隔离沙箱中运行，无法访问本应用数据）。登录成功后 Cookie 会自动保存到该书源，无需手动复制。')}
-        </div>
-      </div>
-    </div>
+        </Text>
+      </Box>
+    </Modal>
   )
 }

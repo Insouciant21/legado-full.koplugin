@@ -16,14 +16,14 @@
 
 ## Overview
 
-**Legado Server** is a standalone backend built with Kotlin JVM, Ktor, and SQLite. The minimal React WebUI focuses on source management, search, chapter/content viewing, the shelf, and TXT/EPUB export. A KOReader plugin performs Kindle-side reading; other management capabilities remain available through the backend API.
+**Legado Server** is a standalone backend built with Kotlin JVM, Ktor, and SQLite. The Astro WebUI uses React islands for source management, search, chapter/content viewing, the shelf, and TXT/EPUB export. A KOReader plugin performs Kindle-side reading; other management capabilities remain available through the backend API.
 
 ## Key Capabilities
 
 | Capability | Description |
 | --- | --- |
 | **Source processing** | Retains Legado source import/export, groups, search, debugging, login credentials, book details, chapter and content parsing APIs; Rhino, Jsoup, and JsonPath run in a JVM sandbox. Source checking (the same chain as Android's "check source": domain, search, explore, details, chapter list, content, plus failed-group, `respondTime`, and `// Error:` comment write-back) is served by `POST /api/sources/check`. |
-| **Minimal React WebUI** | Keeps source management, search, chapter/content viewing, shelf management, export, and Kindle pairing/push status. Rules, WebDAV, manga, audiobook, and publishing entry points are no longer shown. |
+| **Astro + React WebUI** | Astro provides static pages, routing, and per-page loading boundaries; React islands implement search, sources, shelf, device tasks, and the reader. Kindle pairing/push status and automatic publishing remain available. |
 | **Kindle sync and push** | Retains `/api/v1` Kindle Sync Protocol v1: pairing authorization, per-book publication, incremental sync, whole-book EPUB verification, bidirectional progress, and conflict resolution. Auto-publication waits for the complete cache, creates an immutable EPUB, and lets online devices pull it with Range resume, SHA-256 verification, atomic installation, and per-device acknowledgement. |
 | **Bookshelf export** | `POST /api/bookshelf/export` creates TXT or EPUB 2.0 jobs for shelf books. Missing chapters use the Android `WebBook.getContent` path with up to three attempts; failed chapters remain in the structure with a `null` placeholder. Books export one at a time in submission order, while `parallel=true` enables up to nine concurrent chapter downloads per book. EPUB supports NCX volume nesting, `epubScope`, and `epubSize` splitting. `/export-epub` remains an EPUB-only alias. |
 | **Manga** | Backend APIs retain manga intake, chapter parsing, image proxying, content-addressed caching, prefetch, quota reporting, and cleanup. The minimal WebUI has no manga reader. |

@@ -1,13 +1,34 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api, BookRequestContext } from './api'
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Drawer,
+  Group,
+  Loader,
+  Paper,
+  ScrollArea,
+  Stack,
+  Text,
+  Tooltip,
+} from '@mantine/core'
+import { useTranslation } from 'react-i18next'
+import { api, BookRequestContext, SourceLoginBookRefresh, SourceLoginContext, SourceSummary } from './api'
 import { Icon } from './icons'
-import type { OpenBook } from './openBook'
+import { isLocalBook } from './localBook'
+import { applySourceLoginBookRefresh, sourceLoginContext, type OpenBook } from './openBook'
 import { sanitizeImageUrl } from './sourceImport'
+import { SourceLoginModal } from './SourceLoginModal'
+import { toast } from './Toast'
 
 type Props = {
   openBook: OpenBook
   startIndex: number
   onClose: () => void
+  onBookChange: (book: OpenBook, index: number) => void
+  source?: SourceSummary
   theme: string
 }
 
@@ -97,7 +118,8 @@ function contentLines(
   return result
 }
 
-export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props) {
+export function TextReaderScreen({ openBook, startIndex, onClose, onBookChange, source, theme }: Props) {
+  const { t } = useTranslation()
   const initial = Math.min(Math.max(startIndex, 0), Math.max(openBook.chapters.length - 1, 0))
   const [index, setIndex] = useState(initial)
   const [content, setContent] = useState('')
@@ -105,7 +127,9 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [tocOpen, setTocOpen] = useState(false)
+  const [loginOpen, setLoginOpen] = useState(false)
   const scrollRef = useRef<HTMLElement>(null)
+  const refreshedChapter = useRef<{ url: string; content: NonNullable<SourceLoginBookRefresh['content']> } | null>(null)
   const scrollSaveTimer = useRef<number | null>(null)
   const restorePosition = useRef<number | null>(
     openBook.progress?.chapterIndex === initial
@@ -113,6 +137,7 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
       : 0,
   )
   const chapter = openBook.chapters[index]
+  const canLogin = !isLocalBook({ sourceId: openBook.details.sourceId, bookUrl: openBook.bookUrl }) && source?.hasLogin !== false
   const context = useMemo<BookRequestContext>(() => ({
     name: openBook.details.name,
     author: openBook.details.author,
@@ -138,6 +163,15 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
       setLoading(false)
       return
     }
+    const fresh = refreshedChapter.current
+    refreshedChapter.current = null
+    if (fresh?.url === chapter.url) {
+      setContent(fresh.content.content)
+      setTitle(fresh.content.title || chapter.title)
+      setError('')
+      setLoading(false)
+      return
+    }
     const controller = new AbortController()
     setLoading(true)
     setError('')
@@ -159,17 +193,20 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
     return () => controller.abort()
   }, [chapter, context, openBook.bookUrl, openBook.bookKind, openBook.details.sourceId])
 
-  const persistPosition = (targetIndex = index, targetChapter = chapter, targetTitle = title) => {
-    if (!targetChapter || targetChapter.isVolume) return
+  const scrollPosition = () => {
     const element = scrollRef.current
     const maxScroll = element ? Math.max(0, element.scrollHeight - element.clientHeight) : 0
-    const ratio = maxScroll > 0 ? Math.min(1, Math.max(0, (element?.scrollTop ?? 0) / maxScroll)) : 0
+    return maxScroll > 0 ? Math.min(1, Math.max(0, (element?.scrollTop ?? 0) / maxScroll)) : 0
+  }
+
+  const persistPosition = (targetIndex = index, targetChapter = chapter, targetTitle = title) => {
+    if (!targetChapter || targetChapter.isVolume) return
     void api.saveProgress(
       openBook.details.sourceId,
       openBook.bookUrl,
       targetChapter.url,
       targetIndex,
-      ratio,
+      scrollPosition(),
       targetTitle || targetChapter.title,
       undefined,
       openBook.bookKind || openBook.details.bookKind,
@@ -197,14 +234,47 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (tocOpen) setTocOpen(false)
-        else closeReader()
-      }
+      if (event.key !== 'Escape' || loginOpen || tocOpen || event.defaultPrevented) return
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return
+      closeReader()
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose, tocOpen, index, title, chapter])
+    // 在弹窗处理 Escape 前读取其打开状态，避免同一个按键继续关闭阅读页。
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [onClose, tocOpen, loginOpen, index, title, chapter])
+
+  const applyLoginRefresh = (refresh: SourceLoginBookRefresh, request: SourceLoginContext) => {
+    if (!refresh.content && !refresh.details && !refresh.chapters && !refresh.variables) return
+    const book = applySourceLoginBookRefresh(openBook, refresh)
+    const matchingIndex = book.chapters.findIndex(item => item.url === chapter?.url)
+    const nextIndex = matchingIndex >= 0 ? matchingIndex : Math.min(index, Math.max(0, book.chapters.length - 1))
+    const nextChapter = book.chapters[nextIndex]
+    const position = matchingIndex >= 0 ? (restorePosition.current ?? scrollPosition()) : 0
+    restorePosition.current = position
+    if (nextChapter) {
+      const fresh = request.chapter?.url === nextChapter.url ? refresh.content : undefined
+      const retained = matchingIndex >= 0 && content ? { title, content } : undefined
+      const chapterContent = fresh ?? retained
+      if (chapterContent) refreshedChapter.current = { url: nextChapter.url, content: chapterContent }
+    }
+    if (scrollSaveTimer.current !== null) {
+      window.clearTimeout(scrollSaveTimer.current)
+      scrollSaveTimer.current = null
+    }
+    setIndex(nextIndex)
+    onBookChange(nextChapter ? {
+      ...book,
+      progress: {
+        ...book.progress,
+        sourceId: book.details.sourceId,
+        bookUrl: book.bookUrl,
+        chapterUrl: nextChapter.url,
+        chapterIndex: nextIndex,
+        scrollPosition: position,
+        updatedAt: Date.now(),
+      },
+    } : book, nextIndex)
+  }
 
   const selectChapter = (next: number) => {
     if (next === index) {
@@ -249,53 +319,116 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
   )
 
   return (
-    <main className={`text-reader-page theme-${theme}`} ref={scrollRef} onScroll={handleScroll}>
-      <header className="text-reader-header">
-        <button type="button" className="subtle-button" onClick={closeReader}>
-          <Icon name="arrowLeft" />
-          <span>返回</span>
-        </button>
-        <div className="text-reader-heading">
-          <strong>{openBook.details.name}</strong>
-          <small>{title}</small>
-        </div>
-        <button type="button" className="subtle-button" onClick={() => setTocOpen(value => !value)}>
-          <Icon name="list" />
-          <span>目录</span>
-        </button>
-      </header>
+    <Box
+      component="main"
+      className={`legado-reader-shell theme-${theme}`}
+      ref={scrollRef}
+      onScroll={handleScroll}
+      style={{ height: '100dvh', overflowY: 'auto' }}
+    >
+      <Box component="header" className="legado-reader-header" px={{ base: 'sm', sm: 'lg' }} py="xs">
+        <Group justify="space-between" wrap="nowrap" maw={960} mx="auto" gap="sm">
+          <Button
+            size="xs"
+            variant="default"
+            leftSection={<Icon name="arrowLeft" size={14} />}
+            onClick={closeReader}
+          >
+            返回
+          </Button>
+          <Stack gap={0} align="center" style={{ minWidth: 0, flex: 1 }}>
+            <Text size="sm" fw={700} truncate maw="100%">{openBook.details.name}</Text>
+            <Text size="xs" c="dimmed" truncate maw="100%">{title}</Text>
+          </Stack>
+          <Group gap="xs" wrap="nowrap">
+            {canLogin && (
+              <Tooltip label={t('source.loginButton', '登录')}>
+                <ActionIcon variant="default" size="lg" aria-label={t('source.loginButton', '登录')} onClick={() => setLoginOpen(true)}>
+                  <Icon name="key" size={16} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<Icon name="list" size={14} />}
+              onClick={() => setTocOpen(true)}
+            >
+              目录
+            </Button>
+          </Group>
+        </Group>
+      </Box>
 
-      {tocOpen && (
-        <aside className="text-reader-toc" aria-label="章节目录">
-          <header>
-            <strong>目录</strong>
-            <span>{openBook.chapters.length} 章</span>
-            <button type="button" className="subtle-button" onClick={() => setTocOpen(false)}><Icon name="close" /></button>
-          </header>
-          <div>
+      <Drawer
+        opened={tocOpen}
+        onClose={() => setTocOpen(false)}
+        position="right"
+        size="sm"
+        title={
+          <Group gap="xs">
+            <Text fw={700}>章节目录</Text>
+            <Badge size="sm" variant="light">{openBook.chapters.length} 章</Badge>
+          </Group>
+        }
+      >
+        <ScrollArea h="calc(100dvh - 80px)">
+          <Stack gap={4}>
             {openBook.chapters.map((item, itemIndex) => (
-              <button
-                type="button"
+              <Button
                 key={`${item.index}:${item.url}`}
-                className={`${item.isVolume ? 'volume' : ''} ${itemIndex === index ? 'active' : ''}`}
+                variant={itemIndex === index ? 'light' : 'subtle'}
+                color={itemIndex === index ? 'brand' : 'gray'}
+                justify="space-between"
+                fullWidth
+                size="sm"
+                styles={{
+                  label: {
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    fontWeight: item.isVolume ? 700 : itemIndex === index ? 600 : 400,
+                  },
+                }}
+                rightSection={item.isVolume ? <Badge size="xs" variant="outline">卷</Badge> : undefined}
                 onClick={() => {
                   selectChapter(itemIndex)
                   setTocOpen(false)
                 }}
               >
-                <span>{item.title}</span>
-                {item.isVolume && <small>卷</small>}
-              </button>
+                {item.title}
+              </Button>
             ))}
-          </div>
-        </aside>
+          </Stack>
+        </ScrollArea>
+      </Drawer>
+
+      {loginOpen && (
+        <SourceLoginModal
+          sourceId={openBook.details.sourceId}
+          sourceName={source?.name}
+          context={sourceLoginContext(openBook, chapter)}
+          onBookRefresh={applyLoginRefresh}
+          onClose={() => setLoginOpen(false)}
+          onToast={toast.show}
+        />
       )}
 
-      <article className="text-reader-content">
+      <article className="legado-reader-article">
         <h1>{title}</h1>
-        {loading && <p className="text-reader-message">正在获取正文…</p>}
-        {error && <p className="form-error">{error}</p>}
-        {!loading && !error && chapter?.isVolume && <p className="text-reader-message">这是卷标题。</p>}
+        {loading && (
+          <Group justify="center" py="xl">
+            <Loader size="sm" />
+            <Text size="sm" c="dimmed">正在获取正文…</Text>
+          </Group>
+        )}
+        {error && (
+          <Alert color="red" variant="light" icon={<Icon name="alert" size={16} />}>
+            {error}
+          </Alert>
+        )}
+        {!loading && !error && chapter?.isVolume && (
+          <Text size="sm" c="dimmed" py="xl" ta="center">这是卷标题。</Text>
+        )}
         {!loading && !error && lines.map((line, lineIndex) =>
           line.type === 'image'
             ? <img key={lineIndex} className="text-reader-image" src={line.src} alt={line.alt} referrerPolicy="no-referrer" loading="lazy" />
@@ -303,11 +436,26 @@ export function TextReaderScreen({ openBook, startIndex, onClose, theme }: Props
         )}
       </article>
 
-      <footer className="text-reader-footer">
-        <button type="button" className="subtle-button" onClick={() => move(-1)} disabled={index <= 0}>上一章</button>
-        <span>{index + 1} / {openBook.chapters.length}</span>
-        <button type="button" className="primary-button" onClick={() => move(1)} disabled={index >= openBook.chapters.length - 1}>下一章</button>
-      </footer>
-    </main>
+      <Paper radius={0} p="md" style={{ borderLeft: 0, borderRight: 0, borderBottom: 0 }}>
+        <Group justify="space-between" maw={740} mx="auto">
+          <Button
+            variant="default"
+            leftSection={<Icon name="arrowLeft" size={15} />}
+            onClick={() => move(-1)}
+            disabled={index <= 0}
+          >
+            上一章
+          </Button>
+          <Text size="sm" c="dimmed" fw={500}>{index + 1} / {openBook.chapters.length}</Text>
+          <Button
+            rightSection={<Icon name="arrowRight" size={15} />}
+            onClick={() => move(1)}
+            disabled={index >= openBook.chapters.length - 1}
+          >
+            下一章
+          </Button>
+        </Group>
+      </Paper>
+    </Box>
   )
 }

@@ -8,6 +8,7 @@ gradle-cache
 **/build
 web/node_modules
 web/dist
+web/.astro
 web/.vite
 web/coverage
 web/playwright-report

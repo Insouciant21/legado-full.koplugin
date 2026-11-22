@@ -1,30 +1,16 @@
 import React, { useRef } from 'react'
+import { ActionIcon, Button, Group, Loader, Paper, TextInput } from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { Icon } from './icons'
-import { ButtonSpinner } from './ButtonSpinner'
 
-/**
- * 书库页顶部的主搜索框（唯一的「输入书名/作者 + 搜索」入口）。
- *
- * 搜索框单独成组件，集中维护清空、键盘操作和提交状态。
- */
 export interface SearchBoxProps {
-  /** 当前关键词（受控；真值来源是 searchStore）。 */
   keyword: string
-  /** 搜索请求进行中：提交按钮换成「停止搜索」，并在输入框右侧显示加载指示器。 */
   loading: boolean
-  /** 关键词变化。 */
   onChange: (keyword: string) => void
-  /** 提交搜索（回车与主按钮共用同一条路径）。 */
   onSubmit: () => void
-  /** 中断进行中的搜索。 */
   onStop: () => void
 }
 
-/**
- * 「清空」的唯一实现：置空关键词，并把焦点交还输入框（方便直接重新输入）。
- * 清空逻辑单独导出，供组件内部的清空按钮和键盘操作复用。
- */
 export function clearSearchInput(
   input: { current: Pick<HTMLInputElement, 'focus'> | null },
   onChange: (keyword: string) => void,
@@ -33,12 +19,6 @@ export function clearSearchInput(
   input.current?.focus()
 }
 
-/**
- * 输入框按键接线：`Esc` 清空并保持焦点。
- *
- * `Enter` **刻意不在这里处理**——它由外层 `<form>` 的 submit 事件负责，
- * 同一个提交动作只保留一条实现，避免回车触发两次搜索。
- */
 export function handleSearchKeyDown(
   event: Pick<React.KeyboardEvent<HTMLInputElement>, 'key' | 'preventDefault'>,
   onClear: () => void,
@@ -51,69 +31,67 @@ export function handleSearchKeyDown(
 export function SearchBox({ keyword, loading, onChange, onSubmit, onStop }: SearchBoxProps) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
-  /** 清空按钮的显隐：有任何字符（含空格）就显示，用户随时能把框恢复干净。 */
   const hasContent = keyword.length > 0
-  /** 提交按钮的可用性：纯空白等同于空输入（searchStore.startSearch 本来也会直接 return）。 */
   const canSubmit = keyword.trim().length > 0
   const clear = () => clearSearchInput(inputRef, onChange)
 
   return (
-    <form
-      className={`library-search-form${loading ? ' is-searching' : ''}`}
+    <Paper
+      component="form"
       role="search"
+      p={6}
+      radius="md"
+      shadow="xs"
       onSubmit={event => {
         event.preventDefault()
         onSubmit()
       }}
     >
-      <Icon name="search" />
-      <input
-        ref={inputRef}
-        type="text"
-        value={keyword}
-        onChange={event => onChange(event.target.value)}
-        onKeyDown={event => handleSearchKeyDown(event, clear)}
-        placeholder={t('library.searchPlaceholder', '输入书名或作者')}
-        aria-label={t('library.searchPlaceholder', '输入书名或作者')}
-        enterKeyHint="search"
-        autoComplete="off"
-        spellCheck={false}
-      />
-      {loading && (
-        <ButtonSpinner
-          size={14}
-          className="library-search-spinner"
-          label={t('library.searching', '正在搜索')}
+      <Group gap="xs" wrap="nowrap">
+        <TextInput
+          ref={inputRef}
+          flex={1}
+          size="md"
+          variant="unstyled"
+          px="xs"
+          value={keyword}
+          onChange={event => onChange(event.target.value)}
+          onKeyDown={event => handleSearchKeyDown(event, clear)}
+          placeholder={t('library.searchPlaceholder', '输入书名或作者')}
+          aria-label={t('library.searchPlaceholder', '输入书名或作者')}
+          enterKeyHint="search"
+          autoComplete="off"
+          spellCheck={false}
+          leftSection={<Icon name="search" size={18} />}
+          rightSection={
+            <Group gap={4} wrap="nowrap">
+              {loading && <Loader size={15} aria-label={t('library.searching', '正在搜索')} />}
+              {hasContent && (
+                <ActionIcon
+                  variant="subtle"
+                  color="gray"
+                  size="sm"
+                  onClick={clear}
+                  title={t('library.clearSearch', '清空')}
+                  aria-label={t('library.clearSearch', '清空')}
+                >
+                  <Icon name="close" size={14} />
+                </ActionIcon>
+              )}
+            </Group>
+          }
+          rightSectionWidth={loading && hasContent ? 58 : 34}
         />
-      )}
-      {hasContent && (
-        <button
-          type="button"
-          className="library-search-clear"
-          onClick={clear}
-          title={t('library.clearSearch', '清空')}
-          aria-label={t('library.clearSearch', '清空')}
-        >
-          <Icon name="close" />
-        </button>
-      )}
-      {loading ? (
-        <button
-          type="button"
-          className="primary-button library-search-submit"
-          onClick={onStop}
-        >
-          {t('library.stopSearch', '停止搜索')}
-        </button>
-      ) : (
-        <button
-          type="submit"
-          className="primary-button library-search-submit"
-          disabled={!canSubmit}
-        >
-          {t('library.startSearch', '搜索')}
-        </button>
-      )}
-    </form>
+        {loading ? (
+          <Button type="button" color="red" variant="light" onClick={onStop} leftSection={<Icon name="stop" size={14} />}>
+            {t('library.stopSearch', '停止搜索')}
+          </Button>
+        ) : (
+          <Button type="submit" disabled={!canSubmit} leftSection={<Icon name="search" size={15} />}>
+            {t('library.startSearch', '搜索')}
+          </Button>
+        )}
+      </Group>
+    </Paper>
   )
 }

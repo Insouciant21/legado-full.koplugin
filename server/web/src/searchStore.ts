@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import i18n from './i18n'
-import { api, BookDetails, BookRequestContext, SearchResult, SearchStreamEvent, streamSearch } from './api'
-import type { OpenBook } from './openBook'
+import { api, BookDetails, BookRequestContext, SearchResult, SearchStreamEvent, SourceLoginBookRefresh, SourceLoginContext, streamSearch } from './api'
+import { applySourceLoginBookRefresh, type OpenBook } from './openBook'
 import { cleanAuthor, cleanTitle, defaultSearchFilters, SearchFilters, SearchGroup } from './searchFilters'
 
 export type SourceChoiceStatus = 'idle' | 'loading' | 'loaded' | 'error'
@@ -295,6 +295,22 @@ export class SearchStore {
   setOpenBook = (openBook: OpenBook | null) => {
     if (!openBook) this.detailRequestId++
     this.setState({ openBook, detailLoading: false, detailError: '' })
+  }
+
+  applyLoginBookRefresh = (refresh: SourceLoginBookRefresh, { book }: SourceLoginContext) => {
+    if (!refresh.details && !refresh.chapters && !refresh.variables) return
+    const current = this.state.openBook
+    if (current?.details.sourceId !== book.sourceId || current.bookUrl !== book.bookUrl) return
+    const openBook = applySourceLoginBookRefresh(current, refresh)
+    this.setState({
+      openBook,
+      detailError: refresh.details || refresh.chapters ? '' : this.state.detailError,
+      choices: this.state.choices.map(choice =>
+        choice.result.sourceId === book.sourceId && choice.result.bookUrl === book.bookUrl
+          ? { ...choice, book: openBook, status: 'loaded', error: undefined }
+          : choice,
+      ),
+    })
   }
 
   setChoices = (choices: SourceChoice[]) => {

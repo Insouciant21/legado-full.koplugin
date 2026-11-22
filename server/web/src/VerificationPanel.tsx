@@ -1,4 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Accordion,
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Grid,
+  Group,
+  Loader,
+  Modal,
+  Paper,
+  Stack,
+  Tabs,
+  Text,
+  TextInput,
+  Tooltip,
+} from '@mantine/core'
+import { useElementSize, useEventListener, useMergedRef } from '@mantine/hooks'
 import { useTranslation } from 'react-i18next'
 import {
   api,
@@ -7,7 +26,6 @@ import {
   type SourceVerificationSession,
 } from './api'
 import { Icon } from './icons'
-import { ButtonSpinner } from './ButtonSpinner'
 
 /**
  * 全局书源人工验证面板。
@@ -41,7 +59,9 @@ const REMOTE_KEYS = new Set([
   'Home', 'End', 'PageUp', 'PageDown',
 ])
 
-const SCREENSHOT_ZOOM_LEVELS = [1, 1.25, 1.5, 1.75, 2] as const
+const VIEWPORT_ZOOM_LEVELS = [1, 1.25, 1.5, 1.75, 2] as const
+const MAX_REMOTE_VIEWPORT_EDGE = 1600
+const WHEEL_LISTENER_OPTIONS = { passive: false }
 
 const formatVerificationLocation = (value: string | undefined, inlineLabel: string) => {
   if (!value) return inlineLabel
@@ -78,11 +98,35 @@ export function screenshotClickToPixel(
 type ScreenshotState = {
   sessionId: string
   url: string
-  width: number
-  height: number
   loading: boolean
   error: string
 }
+
+type FramePoint = { x: number; y: number; width: number; height: number; scale: number }
+
+function pointOnFrame(image: HTMLImageElement | null, clientX: number, clientY: number): FramePoint | null {
+  if (!image?.naturalWidth || !image.naturalHeight) return null
+  const { naturalWidth: width, naturalHeight: height } = image
+  const rect = image.getBoundingClientRect()
+  const scale = Math.min(rect.width / width, rect.height / height)
+  // During resize or reconnect object-fit can leave margins around the last frame.
+  const painted = {
+    left: rect.left + (rect.width - width * scale) / 2,
+    top: rect.top + (rect.height - height * scale) / 2,
+    width: width * scale,
+    height: height * scale,
+  }
+  const point = screenshotClickToPixel(clientX, clientY, painted, { width, height })
+  if (!point || point.x < 0 || point.y < 0 || point.x >= width || point.y >= height) return null
+  return { ...point, width, height, scale }
+}
+
+type RemoteScroll = Extract<SourceVerificationInteraction, { action: 'scroll' }>
+type QueuedScroll = {
+  command: RemoteScroll
+  send: (interaction: SourceVerificationInteraction) => Promise<void>
+}
+type TouchDrag = { id: number; origin: FramePoint; x: number; y: number; moved: boolean }
 
 type ResultSummary = { status: number; bytes: number } | { error: string } | null
 type StreamStatus = 'fallback' | 'connecting' | 'live'
@@ -93,8 +137,6 @@ type StreamMessage = {
   url?: string
   title?: string
   error?: string | null
-  width?: number
-  height?: number
 }
 
 export function VerificationPanel() {
@@ -110,21 +152,23 @@ export function VerificationPanel() {
   const [keyInput, setKeyInput] = useState('Enter')
   const [captchaInput, setCaptchaInput] = useState('')
   const [zoom, setZoom] = useState(1)
-  const [browserFocused, setBrowserFocused] = useState(false)
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('fallback')
   const [streamAttempt, setStreamAttempt] = useState(0)
   const [results, setResults] = useState<Record<string, ResultSummary>>({})
   const shotUrlRef = useRef<string | null>(null)
   const sawPendingRef = useRef(false)
   const browserViewRef = useRef<HTMLDivElement | null>(null)
+  const frameRef = useRef<HTMLImageElement | null>(null)
+  const { ref: measureViewport, width: previewWidth, height: previewHeight } = useElementSize<HTMLDivElement>()
   const interactionQueueRef = useRef<Promise<void>>(Promise.resolve())
   const interactionPendingRef = useRef(0)
   const directTypeBufferRef = useRef('')
   const directTypeTimerRef = useRef<number | null>(null)
-  const wheelDeltaRef = useRef(0)
-  const wheelTimerRef = useRef<number | null>(null)
+  const pendingScrollRef = useRef<QueuedScroll | null>(null)
+  const scrollTimerRef = useRef<number | null>(null)
+  const touchDragRef = useRef<TouchDrag | null>(null)
+  const suppressDragClickRef = useRef(false)
   const streamRef = useRef<WebSocket | null>(null)
-  const streamFrameSizeRef = useRef({ width: 1072, height: 1448 })
 
   const manualSessions = useMemo(() => filterManualVerifications(sessions), [sessions])
   const activeSessions = useMemo(() => manualSessions.filter(isActiveVerification), [manualSessions])
@@ -137,6 +181,10 @@ export function VerificationPanel() {
       ?? null,
     [manualSessions, selectedId, activeSessions],
   )
+  const interactive = selected?.state === 'interactive'
+  const interactivePage = interactive && selected.kind === 'page'
+  const sessionId = selected?.id
+  const sourceId = selected?.sourceId
 
   const revokeShotUrl = useCallback(() => {
     if (shotUrlRef.current) {
@@ -147,26 +195,25 @@ export function VerificationPanel() {
 
   useEffect(() => revokeShotUrl, [revokeShotUrl])
 
-  // 切换会话时重置截图缩放、远程焦点和尚未发送的键盘/滚轮缓冲。
   useEffect(() => {
     setZoom(1)
-    setBrowserFocused(false)
+  }, [selected?.id])
+
+  // Abandon buffered input when the preview closes or the session changes.
+  useEffect(() => () => {
     directTypeBufferRef.current = ''
-    wheelDeltaRef.current = 0
+    pendingScrollRef.current = null
+    touchDragRef.current = null
+    suppressDragClickRef.current = false
     if (directTypeTimerRef.current !== null) {
       window.clearTimeout(directTypeTimerRef.current)
       directTypeTimerRef.current = null
     }
-    if (wheelTimerRef.current !== null) {
-      window.clearTimeout(wheelTimerRef.current)
-      wheelTimerRef.current = null
+    if (scrollTimerRef.current !== null) {
+      window.clearTimeout(scrollTimerRef.current)
+      scrollTimerRef.current = null
     }
-  }, [selected?.id])
-
-  useEffect(() => () => {
-    if (directTypeTimerRef.current !== null) window.clearTimeout(directTypeTimerRef.current)
-    if (wheelTimerRef.current !== null) window.clearTimeout(wheelTimerRef.current)
-  }, [])
+  }, [open, selected?.id, selected?.state])
 
   // CDP 实时流是主通道；连接失败或关闭后保留截图 fallback，并低频尝试重连。
   useEffect(() => {
@@ -184,12 +231,6 @@ export function VerificationPanel() {
     const updateFromMessage = (message: StreamMessage) => {
       if (stopped) return
       if (message.type === 'ready') setStreamStatus('live')
-      if (Number.isFinite(message.width) && Number.isFinite(message.height)) {
-        streamFrameSizeRef.current = {
-          width: Math.max(1, Number(message.width)),
-          height: Math.max(1, Number(message.height)),
-        }
-      }
       if (message.type === 'error' && message.error) {
         setActionError(message.error)
         return
@@ -224,8 +265,6 @@ export function VerificationPanel() {
       setShot({
         sessionId: selected.id,
         url,
-        width: streamFrameSizeRef.current.width,
-        height: streamFrameSizeRef.current.height,
         loading: false,
         error: '',
       })
@@ -304,7 +343,7 @@ export function VerificationPanel() {
     let cancelled = false
     setShot(prev => (prev?.sessionId === selected.id
       ? { ...prev, loading: true, error: '' }
-      : { sessionId: selected.id, url: '', width: 0, height: 0, loading: true, error: '' }))
+      : { sessionId: selected.id, url: '', loading: true, error: '' }))
     void api.verificationScreenshot(selected.sourceId, selected.id)
       .then(blob => {
         if (cancelled) return
@@ -317,11 +356,11 @@ export function VerificationPanel() {
           }
           revokeShotUrl()
           shotUrlRef.current = url
-          setShot({ sessionId: selected.id, url, width: image.naturalWidth, height: image.naturalHeight, loading: false, error: '' })
+          setShot({ sessionId: selected.id, url, loading: false, error: '' })
         }
         image.onerror = () => {
           URL.revokeObjectURL(url)
-          if (!cancelled) setShot({ sessionId: selected.id, url: '', width: 0, height: 0, loading: false, error: t('verification.screenshotFailed', '截图加载失败') })
+          if (!cancelled) setShot({ sessionId: selected.id, url: '', loading: false, error: t('verification.screenshotFailed', '截图加载失败') })
         }
         image.src = url
       })
@@ -330,8 +369,6 @@ export function VerificationPanel() {
         setShot({
           sessionId: selected.id,
           url: '',
-          width: 0,
-          height: 0,
           loading: false,
           error: error instanceof Error ? error.message : t('verification.screenshotFailed', '截图加载失败'),
         })
@@ -379,8 +416,8 @@ export function VerificationPanel() {
    * 浏览器操作严格串行执行。直接键盘输入、滚轮和工具栏可能在同一瞬间触发，
    * 如果并发提交，`type("ab") + Backspace` 会因网络乱序变成不可预测的结果。
    */
-  const runInteraction = (interaction: SourceVerificationInteraction): Promise<void> => {
-    if (!selected) return Promise.resolve()
+  const runInteraction = useCallback((interaction: SourceVerificationInteraction): Promise<void> => {
+    if (!sourceId || !sessionId) return Promise.resolve()
     const stream = streamRef.current
     if (streamStatus === 'live' && stream?.readyState === WebSocket.OPEN && stream.bufferedAmount < 256 * 1024) {
       try {
@@ -392,8 +429,6 @@ export function VerificationPanel() {
         setStreamStatus('fallback')
       }
     }
-    const sourceId = selected.sourceId
-    const sessionId = selected.id
     const task = interactionQueueRef.current.then(async () => {
       interactionPendingRef.current += 1
       setBusy(true)
@@ -401,7 +436,8 @@ export function VerificationPanel() {
       try {
         await api.verificationInteract(sourceId, sessionId, interaction)
         setShotSeq(value => value + 1)
-        if (interaction.action !== 'type' && interaction.action !== 'scroll' && interaction.action !== 'key') {
+        if (interaction.action === 'back' || interaction.action === 'forward' || interaction.action === 'reload'
+          || interaction.action === 'navigate' || interaction.action === 'click') {
           const next = await api.verification(sourceId, sessionId)
           setSessions(prev => prev.map(item => item.id === next.id ? next : item))
         }
@@ -414,7 +450,22 @@ export function VerificationPanel() {
     })
     interactionQueueRef.current = task.catch(() => undefined)
     return task
-  }
+  }, [sessionId, sourceId, streamStatus, t])
+
+  // Keep the remote page at the same aspect ratio as the viewport. Zoom shrinks
+  // the remote CSS viewport and lets Chromium lay out the page at that size.
+  useEffect(() => {
+    if (!open || !interactive || streamStatus === 'connecting' || !previewWidth || !previewHeight) return
+    const scale = Math.max(zoom, previewWidth / MAX_REMOTE_VIEWPORT_EDGE, previewHeight / MAX_REMOTE_VIEWPORT_EDGE)
+    const timer = window.setTimeout(() => {
+      void runInteraction({
+        action: 'resize',
+        width: Math.max(1, Math.round(previewWidth / scale)),
+        height: Math.max(1, Math.round(previewHeight / scale)),
+      })
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [open, interactive, streamStatus, previewWidth, previewHeight, zoom, runInteraction])
 
   const flushDirectType = () => {
     if (directTypeTimerRef.current !== null) {
@@ -446,34 +497,90 @@ export function VerificationPanel() {
     void runInteraction({ action: 'key', key: event.key })
   }
 
-  const handleScreenshotWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    // 放大截图时滚轮用于查看大图；适应窗口时滚轮直接滚动远端网页。
-    if (zoom > 1 || !selected || selected.state !== 'interactive' || (busy && interactionPendingRef.current === 0)) return
+  const flushScroll = useCallback(function flushScroll() {
+    const pending = pendingScrollRef.current
+    pendingScrollRef.current = null
+    if (!pending) {
+      scrollTimerRef.current = null
+      return
+    }
+    const timer = scrollTimerRef.current
+    const { command, send } = pending
+    const finished = () => {
+      if (scrollTimerRef.current !== timer) return
+      scrollTimerRef.current = pendingScrollRef.current ? window.setTimeout(flushScroll, 32) : null
+    }
+    void send(command).then(finished, finished)
+  }, [])
+
+  // Coalesce wheel and touch deltas. Wait for the previous REST input before
+  // sending more, so fast swipes cannot leave a backlog of screenshot requests.
+  const queueScroll = useCallback((point: FramePoint, deltaX: number, deltaY: number) => {
+    const { x, y, width, height, scale } = point
+    const pending = pendingScrollRef.current
+    const previous = pending?.send === runInteraction && pending.command.width === width && pending.command.height === height
+      ? pending.command : undefined
+    pendingScrollRef.current = {
+      send: runInteraction,
+      command: {
+        action: 'scroll', x, y, width, height,
+        deltaX: Math.max(-1200, Math.min(1200, (previous?.deltaX ?? 0) + deltaX / scale)),
+        deltaY: Math.max(-1200, Math.min(1200, (previous?.deltaY ?? 0) + deltaY / scale)),
+      },
+    }
+    if (scrollTimerRef.current === null) scrollTimerRef.current = window.setTimeout(flushScroll, 32)
+  }, [flushScroll, runInteraction])
+
+  const handleScreenshotWheel = useCallback((event: WheelEvent) => {
+    if (!interactivePage || (busy && interactionPendingRef.current === 0) || event.ctrlKey || event.metaKey) return
+    const point = pointOnFrame(frameRef.current, event.clientX, event.clientY)
+    if (!point) return
+    const { deltaMode, deltaX, deltaY } = event
+    const shifted = event.shiftKey && deltaX === 0
+    const view = browserViewRef.current
+    const unit = deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1
+    const unitX = deltaMode === WheelEvent.DOM_DELTA_PAGE ? (view?.clientWidth ?? 1) : unit
+    const unitY = deltaMode === WheelEvent.DOM_DELTA_PAGE ? (view?.clientHeight ?? 1) : unit
     event.preventDefault()
-    wheelDeltaRef.current += event.deltaY
-    if (wheelTimerRef.current !== null) return
-    wheelTimerRef.current = window.setTimeout(() => {
-      wheelTimerRef.current = null
-      const delta = Math.max(-1200, Math.min(1200, wheelDeltaRef.current))
-      wheelDeltaRef.current = 0
-      if (Math.abs(delta) >= 1) void runInteraction({ action: 'scroll', x: 0, y: delta })
-    }, 100)
+    queueScroll(point, (shifted ? deltaY : deltaX) * unitX, (shifted ? 0 : deltaY) * unitY)
+  }, [busy, interactivePage, queueScroll])
+  const listenToWheel = useEventListener<'wheel', HTMLDivElement>('wheel', handleScreenshotWheel, WHEEL_LISTENER_OPTIONS)
+  const viewportRef = useMergedRef(browserViewRef, measureViewport, listenToWheel)
+
+  const handleTouchStart = (event: React.PointerEvent<HTMLImageElement>) => {
+    if (!event.isPrimary) return
+    suppressDragClickRef.current = false
+    if (event.pointerType !== 'touch' || !interactivePage || busy) return
+    const origin = pointOnFrame(event.currentTarget, event.clientX, event.clientY)
+    if (!origin) return
+    touchDragRef.current = { id: event.pointerId, origin, x: event.clientX, y: event.clientY, moved: false }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handleTouchMove = (event: React.PointerEvent<HTMLImageElement>) => {
+    const drag = touchDragRef.current
+    if (!drag || drag.id !== event.pointerId) return
+    const dx = drag.x - event.clientX
+    const dy = drag.y - event.clientY
+    if (!drag.moved && Math.hypot(dx, dy) < 6) return
+    drag.moved = true
+    drag.x = event.clientX
+    drag.y = event.clientY
+    suppressDragClickRef.current = true
+    queueScroll(drag.origin, dx, dy)
+  }
+
+  const handleTouchEnd = (event: React.PointerEvent<HTMLImageElement>) => {
+    if (touchDragRef.current?.id === event.pointerId) touchDragRef.current = null
   }
 
   const handleScreenshotClick = (event: React.MouseEvent<HTMLImageElement>) => {
-    if (!selected || selected.kind === 'captcha' || selected.state !== 'interactive' || busy) return
-    const image = event.currentTarget
-    browserViewRef.current?.focus()
-    setBrowserFocused(true)
-    // 显示尺寸 → 截图像素：后端 mouse.click 需要的是截图真实像素坐标。
-    const point = screenshotClickToPixel(
-      event.clientX,
-      event.clientY,
-      image.getBoundingClientRect(),
-      { width: image.naturalWidth, height: image.naturalHeight },
-    )
+    if (suppressDragClickRef.current || !interactivePage || busy) return
+    const point = pointOnFrame(event.currentTarget, event.clientX, event.clientY)
     if (!point) return
-    void runInteraction({ action: 'click', ...point })
+    browserViewRef.current?.focus({ preventScroll: true })
+    const { x, y, width, height } = point
+    void runInteraction({ action: 'click', x, y, width, height })
   }
 
   /**
@@ -537,296 +644,360 @@ export function VerificationPanel() {
   }
 
   const resultSummary = selected ? results[selected.id] : undefined
+  const currentShot = shot?.sessionId === selected?.id ? shot : null
   const canInteract = Boolean(selected && selected.state === 'interactive' && !busy)
   const selectedTitle = selected?.title?.trim() || t('verification.title', '书源验证')
   const locationLabel = formatVerificationLocation(
     selected?.url,
     t('verification.inlinePage', '书源内置页面'),
   )
-  const zoomIndex = SCREENSHOT_ZOOM_LEVELS.indexOf(zoom as typeof SCREENSHOT_ZOOM_LEVELS[number])
+  const zoomIndex = VIEWPORT_ZOOM_LEVELS.indexOf(zoom as typeof VIEWPORT_ZOOM_LEVELS[number])
   const changeZoom = (direction: -1 | 1) => {
     const current = zoomIndex < 0 ? 0 : zoomIndex
-    const next = Math.max(0, Math.min(SCREENSHOT_ZOOM_LEVELS.length - 1, current + direction))
-    setZoom(SCREENSHOT_ZOOM_LEVELS[next])
+    const next = Math.max(0, Math.min(VIEWPORT_ZOOM_LEVELS.length - 1, current + direction))
+    setZoom(VIEWPORT_ZOOM_LEVELS[next])
   }
 
   return (
     <>
       {activeSessions.length > 0 && (
-        <button type="button" className="verification-fab" onClick={() => setOpen(value => !value)} aria-expanded={open}>
-          <Icon name="activity" />
-          <span>{t('verification.badge', { count: activeSessions.length, defaultValue: `待处理 ${activeSessions.length} 个` })}</span>
-        </button>
+        <Button
+          className="legado-verification-fab"
+          color="gold"
+          radius="xl"
+          size="md"
+          leftSection={<Icon name="activity" size={16} />}
+          onClick={() => setOpen(value => !value)}
+          aria-expanded={open}
+        >
+          {t('verification.badge', { count: activeSessions.length, defaultValue: `待处理 ${activeSessions.length} 个` })}
+        </Button>
       )}
       {open && selected && (
-        <div className="verification-overlay" role="dialog" aria-modal="true" aria-label={selectedTitle}>
-          <div className="verification-panel">
-            <header className="verification-panel-header">
-              <div className="verification-title-block">
-                <strong>{selectedTitle}</strong>
-                <div className="verification-title-meta">
-                  <span className={`verification-state ${isActiveVerification(selected) ? 'is-active' : ''}`}>{stateLabel(selected)}</span>
-                  <small>{t('verification.badge', { count: activeSessions.length, defaultValue: `待处理 ${activeSessions.length} 个` })}</small>
-                </div>
-              </div>
-              <button type="button" className="subtle-button" onClick={() => setOpen(false)} aria-label={t('verification.close', '关闭')}>
-                <Icon name="close" />
-              </button>
-            </header>
+        <Modal
+          opened
+          onClose={() => setOpen(false)}
+          size="min(1120px, 96vw)"
+          zIndex={400}
+          withCloseButton={false}
+          padding="md"
+          aria-label={selectedTitle}
+        >
+          <Stack gap="sm">
+            <Group justify="space-between" align="center" wrap="nowrap" pb="xs" style={{ borderBottom: '1px solid var(--line)' }}>
+              <Group gap="sm" wrap="wrap" style={{ minWidth: 0 }}>
+                <Text fw={700} size="md" truncate>{selectedTitle}</Text>
+                <Badge
+                  size="sm"
+                  variant="light"
+                  color={isActiveVerification(selected) ? 'brand' : selected.state === 'completed' ? 'teal' : 'gray'}
+                >
+                  {stateLabel(selected)}
+                </Badge>
+                <Text size="xs" c="dimmed">
+                  {t('verification.badge', { count: activeSessions.length, defaultValue: `待处理 ${activeSessions.length} 个` })}
+                </Text>
+              </Group>
+              <ActionIcon variant="subtle" color="gray" onClick={() => setOpen(false)} aria-label={t('verification.close', '关闭')}>
+                <Icon name="close" size={16} />
+              </ActionIcon>
+            </Group>
 
             {manualSessions.length > 1 && (
-              <div className="verification-session-list">
-                {manualSessions.map(session => (
-                  <button
-                    type="button"
-                    key={session.id}
-                    className={`verification-session-item ${session.id === selected.id ? 'active' : ''}`}
-                    onClick={() => setSelectedId(session.id)}
-                  >
-                    <span className="verification-session-title">{session.title || t('verification.title', '书源验证')}</span>
-                    <small>{session.sourceId}</small>
-                    <span className={`verification-state ${isActiveVerification(session) ? 'is-active' : ''}`}>{stateLabel(session)}</span>
-                  </button>
-                ))}
-              </div>
+              <Tabs value={selected.id} onChange={value => value && setSelectedId(value)} variant="outline">
+                <Tabs.List style={{ overflowX: 'auto', flexWrap: 'nowrap' }}>
+                  {manualSessions.map(session => (
+                    <Tabs.Tab
+                      key={session.id}
+                      value={session.id}
+                      rightSection={
+                        <Badge size="xs" variant="light" color={isActiveVerification(session) ? 'brand' : 'gray'}>
+                          {stateLabel(session)}
+                        </Badge>
+                      }
+                    >
+                      <Text size="xs" fw={600}>{session.title || session.sourceId}</Text>
+                    </Tabs.Tab>
+                  ))}
+                </Tabs.List>
+              </Tabs>
             )}
 
-            <div className="verification-panel-body">
-              <section className="verification-browser">
-                <div className="verification-browser-toolbar">
-                  <div className="verification-browser-nav">
-                    <button
-                      type="button"
-                      className="verification-tool-button"
-                      title={t('verification.back', '返回上一页')}
-                      disabled={!canInteract}
-                      onClick={() => void runInteraction({ action: 'back' })}
-                    >
-                      <Icon name="arrowLeft" />
-                    </button>
-                    <button
-                      type="button"
-                      className="verification-tool-button"
-                      title={t('verification.forward', '前进')}
-                      disabled={!canInteract}
-                      onClick={() => void runInteraction({ action: 'forward' })}
-                    >
-                      <Icon name="arrowRight" />
-                    </button>
-                    <button
-                      type="button"
-                      className="verification-tool-button"
-                      title={t('verification.reload', '重新加载网页')}
-                      disabled={!canInteract}
-                      onClick={() => void runInteraction({ action: 'reload' })}
-                    >
-                      <Icon name="refresh" />
-                    </button>
-                  </div>
-                  <div className="verification-location" title={selected.url}>
-                    <span className="verification-location-dot" />
-                    <span>{locationLabel}</span>
-                  </div>
-                  <div className="verification-zoom" aria-label={t('verification.zoom', '截图缩放')}>
-                    <button type="button" className="verification-tool-button" disabled={zoomIndex <= 0} onClick={() => changeZoom(-1)}>−</button>
-                    <span>{Math.round(zoom * 100)}%</span>
-                    <button type="button" className="verification-tool-button" disabled={zoomIndex >= SCREENSHOT_ZOOM_LEVELS.length - 1} onClick={() => changeZoom(1)}>+</button>
-                  </div>
-                  {streamStatus === 'live' ? (
-                    <span className="verification-live"><i />{t('verification.live', '实时')}</span>
-                  ) : streamStatus === 'connecting' ? (
-                    <span className="verification-stream-connecting"><ButtonSpinner size={12} />{t('verification.connecting', '连接中')}</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="verification-tool-button with-label"
-                      title={t('verification.refreshScreenshot', '刷新截图')}
-                      onClick={() => setShotSeq(value => value + 1)}
-                    >
-                      <Icon name="activity" />
-                      <span>{t('verification.refreshFrame', '刷新画面')}</span>
-                    </button>
-                  )}
-                </div>
+            <Grid gutter="md">
+              <Grid.Col span={{ base: 12, md: 8 }}>
+                <Paper withBorder radius="md" style={{ overflow: 'hidden' }}>
+                  <Group
+                    gap="xs"
+                    px="xs"
+                    py={6}
+                    wrap="wrap"
+                    style={{ borderBottom: '1px solid var(--line)', background: 'var(--sidebar-bg)' }}
+                  >
+                    <Group gap={4} wrap="nowrap">
+                      <Tooltip label={t('verification.back', '返回上一页')}>
+                        <ActionIcon size="sm" variant="subtle" color="gray" disabled={!canInteract} onClick={() => void runInteraction({ action: 'back' })} aria-label={t('verification.back', '返回上一页')}>
+                          <Icon name="arrowLeft" size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label={t('verification.forward', '前进')}>
+                        <ActionIcon size="sm" variant="subtle" color="gray" disabled={!canInteract} onClick={() => void runInteraction({ action: 'forward' })} aria-label={t('verification.forward', '前进')}>
+                          <Icon name="arrowRight" size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label={t('verification.reload', '重新加载网页')}>
+                        <ActionIcon size="sm" variant="subtle" color="gray" disabled={!canInteract} onClick={() => void runInteraction({ action: 'reload' })} aria-label={t('verification.reload', '重新加载网页')}>
+                          <Icon name="refresh" size={14} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Group>
 
-                <div
-                  ref={browserViewRef}
-                  className={`verification-shot ${browserFocused ? 'is-focused' : ''} ${zoom > 1 ? 'is-zoomed' : ''}`}
-                  tabIndex={selected.state === 'interactive' ? 0 : -1}
-                  onKeyDown={handleScreenshotKeyDown}
-                  onWheel={handleScreenshotWheel}
-                >
-                  {shot?.loading && (
-                    <p className="verification-shot-status verification-shot-loading">
-                      <ButtonSpinner size={14} />
-                      {t('verification.screenshotLoading', '正在加载截图…')}
-                    </p>
-                  )}
-                  {shot?.error && <p className="form-error verification-error">{shot.error}</p>}
-                  {shot && shot.url && (
-                    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
-                    <img
-                      src={shot.url}
-                      alt={selectedTitle}
-                      className={`verification-shot-image ${selected.kind === 'captcha' || selected.state !== 'interactive' ? 'is-static' : ''}`}
-                      style={zoom > 1 && shot.width > 0 ? { width: `${Math.round(shot.width * zoom)}px` } : undefined}
-                      onClick={handleScreenshotClick}
-                      draggable={false}
-                    />
-                  )}
-                  {shot && shot.url && selected.kind !== 'captcha' && selected.state === 'interactive' && (
-                    <p className="verification-hint">
-                      {zoom > 1
-                        ? t('verification.zoomedHint', '当前为放大查看；滚轮浏览大图，点按仍会操作网页')
-                        : t('verification.clickHint', '点按页面即可操作；滚轮可滚动网页，键盘可输入到已聚焦控件')}
-                    </p>
-                  )}
-                </div>
-              </section>
+                    <Paper px="xs" py={3} withBorder radius="sm" style={{ flex: '1 1 64px', minWidth: 0 }} title={selected.url}>
+                      <Text size="xs" truncate style={{ fontFamily: 'var(--mantine-font-family-monospace)' }}>
+                        {locationLabel}
+                      </Text>
+                    </Paper>
 
-              <aside className="verification-side">
-                <div className="verification-meta">
-                  <span className="verification-source">{selected.sourceId}</span>
-                  {selected.kind === 'captcha' && <span className="verification-kind">{t('verification.captchaLabel', '验证码')}</span>}
-                </div>
-                {selected.error && <p className="form-error verification-error">{selected.error}</p>}
-                {actionError && <p className="form-error verification-error">{actionError}</p>}
+                    <Group gap={4} wrap="nowrap" aria-label={t('verification.zoom', '画面缩放')}>
+                      <ActionIcon size="sm" variant="subtle" color="gray" disabled={!interactive || zoomIndex <= 0} onClick={() => changeZoom(-1)} aria-label={t('verification.zoomOut', '缩小画面')}>
+                        -
+                      </ActionIcon>
+                      <Text size="xs" fw={600} miw={48} ta="center">{zoom === 1 ? t('verification.fitWidth', '适应宽度') : `${Math.round(zoom * 100)}%`}</Text>
+                      <ActionIcon size="sm" variant="subtle" color="gray" disabled={!interactive || zoomIndex >= VIEWPORT_ZOOM_LEVELS.length - 1} onClick={() => changeZoom(1)} aria-label={t('verification.zoomIn', '放大画面')}>
+                        +
+                      </ActionIcon>
+                    </Group>
 
-                {selected.state === 'completed' && resultSummary && (
-                  <p className="verification-result">
-                    {'status' in resultSummary
-                      ? t('verification.resultMeta', { status: resultSummary.status, bytes: resultSummary.bytes, defaultValue: `HTTP ${resultSummary.status} · ${resultSummary.bytes} 字节` })
-                      : t('verification.resultPending', '结果尚未就绪')}
-                  </p>
-                )}
+                    {streamStatus === 'live' ? (
+                      <Badge size="xs" variant="dot" color="teal">{t('verification.live', '实时')}</Badge>
+                    ) : streamStatus === 'connecting' ? (
+                      <Badge size="xs" variant="light" color="brand" leftSection={<Loader size={10} />}>
+                        {t('verification.connecting', '连接中')}
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="compact-xs"
+                        variant="subtle"
+                        leftSection={<Icon name="activity" size={13} />}
+                        onClick={() => setShotSeq(value => value + 1)}
+                      >
+                        {t('verification.refreshFrame', '刷新画面')}
+                      </Button>
+                    )}
+                  </Group>
 
-                {selected.kind === 'captcha' ? (
-                  <section className="verification-control-card">
-                    <label className="verification-field">
-                      <span>{t('verification.captchaLabel', '验证码')}</span>
-                      <input
-                        type="text"
+                  <Box
+                    h="min(58dvh, 520px)"
+                    bg="var(--canvas)"
+                    ref={viewportRef}
+                    className="legado-verification-viewport"
+                    role="region"
+                    aria-label={t('verification.browserViewport', '网页画面')}
+                    tabIndex={interactive ? 0 : -1}
+                    onKeyDown={handleScreenshotKeyDown}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    {currentShot?.loading && !currentShot.url && (
+                      <Group gap="xs" p="sm">
+                        <Loader size="xs" />
+                        <Text size="xs" c="dimmed">{t('verification.screenshotLoading', '正在加载截图…')}</Text>
+                      </Group>
+                    )}
+                    {currentShot?.error && (
+                      <Alert color="red" variant="light" m="sm" p="xs" maw={420}>
+                        <Text size="xs">{currentShot.error}</Text>
+                      </Alert>
+                    )}
+                    {currentShot?.url && (
+                      <img
+                        ref={frameRef}
+                        src={currentShot.url}
+                        alt={selectedTitle}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'contain',
+                          cursor: interactivePage ? 'pointer' : 'default',
+                          touchAction: interactivePage ? 'none' : undefined,
+                        }}
+                        onClick={handleScreenshotClick}
+                        onPointerDown={handleTouchStart}
+                        onPointerMove={handleTouchMove}
+                        onPointerUp={handleTouchEnd}
+                        onPointerCancel={handleTouchEnd}
+                        draggable={false}
+                      />
+                    )}
+                  </Box>
+                </Paper>
+              </Grid.Col>
+
+              <Grid.Col span={{ base: 12, md: 4 }}>
+                <Stack gap="sm">
+                  <Group gap="xs">
+                    <Badge variant="light" color="brand">{selected.sourceId}</Badge>
+                    {selected.kind === 'captcha' && (
+                      <Badge variant="light" color="gold">{t('verification.captchaLabel', '验证码')}</Badge>
+                    )}
+                  </Group>
+
+                  {selected.error && (
+                    <Alert color="red" variant="light" p="xs">
+                      <Text size="xs">{selected.error}</Text>
+                    </Alert>
+                  )}
+                  {actionError && (
+                    <Alert color="red" variant="light" p="xs">
+                      <Text size="xs">{actionError}</Text>
+                    </Alert>
+                  )}
+
+                  {selected.state === 'completed' && resultSummary && (
+                    <Alert color="teal" variant="light" p="xs">
+                      <Text size="xs">
+                        {'status' in resultSummary
+                          ? t('verification.resultMeta', { status: resultSummary.status, bytes: resultSummary.bytes, defaultValue: `HTTP ${resultSummary.status} · ${resultSummary.bytes} 字节` })
+                          : t('verification.resultPending', '结果尚未就绪')}
+                      </Text>
+                    </Alert>
+                  )}
+
+                  {selected.kind === 'captcha' ? (
+                    <Paper p="sm" withBorder radius="md">
+                      <TextInput
+                        label={t('verification.captchaLabel', '验证码')}
                         value={captchaInput}
                         onChange={event => setCaptchaInput(event.target.value)}
                         placeholder={t('verification.captchaLabel', '验证码')}
                         disabled={!canInteract}
                         autoComplete="off"
                       />
-                    </label>
-                  </section>
-                ) : (
-                  <>
-                    <section className="verification-control-card">
-                      <strong>{t('verification.sendTextTitle', '输入到网页')}</strong>
-                      <small>{t('verification.sendTextHint', '先点按网页里的输入框，再输入或粘贴文字。')}</small>
-                      <div className="verification-send-row">
-                        <input
-                          type="text"
-                          value={textInput}
-                          onChange={event => setTextInput(event.target.value)}
-                          onFocus={() => setBrowserFocused(false)}
-                          onKeyDown={event => {
-                            if (event.key === 'Enter' && textInput.length > 0 && canInteract) {
-                              event.preventDefault()
-                              void runInteraction({ action: 'type', text: textInput })
-                            }
-                          }}
-                          placeholder={t('verification.textPlaceholder', '用户名、密码或要粘贴的内容')}
-                          disabled={!canInteract}
-                          autoComplete="off"
-                        />
-                        <button
-                          type="button"
-                          className="primary-button"
-                          disabled={!canInteract || textInput.length === 0}
-                          onClick={() => void runInteraction({ action: 'type', text: textInput })}
-                        >
-                          {t('verification.typeText', '输入文本')}
-                        </button>
-                      </div>
-                    </section>
-
-                    <section className="verification-control-card">
-                      <strong>{t('verification.quickKeys', '快捷按键')}</strong>
-                      <div className="verification-quick-keys">
-                        {['Enter', 'Tab', 'Backspace', 'Escape'].map(key => (
-                          <button
-                            type="button"
-                            key={key}
-                            className="subtle-button"
-                            disabled={!canInteract}
-                            onClick={() => void runInteraction({ action: 'key', key })}
-                          >
-                            {key}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-
-                    <section className="verification-control-card">
-                      <strong>{t('verification.pageTools', '页面工具')}</strong>
-                      <div className="verification-page-tools">
-                        <button type="button" className="subtle-button" disabled={!canInteract} onClick={() => void runInteraction({ action: 'scroll', x: 0, y: -480 })}>
-                          {t('verification.scrollUp', '向上滚动')}
-                        </button>
-                        <button type="button" className="subtle-button" disabled={!canInteract} onClick={() => void runInteraction({ action: 'scroll', x: 0, y: 480 })}>
-                          {t('verification.scrollDown', '向下滚动')}
-                        </button>
-                      </div>
-                      <details className="verification-advanced-keys">
-                        <summary>{t('verification.otherKeys', '其他按键')}</summary>
-                        <div className="verification-send-row">
-                          <input
-                            type="text"
-                            value={keyInput}
-                            onChange={event => setKeyInput(event.target.value)}
-                            placeholder="Enter"
+                    </Paper>
+                  ) : (
+                    <>
+                      <Paper p="sm" withBorder radius="md">
+                        <Stack gap="xs">
+                          <Text size="sm" fw={600}>{t('verification.sendTextTitle', '输入到网页')}</Text>
+                          <Text size="xs" c="dimmed">{t('verification.sendTextHint', '先点按网页里的输入框，再输入或粘贴文字。')}</Text>
+                          <TextInput
+                            size="xs"
+                            value={textInput}
+                            onChange={event => setTextInput(event.target.value)}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter' && textInput.length > 0 && canInteract) {
+                                event.preventDefault()
+                                void runInteraction({ action: 'type', text: textInput })
+                              }
+                            }}
+                            placeholder={t('verification.textPlaceholder', '用户名、密码或要粘贴的内容')}
                             disabled={!canInteract}
                             autoComplete="off"
                           />
-                          <button
-                            type="button"
-                            className="subtle-button"
-                            disabled={!canInteract || keyInput.trim().length === 0}
-                            onClick={() => void runInteraction({ action: 'key', key: keyInput.trim() })}
+                          <Button
+                            size="xs"
+                            fullWidth
+                            disabled={!canInteract || textInput.length === 0}
+                            onClick={() => void runInteraction({ action: 'type', text: textInput })}
                           >
-                            {t('verification.pressKey', '发送按键')}
-                          </button>
-                        </div>
-                      </details>
-                    </section>
-                  </>
-                )}
-              </aside>
-            </div>
+                            {t('verification.typeText', '输入文本')}
+                          </Button>
+                        </Stack>
+                      </Paper>
 
-            <footer className="verification-panel-footer">
-              <span className={`verification-focus-hint ${browserFocused && canInteract ? 'is-ready' : ''}`}>
-                {busy
-                  ? t('verification.syncing', '正在同步页面…')
-                  : browserFocused && canInteract
-                    ? t('verification.keyboardReady', '页面已聚焦，可直接使用键盘输入')
-                    : t('verification.focusHint', '点按页面即可操作；输入框内容可从右侧发送')}
-              </span>
-              <div className="verification-footer-actions">
-                <button type="button" className="subtle-button" disabled={busy || !isActiveVerification(selected)} onClick={() => void handleCancel()}>
-                  {t('verification.cancel', '关闭并取消')}
-                </button>
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={!canInteract || (selected.kind === 'captcha' && captchaInput.trim().length === 0)}
-                  onClick={() => void handleComplete()}
-                >
-                  {busy && <ButtonSpinner size={14} />}
-                  {selected.kind === 'captcha'
-                    ? t('verification.completeCaptcha', '提交验证码')
-                    : t('verification.completeBrowser', '完成并继续')}
-                </button>
-              </div>
-            </footer>
-          </div>
-        </div>
+                      <Paper p="sm" withBorder radius="md">
+                        <Stack gap="xs">
+                          <Text size="sm" fw={600}>{t('verification.quickKeys', '快捷按键')}</Text>
+                          <Group gap="xs" grow>
+                            {['Enter', 'Tab', 'Backspace', 'Escape'].map(key => (
+                              <Button
+                                key={key}
+                                size="xs"
+                                variant="default"
+                                disabled={!canInteract}
+                                onClick={() => void runInteraction({ action: 'key', key })}
+                              >
+                                {key}
+                              </Button>
+                            ))}
+                          </Group>
+                        </Stack>
+                      </Paper>
+
+                      <Paper p="sm" withBorder radius="md">
+                        <Stack gap="xs">
+                          <Text size="sm" fw={600}>{t('verification.pageTools', '页面工具')}</Text>
+                          <Group gap="xs" grow>
+                            <Button
+                              size="xs"
+                              variant="default"
+                              leftSection={<Icon name="arrowUp" size={13} />}
+                              disabled={!canInteract}
+                              onClick={() => void runInteraction({ action: 'scroll', deltaY: -480 })}
+                            >
+                              {t('verification.scrollUp', '向上滚动')}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="default"
+                              leftSection={<Icon name="arrowDown" size={13} />}
+                              disabled={!canInteract}
+                              onClick={() => void runInteraction({ action: 'scroll', deltaY: 480 })}
+                            >
+                              {t('verification.scrollDown', '向下滚动')}
+                            </Button>
+                          </Group>
+                          <Accordion variant="contained" radius="sm">
+                            <Accordion.Item value="other-keys">
+                              <Accordion.Control py={4}>
+                                <Text size="xs" fw={500}>{t('verification.otherKeys', '其他按键')}</Text>
+                              </Accordion.Control>
+                              <Accordion.Panel>
+                                <Group gap="xs" wrap="nowrap">
+                                  <TextInput
+                                    size="xs"
+                                    value={keyInput}
+                                    onChange={event => setKeyInput(event.target.value)}
+                                    placeholder="Enter"
+                                    disabled={!canInteract}
+                                    autoComplete="off"
+                                    style={{ flex: 1 }}
+                                  />
+                                  <Button
+                                    size="xs"
+                                    variant="light"
+                                    disabled={!canInteract || keyInput.trim().length === 0}
+                                    onClick={() => void runInteraction({ action: 'key', key: keyInput.trim() })}
+                                  >
+                                    {t('verification.pressKey', '发送按键')}
+                                  </Button>
+                                </Group>
+                              </Accordion.Panel>
+                            </Accordion.Item>
+                          </Accordion>
+                        </Stack>
+                      </Paper>
+                    </>
+                  )}
+                </Stack>
+              </Grid.Col>
+            </Grid>
+
+            <Group justify="flex-end" gap="xs" pt="xs" style={{ borderTop: '1px solid var(--line)' }}>
+              <Button variant="default" disabled={busy || !isActiveVerification(selected)} onClick={() => void handleCancel()}>
+                {t('verification.cancel', '关闭并取消')}
+              </Button>
+              <Button
+                loading={busy}
+                disabled={!canInteract || (selected.kind === 'captcha' && captchaInput.trim().length === 0)}
+                onClick={() => void handleComplete()}
+              >
+                {selected.kind === 'captcha'
+                  ? t('verification.completeCaptcha', '提交验证码')
+                  : t('verification.completeBrowser', '完成并继续')}
+              </Button>
+            </Group>
+          </Stack>
+        </Modal>
       )}
     </>
   )

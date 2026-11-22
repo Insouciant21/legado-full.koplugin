@@ -53,7 +53,7 @@ export type ReadingProgress = { sourceId: string; bookUrl: string; chapterUrl: s
 /** 手机端进度文件（bookProgress/*.json）同步配置 */
 
 export type ProgressMergeResponse = { source: 'file' | 'database'; progress?: ReadingProgress; fileFound: boolean; alignedIndex?: number }
-export type BookshelfItem = { sourceId: string; bookUrl: string; name: string; author?: string; tocUrl: string; coverKey?: string; coverUrl?: string; chapterIndex?: number; scrollPosition?: number; lastReadAt: number; cachedChapters: number; totalChapters: number; catalogChapters: number; latestChapterTitle?: string | null; latestChapterTime: number; lastCheckTime: number; lastCheckCount: number; canUpdate: boolean; updateError: boolean; cacheState: 'idle' | 'caching' | 'ready' | 'failed' | 'paused'; cacheError?: string; completed: boolean; isUnread: boolean; isReading: boolean; isReadFinished: boolean; alternateSources?: SearchResult[]; groupName?: string; bookKind?: string; variable?: string }
+export type BookshelfItem = { sourceId: string; bookUrl: string; name: string; author?: string; tocUrl: string; coverKey?: string; coverUrl?: string; chapterIndex?: number; scrollPosition?: number; lastReadAt: number; cachedChapters: number; totalChapters: number; catalogChapters: number; latestChapterTitle?: string | null; latestChapterTime: number; lastCheckTime: number; lastCheckCount: number; canUpdate: boolean; updateError: boolean; cacheState: 'idle' | 'pending' | 'caching' | 'ready' | 'failed' | 'paused'; cacheError?: string; completed: boolean; isUnread: boolean; isReading: boolean; isReadFinished: boolean; alternateSources?: SearchResult[]; groupName?: string; bookKind?: string; variable?: string }
 export type BookshelfWrite = { sourceId: string; bookUrl: string; name: string; author?: string; tocUrl: string; coverUrl?: string; alternateSources?: SearchResult[]; groupName?: string; bookKind?: string; catalogChapters?: number }
 export type BookshelfRefreshTarget = { sourceId: string; bookUrl: string }
 export type BookshelfRefreshItemStatus = { sourceId: string; bookUrl: string; name: string; state: 'queued' | 'running' | 'succeeded' | 'failed'; error?: string | null; previousChapters: number; totalChapters: number; newChapters: number }
@@ -433,6 +433,21 @@ export type SourceLoginActionResult = {
   updatedVariable?: string
   reRenderUi: boolean
   error?: string
+  bookRefresh?: SourceLoginBookRefresh
+}
+
+export type SourceLoginContext = {
+  book: BookRequestContext & { sourceId: string; bookUrl: string }
+  chapter?: Chapter
+}
+
+export type SourceLoginBookRefresh = {
+  details?: BookDetails
+  chapters?: Chapter[]
+  tocUrl?: string
+  content?: { title?: string; content: string }
+  variables?: Record<string, string>
+  errors?: string[]
 }
 
 export type SourceLoginCheckResult = {
@@ -475,12 +490,13 @@ export type SourceVerificationSession = {
   error?: string | null
 }
 
-/** 人工验证会话上的一个操作；坐标是**截图像素**（前端负责把显示尺寸换算回真实尺寸）。 */
+/** 人工验证操作使用远端视口的 CSS 像素。width/height 标明输入所对应的画面尺寸。 */
 export type SourceVerificationInteraction =
-  | { action: 'click'; x: number; y: number }
+  | { action: 'resize'; width: number; height: number }
+  | { action: 'click'; x: number; y: number; width: number; height: number }
   | { action: 'type'; text: string }
   | { action: 'key'; key: string }
-  | { action: 'scroll'; x: number; y: number }
+  | { action: 'scroll'; deltaX?: number; deltaY: number; x?: number; y?: number; width?: number; height?: number }
   | { action: 'back' }
   | { action: 'forward' }
   | { action: 'reload' }
@@ -602,7 +618,18 @@ export const api = {
   saveSourceCookie: (sourceId: string, cookie: string, url?: string) => request<{ ok: boolean; message?: string }>(`/api/sources/${encodeURIComponent(sourceId)}/login-cookie`, { method: 'POST', body: JSON.stringify({ cookie, url }) }),
   clearSourceLoginInfo: (sourceId: string) => request<{ ok: boolean }>(`/api/sources/${encodeURIComponent(sourceId)}/login-info`, { method: 'DELETE' }),
   clearSourceLoginHeader: (sourceId: string) => request<{ ok: boolean }>(`/api/sources/${encodeURIComponent(sourceId)}/login-header`, { method: 'DELETE' }),
-  executeSourceLoginAction: (sourceId: string, action: string, loginData: Record<string, string>, isLongClick = false) => request<SourceLoginActionResult>(`/api/sources/${encodeURIComponent(sourceId)}/login-action`, { method: 'POST', body: JSON.stringify({ action, loginData, isLongClick }) }),
+  executeSourceLoginAction: async (sourceId: string, action: string, loginData: Record<string, string>, isLongClick = false, context?: SourceLoginContext) => {
+    const response = await request<SourceLoginActionResult>(`/api/sources/${encodeURIComponent(sourceId)}/login-action`, {
+      method: 'POST',
+      body: JSON.stringify({ action, loginData, isLongClick, ...context }),
+    })
+    const fresh = response.bookRefresh?.content
+    if (fresh && context?.chapter) {
+      void putOfflineChapter(sourceId, context.book.bookUrl, context.chapter.url, fresh.title ?? null, fresh.content)
+        .catch(() => undefined)
+    }
+    return response
+  },
   checkSourceLogin: (sourceId: string) => request<SourceLoginCheckResult>(`/api/sources/${encodeURIComponent(sourceId)}/login-check`),
   createSourceBrowserSession: (sourceId: string, url?: string) => request<SourceBrowserSession>(`/api/sources/${encodeURIComponent(sourceId)}/browser/session`, { method: 'POST', body: JSON.stringify({ url }) }),
   closeSourceBrowserSession: (sourceId: string, token: string) => request<void>(`/api/sources/${encodeURIComponent(sourceId)}/browser/session?t=${encodeURIComponent(token)}`, { method: 'DELETE' }),
@@ -774,6 +801,8 @@ export const api = {
     }),
   revokeKindleDevice: (deviceId: string) =>
     request<void>(`/api/v1/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
+  deleteKindleDevice: (deviceId: string) =>
+    request<void>(`/api/v1/devices/${encodeURIComponent(deviceId)}?purge=true`, { method: 'DELETE' }),
   kindlePushDeliveries: () => request<KindlePushDeliveriesResponse>('/api/v1/push/deliveries'),
   kindleDraft: () => request<KindleDraftResponse>('/api/v1/draft'),
   kindleAutoPublishStatus: () => request<KindleAutoPublishStatus>('/api/v1/publish/auto-status'),

@@ -1,10 +1,32 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  ActionIcon,
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Center,
+  Group,
+  Loader,
+  Menu,
+  Modal,
+  Paper,
+  PasswordInput,
+  NativeSelect,
+  Stack,
+  Switch,
+  Text,
+  Textarea,
+  TextInput,
+  Tooltip,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { api, SourceLoginUiItem, SourceLoginUiResponse } from './api'
+import type { SourceLoginBookRefresh, SourceLoginContext } from './api'
+import { Icon } from './icons'
 import { SourceWebViewModal } from './SourceWebViewModal'
 import { NetworkImportModal } from './NetworkImportModal'
 import { isInlineBrowserTarget } from './sourceSettingsResult'
-import { ButtonSpinner } from './ButtonSpinner'
 
 const isBrowserCancellation = (error?: string) =>
   Boolean(error && /(浏览器.*取消|取消.*浏览器)/.test(error))
@@ -14,7 +36,9 @@ const isFailureMessage = (message: string) =>
 
 interface SourceLoginModalProps {
   sourceId: string
-  sourceName: string
+  sourceName?: string
+  context?: SourceLoginContext
+  onBookRefresh?: (refresh: SourceLoginBookRefresh, context: SourceLoginContext) => void
   onClose: () => void
   onToast: (message: string, type?: 'info' | 'success' | 'error') => void
 }
@@ -22,6 +46,8 @@ interface SourceLoginModalProps {
 export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
   sourceId,
   sourceName,
+  context,
+  onBookRefresh,
   onClose,
   onToast,
 }) => {
@@ -36,11 +62,11 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
   const [headerEditText, setHeaderEditText] = useState('')
   const [cookieModalOpen, setCookieModalOpen] = useState(false)
   const [cookieInputText, setCookieInputText] = useState('')
-  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({})
   const [webViewOpen, setWebViewOpen] = useState(false)
   const [webViewStartUrl, setWebViewStartUrl] = useState<string | undefined>(undefined)
   /** 内置浏览器里点了「更新书源」线路后要导入的地址；非 null 即打开网络导入弹窗。 */
   const [networkImportUrl, setNetworkImportUrl] = useState<string | null>(null)
+  const active = useRef(false)
 
   const loadLoginUi = useCallback(async () => {
     try {
@@ -64,7 +90,9 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
   }, [sourceId, onToast, t])
 
   useEffect(() => {
+    active.current = true
     loadLoginUi()
+    return () => { active.current = false }
   }, [loadLoginUi])
 
   /** 用户手动打开内置浏览器（不带触发动作），入口地址交给书源配置决定 */
@@ -75,6 +103,15 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
 
   const handleInputChange = (key: string, val: string) => {
     setFormData(prev => ({ ...prev, [key]: val }))
+  }
+
+  const executeAction = async (action: string, isLongClick = false) => {
+    const result = await api.executeSourceLoginAction(sourceId, action, formData, isLongClick, context)
+    if (active.current && result.bookRefresh && context) {
+      onBookRefresh?.(result.bookRefresh, context)
+      result.bookRefresh.errors?.forEach(error => onToast(error, 'error'))
+    }
+    return result
   }
 
   const handleAction = async (actionCode?: string, isLongClick = false, allowBuiltInBrowser = true) => {
@@ -88,7 +125,7 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
         return
       }
 
-      const res = await api.executeSourceLoginAction(sourceId, actionCode, formData, isLongClick)
+      const res = await executeAction(actionCode, isLongClick)
       if (res.error) {
         // 用户主动结束内置浏览器不是脚本故障，要和真正的书源执行异常区分开。
         if (isBrowserCancellation(res.error)) {
@@ -99,7 +136,7 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
         }
       } else if (res.toastMessages && res.toastMessages.length > 0) {
         res.toastMessages.forEach(msg => onToast(msg, res.success && !isFailureMessage(msg) ? 'success' : 'error'))
-      } else if (res.success) {
+      } else if (res.success && !res.bookRefresh?.errors?.length) {
         onToast(t('source.operationSuccess', '操作执行成功'), 'success')
       }
 
@@ -138,7 +175,7 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
       setExecuting(true)
       setExecutingAction('login(true)')
       await api.saveSourceLoginInfo(sourceId, formData)
-      const res = await api.executeSourceLoginAction(sourceId, 'login(true)', formData, false)
+      const res = await executeAction('login(true)')
       if (res.error) {
         if (isBrowserCancellation(res.error)) {
           onToast(res.error, 'info')
@@ -266,360 +303,371 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
     if (type === 'button') {
       const isThisAction = executing && executingAction === item.action
       return (
-        <div key={`${key}-${index}`} style={flexStyle} className="login-ui-item-btn">
-          <button
-            type="button"
-            className={`source-login-btn primary-subtle ${isThisAction ? 'is-loading' : ''}`}
+        <Box key={`${key}-${index}`} style={flexStyle}>
+          <Button
+            fullWidth
+            variant="light"
+            color="brand"
+            loading={isThisAction}
             disabled={executing}
-            aria-busy={isThisAction}
             onClick={() => handleAction(item.action, false)}
             onContextMenu={e => {
               e.preventDefault()
               handleAction(item.action, true)
             }}
           >
-            {isThisAction && <ButtonSpinner size={12} />}
             {label}
-          </button>
-        </div>
+          </Button>
+        </Box>
       )
     }
 
     if (type === 'toggle' || type === 'switch' || type === 'checkbox') {
       const isChecked = value === 'true' || value === '1'
       return (
-        <div key={`${key}-${index}`} style={flexStyle} className="login-ui-item-toggle-container">
-          <label className="login-ui-toggle-label">
-            <span>{label}</span>
-            <input
-              type="checkbox"
+        <Paper key={`${key}-${index}`} style={flexStyle} p="xs" withBorder radius="md">
+          <Group justify="space-between">
+            <Text size="sm" fw={500}>{label}</Text>
+            <Switch
+              aria-label={label}
               checked={isChecked}
               onChange={e => handleInputChange(key, e.target.checked ? 'true' : 'false')}
             />
-          </label>
-        </div>
+          </Group>
+        </Paper>
       )
     }
 
     if (type === 'select' || type === 'dropdown') {
-      const options = item.options || (item.chars ? item.chars.filter((c): c is string => c !== null) : [])
+      const options = Array.from(new Set(item.options || (item.chars ? item.chars.filter((c): c is string => c !== null) : [])))
       return (
-        <div key={`${key}-${index}`} style={flexStyle} className="login-ui-item-field">
-          <label className="login-ui-field-label">{label}</label>
-          <select
-            className="login-ui-select"
+        <Box key={`${key}-${index}`} style={flexStyle}>
+          <NativeSelect
+            label={label}
             value={value}
-            onChange={e => handleInputChange(key, e.target.value)}
-          >
-            {options.map((opt, i) => (
-              <option key={`${opt}-${i}`} value={opt}>{opt}</option>
-            ))}
-          </select>
-        </div>
+            onChange={e => handleInputChange(key, e.currentTarget.value)}
+            data={options}
+          />
+        </Box>
       )
     }
 
     if (type === 'label' || type === 'textlabel') {
       return (
-        <div key={`${key}-${index}`} style={flexStyle} className="login-ui-item-info">
-          <div className="login-ui-info-text">{item.hint || item.default || label}</div>
-        </div>
+        <Alert key={`${key}-${index}`} style={flexStyle} variant="light" color="gray" p="xs">
+          <Text size="xs">{item.hint || item.default || label}</Text>
+        </Alert>
       )
     }
 
     const isPassword = type === 'password'
-    const isShowing = showPasswords[key]
-    return (
-      <div key={`${key}-${index}`} style={flexStyle} className="login-ui-item-field">
-        <label className="login-ui-field-label">{label}</label>
-        <div className="login-ui-input-wrapper">
-          <input
-            type={isPassword && !isShowing ? 'password' : 'text'}
-            className="login-ui-input"
+    if (isPassword) {
+      return (
+        <Box key={`${key}-${index}`} style={flexStyle}>
+          <PasswordInput
+            label={label}
             value={value}
             placeholder={item.hint || item.default || t('source.pleaseInput', { label, defaultValue: `请输入${label}` })}
             onChange={e => handleInputChange(key, e.target.value)}
           />
-          {isPassword && (
-            <button
-              type="button"
-              className="login-ui-eye-btn"
-              onClick={() => setShowPasswords(prev => ({ ...prev, [key]: !prev[key] }))}
-              title={isShowing ? t('source.hidePassword', '隐藏密码') : t('source.showPassword', '显示密码')}
-            >
-              {isShowing ? '🙈' : '👁️'}
-            </button>
-          )}
-        </div>
-      </div>
+        </Box>
+      )
+    }
+
+    return (
+      <Box key={`${key}-${index}`} style={flexStyle}>
+        <TextInput
+          label={label}
+          value={value}
+          placeholder={item.hint || item.default || t('source.pleaseInput', { label, defaultValue: `请输入${label}` })}
+          onChange={e => handleInputChange(key, e.target.value)}
+        />
+      </Box>
     )
   }
 
+  const hasChildModal = headerEditOpen || cookieModalOpen || webViewOpen || networkImportUrl !== null
+  const displayName = uiResponse?.sourceName || sourceName
+
   return (
-    // 内置浏览器打开时这层也要关掉毛玻璃：它是 iframe 的**外层**祖先，
-    // 两层 blur 叠加会把 hover 动画压到 8 FPS（只去内层仅回到 23 FPS）。详见 app.css。
-    <div className={`modal-backdrop ${webViewOpen ? 'is-blurless' : ''}`} onClick={onClose}>
-      <div className="source-login-dialog" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
-        <div className="source-login-header">
-          <div className="source-login-title-group">
-            <h3 className="source-login-title">{t('source.loginSourceTitle', { name: sourceName, defaultValue: `登录 ${sourceName}` })}</h3>
-            {uiResponse?.sourceVariable && (
-              <span className="source-login-subtitle" title={uiResponse.sourceVariable}>
-                {t('source.associatedVariable', '关联变量: {{name}}', { name: uiResponse.sourceVariable })}
-              </span>
-            )}
-          </div>
-          <div className="source-login-actions">
-            <button
-              type="button"
-              className="source-login-action-btn"
-              title={t('source.loginWithBrowserRecommended', '用内置浏览器登录（推荐）')}
-              onClick={openBuiltInBrowser}
-            >
-              🖥
-            </button>
-            <button
-              type="button"
-              className={`source-login-action-btn primary ${executing && executingAction === 'login(true)' ? 'is-loading' : ''}`}
-              title={t('source.saveAndLogin', '保存并登录')}
-              disabled={executing || loading}
-              aria-busy={executing && executingAction === 'login(true)'}
-              onClick={handleSaveAndLogin}
-            >
-              {executing && executingAction === 'login(true)' ? <ButtonSpinner size={12} /> : '✓'}
-            </button>
-            <div className="source-login-menu-container">
-              <button
-                type="button"
-                className="source-login-action-btn"
-                title={t('source.moreOptions', '更多选项')}
-                onClick={() => setMenuOpen(prev => !prev)}
-              >
-                ⋮
-              </button>
-              {menuOpen && (
-                <div className="source-login-dropdown-menu">
-                  <button
-                    type="button"
-                    className="subtle-button"
+    <>
+      <Modal
+        opened
+        onClose={onClose}
+        size="lg"
+        zIndex={310}
+        withCloseButton={false}
+        closeOnEscape={!hasChildModal}
+        closeOnClickOutside={!hasChildModal}
+        trapFocus={!hasChildModal}
+        overlayProps={webViewOpen ? { blur: 0, backgroundOpacity: 0.45 } : undefined}
+        padding="lg"
+      >
+        <Stack gap="md">
+          <Group justify="space-between" align="flex-start" wrap="nowrap" pb="sm" style={{ borderBottom: '1px solid var(--line)' }}>
+            <Stack gap={4} style={{ minWidth: 0 }}>
+              <Group gap="xs">
+                <Icon name="key" size={18} />
+                <Text fw={700} size="lg" lineClamp={1}>
+                  {displayName
+                    ? t('source.loginSourceTitle', { name: displayName, defaultValue: '登录书源 {{name}}' })
+                    : t('source.loginButton', '书源登录')}
+                </Text>
+              </Group>
+              {uiResponse?.sourceVariable && (
+                <Badge variant="light" color="gray" size="sm" title={uiResponse.sourceVariable}>
+                  {t('source.associatedVariable', '关联变量: {{name}}', { name: uiResponse.sourceVariable })}
+                </Badge>
+              )}
+            </Stack>
+
+            <Group gap={6} wrap="nowrap">
+              <Tooltip label={t('source.loginWithBrowserRecommended', '用内置浏览器登录（推荐）')}>
+                <ActionIcon variant="light" color="brand" onClick={openBuiltInBrowser} aria-label={t('source.loginWithBrowserRecommended', '用内置浏览器登录（推荐）')}>
+                  <Icon name="globe" size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label={t('source.saveAndLogin', '保存并登录')}>
+                <ActionIcon
+                  variant="filled"
+                  color="brand"
+                  loading={executing && executingAction === 'login(true)'}
+                  disabled={executing || loading}
+                  onClick={handleSaveAndLogin}
+                  aria-label={t('source.saveAndLogin', '保存并登录')}
+                >
+                  <Icon name="check" size={16} />
+                </ActionIcon>
+              </Tooltip>
+              <Menu opened={menuOpen} onChange={setMenuOpen} position="bottom-end" withinPortal>
+                <Tooltip label={t('source.moreOptions', '更多选项')}>
+                  <Menu.Target>
+                    <ActionIcon variant="subtle" color="gray" aria-label={t('source.moreOptions', '更多选项')}>
+                      <Icon name="more" size={16} />
+                    </ActionIcon>
+                  </Menu.Target>
+                </Tooltip>
+                <Menu.Dropdown>
+                  <Menu.Item
+                    leftSection={<Icon name="edit" size={14} />}
                     onClick={() => {
                       setHeaderEditText(uiResponse?.loginHeader || '')
                       setHeaderEditOpen(true)
                       setMenuOpen(false)
                     }}
                   >
-                    ✏️ {t('source.editLoginHeader', '填入 / 查看登录头')}
-                  </button>
-                  <button
-                    type="button"
-                    className="subtle-button"
+                    {t('source.editLoginHeader', '填入 / 查看登录头')}
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<Icon name="cookie" size={14} />}
                     onClick={() => {
                       setCookieModalOpen(true)
                       setMenuOpen(false)
                     }}
                   >
-                    🍪 {t('source.quickFillCookie', '快捷填入 Cookie')}
-                  </button>
+                    {t('source.quickFillCookie', '快捷填入 Cookie')}
+                  </Menu.Item>
                   {uiResponse?.loginHeader && (
-                    <button type="button" className="subtle-button" onClick={handleCopyLoginHeader}>
-                      📋 {t('source.copyLoginHeader', '复制登录头')}
-                    </button>
+                    <Menu.Item leftSection={<Icon name="copy" size={14} />} onClick={handleCopyLoginHeader}>
+                      {t('source.copyLoginHeader', '复制登录头')}
+                    </Menu.Item>
                   )}
-                  <button type="button" className="danger-text subtle-button" onClick={handleDeleteLoginHeader}>
-                    🗑️ {t('source.deleteLoginHeader', '删除登录头')}
-                  </button>
-                  <button type="button" className="danger-text subtle-button" onClick={handleClearLoginInfo}>
-                    🧹 {t('source.clearLoginInfo', '清空登录信息')}
-                  </button>
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              className="source-login-action-btn"
-              title={t('common.close', '关闭')}
-              onClick={onClose}
-            >
-              ✕
-            </button>
-          </div>
-        </div>
+                  <Menu.Divider />
+                  <Menu.Item color="red" leftSection={<Icon name="trash" size={14} />} onClick={handleDeleteLoginHeader}>
+                    {t('source.deleteLoginHeader', '删除登录头')}
+                  </Menu.Item>
+                  <Menu.Item color="red" leftSection={<Icon name="close" size={14} />} onClick={handleClearLoginInfo}>
+                    {t('source.clearLoginInfo', '清空登录信息')}
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+              <Tooltip label={t('common.close', '关闭')}>
+                <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label={t('common.close', '关闭')}>
+                  <Icon name="close" size={16} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+          </Group>
 
-        <div className="source-login-body">
           {loading ? (
-            <div className="login-ui-loading">{t('source.loadingLoginUi', '正在加载登录界面...')}</div>
+            <Center py="xl">
+              <Group gap="sm">
+                <Loader size="sm" />
+                <Text size="sm" c="dimmed">{t('source.loadingLoginUi', '正在加载登录界面...')}</Text>
+              </Group>
+            </Center>
           ) : !uiResponse?.loginUi || uiResponse.loginUi.length === 0 ? (
-            <div className="login-ui-empty-direct-cookie" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                <span style={{ fontSize: '13px', color: 'var(--muted)' }}>
+            <Stack gap="md">
+              <Group justify="space-between" wrap="wrap" gap="xs">
+                <Text size="sm" c="dimmed">
                   {t('source.noVisualLoginFormHint', '此书源未定义可视化登录表单，请直接填入 Cookie / 凭据：')}
-                </span>
+                </Text>
                 {uiResponse?.loginUrl && (
-                  <button
-                    type="button"
-                    className="subtle-button"
-                    style={{ fontSize: '12px', padding: '4px 10px' }}
+                  <Button
+                    size="xs"
+                    variant="light"
+                    leftSection={<Icon name="globe" size={14} />}
                     onClick={openBuiltInBrowser}
                   >
-                    🖥 {t('source.loginWithBrowser', '用内置浏览器登录')}
-                  </button>
+                    {t('source.loginWithBrowser', '用内置浏览器登录')}
+                  </Button>
                 )}
-              </div>
+              </Group>
 
-              <div className="direct-cookie-card" style={{ background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--line)', borderRadius: '8px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--foreground)' }}>
-                    🍪 {t('source.pasteCookieToken', '粘贴 Cookie / Token (支持 JSON / 键值对)')}
-                  </label>
-                  <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                    {t('source.cookieEditorSupport', '支持 Cookie-Editor 导出的 JSON')}
-                  </span>
-                </div>
-                <textarea
-                  className="source-login-textarea"
-                  rows={5}
-                  value={cookieInputText}
-                  placeholder={t('source.cookiePlaceholder', '直接粘贴 Cookie 字符串（k1=v1; k2=v2）或 Cookie-Editor 导出的 JSON 数组：\n[{"name":"session_id","value":"..."},{"name":"token","value":"..."}]')}
-                  onChange={e => setCookieInputText(e.target.value)}
-                />
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    {uiResponse?.loginHeader && (
-                      <button
-                        type="button"
-                        className="subtle-button danger-text"
-                        style={{ fontSize: '12px', padding: '5px 10px' }}
-                        onClick={handleDeleteLoginHeader}
-                      >
-                        🗑️ {t('source.clearSavedCredentials', '清除已存凭据')}
-                      </button>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={executing || !cookieInputText.trim()}
-                    onClick={handleSaveCookie}
-                  >
-                    {executing ? t('source.saving', '保存中...') : t('source.saveCookie', '保存 Cookie')}
-                  </button>
-                </div>
-              </div>
+              <Paper p="md" withBorder radius="md">
+                <Stack gap="xs">
+                  <Group justify="space-between" wrap="wrap" gap="xs">
+                    <Group gap={6}>
+                      <Icon name="cookie" size={15} />
+                      <Text size="xs" fw={600}>
+                        {t('source.pasteCookieToken', '粘贴 Cookie / Token (支持 JSON / 键值对)')}
+                      </Text>
+                    </Group>
+                    <Text size="xs" c="dimmed">
+                      {t('source.cookieEditorSupport', '支持 Cookie-Editor 导出的 JSON')}
+                    </Text>
+                  </Group>
+                  <Textarea
+                    rows={5}
+                    value={cookieInputText}
+                    placeholder={t('source.cookiePlaceholder', '直接粘贴 Cookie 字符串（k1=v1; k2=v2）或 Cookie-Editor 导出的 JSON 数组：\n[{"name":"session_id","value":"..."},{"name":"token","value":"..."}]')}
+                    onChange={e => setCookieInputText(e.target.value)}
+                    styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
+                  />
+                  <Group justify="space-between" wrap="wrap" gap="xs">
+                    <div>
+                      {uiResponse?.loginHeader && (
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="red"
+                          leftSection={<Icon name="trash" size={14} />}
+                          onClick={handleDeleteLoginHeader}
+                        >
+                          {t('source.clearSavedCredentials', '清除已存凭据')}
+                        </Button>
+                      )}
+                    </div>
+                    <Button
+                      loading={executing}
+                      disabled={!cookieInputText.trim()}
+                      onClick={handleSaveCookie}
+                    >
+                      {executing ? t('source.saving', '保存中...') : t('source.saveCookie', '保存 Cookie')}
+                    </Button>
+                  </Group>
+                </Stack>
+              </Paper>
 
               {uiResponse?.loginHeader && (
-                <div style={{ padding: '10px 14px', background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.2)', borderRadius: '6px', fontSize: '12px' }}>
-                  <div style={{ fontWeight: 600, color: '#38bdf8', marginBottom: '4px' }}>✅ {t('source.hasPersistedLoginHeader', '当前书源已持久化登录头 (Login Header)')}</div>
-                  <div style={{ color: 'var(--muted)', wordBreak: 'break-all', fontFamily: 'monospace', maxHeight: '60px', overflowY: 'auto' }}>
+                <Alert
+                  color="teal"
+                  variant="light"
+                  icon={<Icon name="checkCircle" size={16} />}
+                  title={t('source.hasPersistedLoginHeader', '当前书源已持久化登录头 (Login Header)')}
+                >
+                  <Text
+                    size="xs"
+                    c="dimmed"
+                    style={{ wordBreak: 'break-all', fontFamily: 'var(--mantine-font-family-monospace)', maxHeight: 72, overflowY: 'auto' }}
+                  >
                     {uiResponse.loginHeader}
-                  </div>
-                </div>
+                  </Text>
+                </Alert>
               )}
-            </div>
+            </Stack>
           ) : (
             <form
-              className="source-login-flex-form"
               onSubmit={e => {
                 e.preventDefault()
                 handleSaveAndLogin()
               }}
             >
-              <div style={{ flex: '1 1 100%', width: '100%' }}>
-                <button
-                  type="button"
-                  className="primary-button"
-                  style={{ width: '100%' }}
+              <Stack gap="md">
+                <Button
+                  fullWidth
+                  leftSection={<Icon name="globe" size={16} />}
                   onClick={openBuiltInBrowser}
                 >
-                  🖥 {t('source.loginWithBrowserRecommended', '用内置浏览器登录（推荐）')}
-                </button>
-              </div>
-              {uiResponse.loginUi.map((item, idx) => renderControl(item, idx))}
+                  {t('source.loginWithBrowserRecommended', '用内置浏览器登录（推荐）')}
+                </Button>
+                <Box style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+                  {uiResponse.loginUi.map((item, idx) => renderControl(item, idx))}
+                </Box>
+              </Stack>
             </form>
           )}
-        </div>
+        </Stack>
+      </Modal>
 
-        {headerEditOpen && (
-          <div className="modal-backdrop top-layer-modal-backdrop" onClick={() => setHeaderEditOpen(false)}>
-            <div className="source-login-dialog" style={{ width: 'min(500px, 94vw)' }} onClick={e => e.stopPropagation()}>
-              <div className="source-login-header">
-                <h3>{t('source.editLoginHeaderModalTitle', '编辑 / 填入登录头 (Login Header)')}</h3>
-                <button type="button" className="source-login-action-btn" onClick={() => setHeaderEditOpen(false)}>✕</button>
-              </div>
-              <div className="source-login-body" style={{ padding: '16px' }}>
-                <p style={{ margin: '0 0 10px', fontSize: '12px', color: 'var(--muted)' }}>
-                  {t('source.editLoginHeaderDesc', '支持 JSON 格式（如 {"Authorization": "Bearer ...", "Cookie": "..."}）或直接文本。')}
-                </p>
-                <textarea
-                  className="source-login-textarea"
-                  rows={6}
-                  value={headerEditText}
-                  placeholder='{"Authorization": "Bearer ...", "Cookie": "..."}'
-                  onChange={e => setHeaderEditText(e.target.value)}
-                />
-              </div>
-              <div style={{ padding: '12px 18px', display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--line)' }}>
-                <button type="button" className="subtle-button" onClick={() => setHeaderEditOpen(false)}>{t('common.cancel', '取消')}</button>
-                <button type="button" className="primary-button" disabled={executing} onClick={handleSaveHeader}>{t('source.saveLoginHeader', '保存登录头')}</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {cookieModalOpen && (
-          <div className="modal-backdrop top-layer-modal-backdrop" onClick={() => setCookieModalOpen(false)}>
-            <div className="source-login-dialog" style={{ width: 'min(500px, 94vw)' }} onClick={e => e.stopPropagation()}>
-              <div className="source-login-header">
-                <h3>{t('source.quickFillCookieModalTitle', '快捷填入 Cookie')}</h3>
-                <button type="button" className="source-login-action-btn" onClick={() => setCookieModalOpen(false)}>✕</button>
-              </div>
-              <div className="source-login-body" style={{ padding: '16px' }}>
-                <p style={{ margin: '0 0 10px', fontSize: '12px', color: 'var(--muted)' }}>
-                  {t('source.quickFillCookieDesc', '将目标网站登录后的 Cookie 字符串粘贴在下方（服务端将自动按域名持久化合并）：')}
-                </p>
-                <textarea
-                  className="source-login-textarea"
-                  rows={5}
-                  value={cookieInputText}
-                  placeholder="token=xxxx; uid=12345; session=yyyy"
-                  onChange={e => setCookieInputText(e.target.value)}
-                />
-              </div>
-              <div style={{ padding: '12px 18px', display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--line)' }}>
-                <button type="button" className="subtle-button" onClick={() => setCookieModalOpen(false)}>{t('common.cancel', '取消')}</button>
-                <button type="button" className="primary-button" disabled={executing} onClick={handleSaveCookie}>{t('source.saveCookie', '保存 Cookie')}</button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {webViewOpen && (
-          <SourceWebViewModal
-            sourceId={sourceId}
-            sourceName={sourceName}
-            startUrl={webViewStartUrl}
-            onClose={() => setWebViewOpen(false)}
-            onToast={onToast}
-            onSettingsSaved={() => {
-              // 设置已落库：本轮浏览器会话的使命完成，不能再重跑触发动作
-              // （否则书源 JS 会再次返回 data: 内联页地址，把设置页又开一遍）
-              void loadLoginUi()
-            }}
-            onLoggedIn={() => {
-              // await 型 startBrowserAwait 完成后，服务端已经把真实结果交回原脚本继续执行，
-              // 前端只需刷新登录 UI，绝不能重跑动作或再次打开旧 iframe。
-              // 非 await 的 startBrowser 会话由全局 VerificationPanel 接管（openUrl 只用于
-              // 真正的手动页面），所以这里同样不重跑。
-              void loadLoginUi()
-            }}
-            onImportOnline={url => setNetworkImportUrl(url)}
+      <Modal
+        opened={headerEditOpen}
+        onClose={() => setHeaderEditOpen(false)}
+        title={t('source.editLoginHeaderModalTitle', '编辑 / 填入登录头 (Login Header)')}
+        size="md"
+        zIndex={340}
+      >
+        <Stack gap="sm">
+          <Text size="xs" c="dimmed">
+            {t('source.editLoginHeaderDesc', '支持 JSON 格式（如 {"Authorization": "Bearer ...", "Cookie": "..."}）或直接文本。')}
+          </Text>
+          <Textarea
+            rows={6}
+            value={headerEditText}
+            placeholder='{"Authorization": "Bearer ...", "Cookie": "..."}'
+            onChange={e => setHeaderEditText(e.target.value)}
+            styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
           />
-        )}
-      </div>
+          <Group justify="flex-end" gap="xs">
+            <Button variant="default" onClick={() => setHeaderEditOpen(false)}>{t('common.cancel', '取消')}</Button>
+            <Button loading={executing} onClick={handleSaveHeader}>{t('source.saveLoginHeader', '保存登录头')}</Button>
+          </Group>
+        </Stack>
+      </Modal>
 
-      {/*
-        网络导入弹窗：必须与内置浏览器弹窗**平级**挂载，严禁嵌在它的 .modal-backdrop 内部
-        （仓库既有约定：带 animation/transform 的遮罩会形成层叠上下文，嵌套会导致幽灵穿透）。
-      */}
+      <Modal
+        opened={cookieModalOpen}
+        onClose={() => setCookieModalOpen(false)}
+        title={t('source.quickFillCookieModalTitle', '快捷填入 Cookie')}
+        size="md"
+        zIndex={340}
+      >
+        <Stack gap="sm">
+          <Text size="xs" c="dimmed">
+            {t('source.quickFillCookieDesc', '将目标网站登录后的 Cookie 字符串粘贴在下方（服务端将自动按域名持久化合并）：')}
+          </Text>
+          <Textarea
+            rows={5}
+            value={cookieInputText}
+            placeholder="token=xxxx; uid=12345; session=yyyy"
+            onChange={e => setCookieInputText(e.target.value)}
+            styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
+          />
+          <Group justify="flex-end" gap="xs">
+            <Button variant="default" onClick={() => setCookieModalOpen(false)}>{t('common.cancel', '取消')}</Button>
+            <Button loading={executing} onClick={handleSaveCookie}>{t('source.saveCookie', '保存 Cookie')}</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      {webViewOpen && (
+        <SourceWebViewModal
+          sourceId={sourceId}
+          sourceName={displayName || sourceId}
+          startUrl={webViewStartUrl}
+          childModalOpen={networkImportUrl !== null}
+          onClose={() => setWebViewOpen(false)}
+          onToast={onToast}
+          onSettingsSaved={() => {
+            void loadLoginUi()
+          }}
+          onLoggedIn={() => {
+            void loadLoginUi()
+          }}
+          onImportOnline={url => setNetworkImportUrl(url)}
+        />
+      )}
+
       {networkImportUrl !== null && (
         <NetworkImportModal
           initialUrl={networkImportUrl}
@@ -628,6 +676,6 @@ export const SourceLoginModal: React.FC<SourceLoginModalProps> = ({
           onToast={onToast}
         />
       )}
-    </div>
+    </>
   )
 }

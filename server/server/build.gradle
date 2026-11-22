@@ -46,9 +46,9 @@ def webProjectDir = file("${rootProject.projectDir}/web")
 def webDistDir = new File(webProjectDir, 'dist')
 def webNodeModules = new File(webProjectDir, 'node_modules')
 def webPackageJson = new File(webProjectDir, 'package.json')
-def webIndexHtml = new File(webProjectDir, 'index.html')
-def webViteConfig = new File(webProjectDir, 'vite.config.ts')
+def webAstroConfig = new File(webProjectDir, 'astro.config.mjs')
 def webSourceDir = new File(webProjectDir, 'src')
+def webPublicDir = new File(webProjectDir, 'public')
 def skipWebBuild = providers.gradleProperty('legado.skipWebBuild')
     .map { it.toBoolean() }
     .getOrElse(false)
@@ -58,9 +58,9 @@ tasks.register('buildWeb') {
     group = "build"
 
     if (webSourceDir.exists()) inputs.dir(webSourceDir)
+    if (webPublicDir.exists()) inputs.dir(webPublicDir)
     if (webPackageJson.exists()) inputs.file(webPackageJson)
-    if (webIndexHtml.exists()) inputs.file(webIndexHtml)
-    if (webViteConfig.exists()) inputs.file(webViteConfig)
+    if (webAstroConfig.exists()) inputs.file(webAstroConfig)
     outputs.dir(webDistDir)
 
     doLast {

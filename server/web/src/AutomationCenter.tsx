@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  Anchor,
+  Badge,
+  Button,
+  Divider,
+  Group,
+  Loader,
+  Paper,
+  SimpleGrid,
+  Stack,
+  Text,
+  ThemeIcon,
+} from '@mantine/core'
+import {
   api,
   type BookshelfItem,
   type BookshelfRefreshStatus,
   type KindleAutoPublishStatus,
   type KindlePushDelivery,
 } from './api'
-import { ButtonSpinner } from './ButtonSpinner'
 import { Icon } from './icons'
 
 type AutomationCenterProps = {
@@ -81,7 +93,7 @@ function autoStatusCopy(status: KindleAutoPublishStatus | null): { title: string
 export function AutomationCenter({
   items,
   refreshStatus,
-  caching,
+  caching: _caching,
   onOpenBook,
   onOpenTasks,
 }: AutomationCenterProps) {
@@ -108,7 +120,8 @@ export function AutomationCenter({
     return () => window.clearInterval(timer)
   }, [loadKindle])
 
-  const cacheTasks = useMemo(() => items.filter(item => item.cacheState === 'caching'), [items])
+  const cacheTasks = useMemo(() => items.filter(item => item.cacheState === 'pending' || item.cacheState === 'caching'), [items])
+  const queuedCacheCount = cacheTasks.filter(item => item.cacheState === 'pending').length
   const problemItems = useMemo(
     () => items.filter(item => item.cacheState === 'failed' || item.cacheState === 'paused' || item.updateError),
     [items],
@@ -129,101 +142,168 @@ export function AutomationCenter({
     (autoStatus?.state === 'publishing' || autoStatus?.state === 'waiting' || autoStatus?.state === 'caching' ? 1 : 0)
 
   return (
-    <section className={`automation-center ${taskCount > 0 ? 'has-tasks' : 'is-clear'}`} aria-label="正在处理">
-      <header className="automation-center-header">
-        <div>
-          <span className="automation-center-kicker">
-            <Icon name={taskCount > 0 ? 'activity' : 'check'} className={taskCount > 0 && (caching || refreshActive) ? 'spin' : ''} />
-            正在处理
-          </span>
-          <strong>
-            {taskCount > 0 ? `${taskCount} 项任务在后台推进` : '当前没有待处理任务'}
-          </strong>
-          <small>
-            {taskCount > 0
-              ? '可以离开书架继续搜书；完成一本处理一本。'
-              : '缓存、目录更新、上架和推送会在这里集中显示。'}
-          </small>
-        </div>
-        <button type="button" className="automation-center-link" onClick={onOpenTasks}>
-          <Icon name="device" />
-          打开设备与任务
-          <Icon name="arrowRight" />
-        </button>
-      </header>
+    <Paper p="md" withBorder radius="md" aria-label="正在处理">
+      <Stack gap="sm">
+        <Group justify="space-between" align="center" wrap="wrap" gap="sm">
+          <Stack gap={2}>
+            <Group gap="xs">
+              <Badge
+                size="sm"
+                variant="dot"
+                color={taskCount > 0 ? 'gold' : 'teal'}
+              >
+                正在处理
+              </Badge>
+              <Text fw={700} size="sm">
+                {taskCount > 0 ? `${taskCount} 项任务在后台推进` : '当前没有待处理任务'}
+              </Text>
+            </Group>
+            <Text size="xs" c="dimmed">
+              {taskCount > 0
+                ? '可以离开书架继续搜书；完成一本处理一本。'
+                : '缓存、目录更新、上架和推送会在这里集中显示。'}
+            </Text>
+          </Stack>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<Icon name="device" size={14} />}
+            rightSection={<Icon name="arrowRight" size={14} />}
+            onClick={onOpenTasks}
+          >
+            打开设备与任务
+          </Button>
+        </Group>
 
-      <div className="automation-task-grid">
-        <article className={`automation-task ${cacheTasks.length ? 'is-active' : ''}`}>
-          <span className="automation-task-icon"><Icon name="cloudDownload" /></span>
-          <div>
-            <small>离线缓存</small>
-            <strong>{cacheTasks.length > 0 ? `${cacheTasks.length} 本正在缓存` : '没有缓存任务'}</strong>
-            {cacheTasks[0] ? (
-              <button type="button" onClick={() => onOpenBook(cacheTasks[0])} title={cacheTasks[0].name}>
-                {cacheTasks[0].name} · {cacheTasks[0].cachedChapters}/{cacheTasks[0].totalChapters || '?'}
-              </button>
-            ) : (
-              <span>{items.filter(item => item.cacheState === 'ready').length} 本已可离线阅读</span>
-            )}
-          </div>
-        </article>
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
+          <Paper p="sm" withBorder radius="sm" style={{ background: 'var(--canvas)' }}>
+            <Group gap="sm" align="flex-start" wrap="nowrap">
+              <ThemeIcon size={32} radius="md" variant="light" color={cacheTasks.length > 0 ? 'brand' : 'gray'}>
+                <Icon name="cloudDownload" size={16} />
+              </ThemeIcon>
+              <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                <Text size="xs" c="dimmed">离线缓存</Text>
+                <Text size="sm" fw={600} lineClamp={1}>
+                  {cacheTasks.length > 0 ? `${cacheTasks.length - queuedCacheCount} 本缓存中 · ${queuedCacheCount} 本排队` : '没有缓存任务'}
+                </Text>
+                {cacheTasks[0] ? (
+                  <Anchor
+                    component="button"
+                    type="button"
+                    size="xs"
+                    ta="left"
+                    truncate
+                    onClick={() => onOpenBook(cacheTasks[0])}
+                    title={cacheTasks[0].name}
+                  >
+                    {cacheTasks[0].name} · {cacheTasks[0].cachedChapters}/{cacheTasks[0].totalChapters || '?'}
+                  </Anchor>
+                ) : (
+                  <Text size="xs" c="dimmed" truncate>
+                    {items.filter(item => item.cacheState === 'ready').length} 本已可离线阅读
+                  </Text>
+                )}
+              </Stack>
+            </Group>
+          </Paper>
 
-        <article className={`automation-task ${refreshActive ? 'is-active' : refreshDone ? 'is-ready' : ''}`}>
-          <span className="automation-task-icon"><Icon name="refresh" className={refreshActive ? 'spin' : ''} /></span>
-          <div>
-            <small>目录更新</small>
-            <strong>
-              {refreshActive
-                ? `正在更新 ${refreshStatus?.completed ?? 0}/${refreshStatus?.total ?? 0}`
-                : refreshDone
-                  ? `更新完成 · 新增 ${refreshDone.items.reduce((total, item) => total + Math.max(0, item.newChapters), 0)} 章`
-                  : '没有目录任务'}
-            </strong>
-            <span>{refreshActive ? '可以继续浏览页面，进度会自动刷新' : '书架目录状态正常'}</span>
-          </div>
-        </article>
+          <Paper p="sm" withBorder radius="sm" style={{ background: 'var(--canvas)' }}>
+            <Group gap="sm" align="flex-start" wrap="nowrap">
+              <ThemeIcon size={32} radius="md" variant="light" color={refreshActive ? 'brand' : refreshDone ? 'teal' : 'gray'}>
+                <Icon name="refresh" size={16} className={refreshActive ? 'spin' : ''} />
+              </ThemeIcon>
+              <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                <Text size="xs" c="dimmed">目录更新</Text>
+                <Text size="sm" fw={600} lineClamp={1}>
+                  {refreshActive
+                    ? `正在更新 ${refreshStatus?.completed ?? 0}/${refreshStatus?.total ?? 0}`
+                    : refreshDone
+                      ? `更新完成 · 新增 ${refreshDone.items.reduce((total, item) => total + Math.max(0, item.newChapters), 0)} 章`
+                      : '没有目录任务'}
+                </Text>
+                <Text size="xs" c="dimmed" truncate>
+                  {refreshActive ? '可以继续浏览页面，进度会自动刷新' : '书架目录状态正常'}
+                </Text>
+              </Stack>
+            </Group>
+          </Paper>
 
-        <article className={`automation-task ${autoCopy.tone === 'active' ? 'is-active' : ''} ${autoCopy.tone === 'warning' ? 'is-warning' : ''} ${autoCopy.tone === 'ready' ? 'is-ready' : ''}`}>
-          <span className="automation-task-icon"><Icon name="device" /></span>
-          <div>
-            <small>Kindle 上架</small>
-            <strong>{loading && !autoStatus ? <><ButtonSpinner size={12} /> 正在读取</> : autoCopy.title}</strong>
-            <span>{autoCopy.detail}</span>
-          </div>
-        </article>
+          <Paper p="sm" withBorder radius="sm" style={{ background: 'var(--canvas)' }}>
+            <Group gap="sm" align="flex-start" wrap="nowrap">
+              <ThemeIcon
+                size={32}
+                radius="md"
+                variant="light"
+                color={autoCopy.tone === 'warning' ? 'gold' : autoCopy.tone === 'ready' ? 'teal' : autoCopy.tone === 'active' ? 'brand' : 'gray'}
+              >
+                <Icon name="device" size={16} />
+              </ThemeIcon>
+              <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                <Text size="xs" c="dimmed">Kindle 上架</Text>
+                <Group gap={6} wrap="nowrap">
+                  {loading && !autoStatus ? (
+                    <>
+                      <Loader size={12} />
+                      <Text size="sm" fw={600}>正在读取</Text>
+                    </>
+                  ) : (
+                    <Text size="sm" fw={600} truncate>{autoCopy.title}</Text>
+                  )}
+                </Group>
+                <Text size="xs" c="dimmed" truncate>{autoCopy.detail}</Text>
+              </Stack>
+            </Group>
+          </Paper>
 
-        <article className={`automation-task ${pendingDeliveries.length ? 'is-active' : ''}`}>
-          <span className="automation-task-icon"><Icon name="upload" /></span>
-          <div>
-            <small>推送队列</small>
-            <strong>{pendingDeliveries.length > 0 ? `${pendingDeliveries.length} 本等待领取` : '队列为空'}</strong>
-            {pendingDeliveries[0] ? (
-              <button type="button" onClick={onOpenTasks}>
-                {pendingDeliveries[0].book_name} · {pendingDeliveries[0].delivered_count}/{pendingDeliveries[0].target_count} 台
-              </button>
-            ) : (
-              <span>{offline ? '暂时无法读取 Kindle 状态' : '设备联网后会在这里领取'}</span>
-            )}
-          </div>
-        </article>
-      </div>
+          <Paper p="sm" withBorder radius="sm" style={{ background: 'var(--canvas)' }}>
+            <Group gap="sm" align="flex-start" wrap="nowrap">
+              <ThemeIcon size={32} radius="md" variant="light" color={pendingDeliveries.length > 0 ? 'gold' : 'gray'}>
+                <Icon name="upload" size={16} />
+              </ThemeIcon>
+              <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                <Text size="xs" c="dimmed">推送队列</Text>
+                <Text size="sm" fw={600} lineClamp={1}>
+                  {pendingDeliveries.length > 0 ? `${pendingDeliveries.length} 本等待领取` : '队列为空'}
+                </Text>
+                {pendingDeliveries[0] ? (
+                  <Anchor component="button" type="button" size="xs" ta="left" truncate onClick={onOpenTasks}>
+                    {pendingDeliveries[0].book_name} · {pendingDeliveries[0].delivered_count}/{pendingDeliveries[0].target_count} 台
+                  </Anchor>
+                ) : (
+                  <Text size="xs" c="dimmed" truncate>
+                    {offline ? '暂时无法读取 Kindle 状态' : '设备联网后会在这里领取'}
+                  </Text>
+                )}
+              </Stack>
+            </Group>
+          </Paper>
+        </SimpleGrid>
 
-      {(problemItems.length > 0 || pendingDeliveries.length > 0) && (
-        <footer className="automation-center-footer">
-          {problemItems.length > 0 && (
-            <span className="automation-attention">
-              <Icon name="activity" />
-              {problemItems.length} 本需要处理
-            </span>
-          )}
-          {problemItems.slice(0, 3).map(item => (
-            <button key={`${item.sourceId}\u0000${item.bookUrl}`} type="button" onClick={() => onOpenBook(item)}>
-              {item.name}
-            </button>
-          ))}
-          {problemItems.length > 3 && <small>+{problemItems.length - 3}</small>}
-        </footer>
-      )}
-    </section>
+        {problemItems.length > 0 && (
+          <>
+            <Divider />
+            <Group gap="xs" wrap="wrap">
+              <Badge size="sm" variant="light" color="red" leftSection={<Icon name="alert" size={12} />}>
+                {problemItems.length} 本需要处理
+              </Badge>
+              {problemItems.slice(0, 3).map(item => (
+                <Button
+                  key={`${item.sourceId}\u0000${item.bookUrl}`}
+                  size="compact-xs"
+                  variant="light"
+                  color="gray"
+                  onClick={() => onOpenBook(item)}
+                >
+                  {item.name}
+                </Button>
+              ))}
+              {problemItems.length > 3 && (
+                <Text size="xs" c="dimmed">+{problemItems.length - 3}</Text>
+              )}
+            </Group>
+          </>
+        )}
+      </Stack>
+    </Paper>
   )
 }

@@ -1,10 +1,24 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  ActionIcon,
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Group,
+  Modal,
+  Paper,
+  Progress,
+  ScrollArea,
+  Stack,
+  Text,
+  Tooltip,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import { api, BookDetails, Chapter, SearchResult, SearchStreamEvent, streamSearch } from './api'
 import { Icon } from './icons'
 import { cleanAuthor, cleanTitle, isSourceSwitchBookMatch } from './searchFilters'
 import { matchBestChapter, normalizeChapterTitle, remapChapterAfterSourceSwitch } from './sourceSwitchRemap'
-import { ButtonSpinner } from './ButtonSpinner'
 import { toast } from './Toast'
 
 /**
@@ -485,169 +499,175 @@ export function SourceSwitchModal({
   ]
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="source-switch-dialog"
-        onClick={e => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('source.switchSourceForBook', { bookName, defaultValue: `切换书源: ${bookName}` })}
-      >
-        <header className="source-switch-header">
-          <div>
-            <div className="source-switch-kicker">
-              <Icon name="sliders" />
-              <span>{t('source.switchSourceTitle', '切换书源')}</span>
-            </div>
-            <h2>{bookName}</h2>
-            <small>{author ? `${t('library.author', '作者')}: ${author}` : t('library.unknownAuthor', '未知作者')} · {t('source.currentSourceBadge', '当前书源')}：{currentSourceId}</small>
-          </div>
-          <button className="subtle-button close-btn" onClick={onClose} aria-label={t('common.close', '关闭')}>
-            <Icon name="close" />
-          </button>
-        </header>
+    <Modal
+      opened
+      onClose={onClose}
+      size="lg"
+      zIndex={340}
+      withCloseButton={false}
+      padding="lg"
+      aria-label={t('source.switchSourceForBook', { bookName, defaultValue: `切换书源: ${bookName}` })}
+    >
+      <Stack gap="md">
+        <Group justify="space-between" align="flex-start" wrap="nowrap" pb="sm" style={{ borderBottom: '1px solid var(--line)' }}>
+          <Stack gap={2} style={{ minWidth: 0 }}>
+            <Group gap={6}>
+              <Icon name="sliders" size={15} />
+              <Text size="xs" fw={700} c="brand" tt="uppercase" lts={0.6}>
+                {t('source.switchSourceTitle', '切换书源')}
+              </Text>
+            </Group>
+            <Text fw={700} size="lg" truncate>{bookName}</Text>
+            <Text size="xs" c="dimmed" truncate>
+              {author ? `${t('library.author', '作者')}: ${author}` : t('library.unknownAuthor', '未知作者')} · {t('source.currentSourceBadge', '当前书源')}：{currentSourceId}
+            </Text>
+          </Stack>
+          <ActionIcon variant="subtle" color="gray" onClick={onClose} aria-label={t('common.close', '关闭')}>
+            <Icon name="close" size={16} />
+          </ActionIcon>
+        </Group>
 
-        <section
-          className="source-switch-options"
-          aria-label={t('source.changeSourceOptions', '换源加载选项')}
-        >
-          <span className="source-switch-options-title">
-            {t('source.changeSourceOptions', '换源加载选项')}
-          </span>
-          <div className="source-switch-options-list">
-            {optionItems.map(item => (
-              <label
-                key={item.key}
-                className={`source-switch-option ${options[item.key] ? 'active' : ''}`}
-                title={item.hint}
-              >
-                <input
-                  type="checkbox"
-                  checked={options[item.key]}
-                  onChange={event => consumeOptionChange(item.key, event.target.checked)}
-                />
-                <span>{item.label}</span>
-              </label>
-            ))}
-          </div>
-        </section>
+        <Paper p="sm" withBorder radius="md" aria-label={t('source.changeSourceOptions', '换源加载选项')}>
+          <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+            <Text size="xs" fw={600} c="dimmed">
+              {t('source.changeSourceOptions', '换源加载选项')}
+            </Text>
+            <Group gap="md" wrap="wrap">
+              {optionItems.map(item => (
+                <Tooltip key={item.key} label={item.hint}>
+                  <Checkbox
+                    size="xs"
+                    label={item.label}
+                    checked={options[item.key]}
+                    onChange={event => consumeOptionChange(item.key, event.target.checked)}
+                  />
+                </Tooltip>
+              ))}
+            </Group>
+          </Group>
+        </Paper>
 
-        {/* Search Stream Progress Banner */}
-        <div className="source-search-banner">
-          <div className="search-banner-text">
-            <span>
-              {searching ? (
-                <>{t('source.searchingSourcesForBook', { bookName, defaultValue: `正在全源检索《${bookName}》...` })}</>
-              ) : (
-                <>{t('source.searchSourcesCompleted', { count: visibleCandidates.length, defaultValue: `全源检索完成，共找到 ${visibleCandidates.length} 个书源` })}</>
-              )}
-            </span>
-            <small>
-              {searchProgress
-                ? t('source.scannedSourcesProgress', { completed: searchProgress.completedSources, total: searchProgress.totalSources, defaultValue: `已扫描 ${searchProgress.completedSources} / ${searchProgress.totalSources} 个书源` })
-                : t('source.preparingSearch', '准备检索...')}
-            </small>
-          </div>
-          {searching && (
-            <div className="search-progress-bar-track">
-              <div
-                className="search-progress-bar-fill"
-                style={{ width: `${Math.max(5, progressPercent)}%` }}
-              />
-            </div>
-          )}
-        </div>
+        <Paper p="sm" withBorder radius="md" style={{ background: 'var(--sidebar-bg)' }}>
+          <Stack gap={6}>
+            <Group justify="space-between" wrap="wrap" gap="xs">
+              <Text size="sm" fw={600}>
+                {searching
+                  ? t('source.searchingSourcesForBook', { bookName, defaultValue: `正在全源检索《${bookName}》...` })
+                  : t('source.searchSourcesCompleted', { count: visibleCandidates.length, defaultValue: `全源检索完成，共找到 ${visibleCandidates.length} 个书源` })}
+              </Text>
+              <Text size="xs" c="dimmed">
+                {searchProgress
+                  ? t('source.scannedSourcesProgress', { completed: searchProgress.completedSources, total: searchProgress.totalSources, defaultValue: `已扫描 ${searchProgress.completedSources} / ${searchProgress.totalSources} 个书源` })
+                  : t('source.preparingSearch', '准备检索...')}
+              </Text>
+            </Group>
+            {searching && (
+              <Progress value={Math.max(5, progressPercent)} animated striped size="sm" radius="xl" />
+            )}
+          </Stack>
+        </Paper>
 
-        {/* Candidate List */}
-        <div className="source-candidate-list">
-          {sortedCandidates.map(c => {
-            const isSwitching = switchingSourceId === c.result.sourceId
-            const isLoading = c.status === 'loading'
-            const isError = c.status === 'error'
-            const isCurrent = c.isCurrent
+        <ScrollArea.Autosize mah="52vh" offsetScrollbars>
+          <Stack gap="xs" pr={4}>
+            {sortedCandidates.map(c => {
+              const isSwitching = switchingSourceId === c.result.sourceId
+              const isLoading = c.status === 'loading'
+              const isError = c.status === 'error'
+              const isCurrent = c.isCurrent
 
-            let metaText = t('source.clickToFetchTocAndSwitch', '点击拉取目录并切换')
-            if (isCurrent) {
-              metaText = t('source.currentReadingSource', '当前正在阅读的书源')
-            } else if (isLoading) {
-              metaText = t('source.extractingTocAndChapters', '正在提取目录与章节...')
-            } else if (isError) {
-              metaText = c.error || t('source.unableToGetToc', '获取目录失败')
-            } else if (c.status === 'loaded') {
-              metaText = t('source.totalChaptersAndLatest', { count: c.totalChapters ?? 0, latest: c.latestChapter || t('common.none', '无'), defaultValue: `共 ${c.totalChapters ?? 0} 章 · 最新：${c.latestChapter || '无'}` })
-            } else if (c.detailsLoaded) {
-              const latest = c.latestChapter || c.result.lastChapter
-              metaText = latest
-                ? t('source.detailsLoadedWithLatest', '详情已加载 · 最新：{{latest}}', { latest })
-                : t('source.detailsLoaded', '详情已加载，点击换源时再拉取目录')
-            } else if (c.result.lastChapter) {
-              metaText = t('source.searchResultLatestChapter', '最新：{{latest}}', { latest: c.result.lastChapter })
-            }
+              let metaText = t('source.clickToFetchTocAndSwitch', '点击拉取目录并切换')
+              if (isCurrent) {
+                metaText = t('source.currentReadingSource', '当前正在阅读的书源')
+              } else if (isLoading) {
+                metaText = t('source.extractingTocAndChapters', '正在提取目录与章节...')
+              } else if (isError) {
+                metaText = c.error || t('source.unableToGetToc', '获取目录失败')
+              } else if (c.status === 'loaded') {
+                metaText = t('source.totalChaptersAndLatest', { count: c.totalChapters ?? 0, latest: c.latestChapter || t('common.none', '无'), defaultValue: `共 ${c.totalChapters ?? 0} 章 · 最新：${c.latestChapter || '无'}` })
+              } else if (c.detailsLoaded) {
+                const latest = c.latestChapter || c.result.lastChapter
+                metaText = latest
+                  ? t('source.detailsLoadedWithLatest', '详情已加载 · 最新：{{latest}}', { latest })
+                  : t('source.detailsLoaded', '详情已加载，点击换源时再拉取目录')
+              } else if (c.result.lastChapter) {
+                metaText = t('source.searchResultLatestChapter', '最新：{{latest}}', { latest: c.result.lastChapter })
+              }
 
-            return (
-              <article
-                key={`${c.result.sourceId}-${c.result.bookUrl}`}
-                className={`source-candidate-card ${isCurrent ? 'current' : ''} ${isError ? 'error' : ''}`}
-              >
-                <div className="candidate-main">
-                  <div className="candidate-title-row">
-                    <strong>{c.result.sourceId}</strong>
-                    {isCurrent && <span className="source-badge current">{t('source.currentSourceBadge', '当前书源')}</span>}
-                    {c.isKnownAlternate && !isCurrent && (
-                      <span className="source-badge alternate">{t('source.candidateBadge', '已收录候选')}</span>
-                    )}
-                  </div>
-                  <p className="candidate-meta">{metaText}</p>
-                  {c.matchedChapterTitle && !isCurrent && (
-                    <small className="candidate-match">
-                      {t('source.smartMatchedPosition', { index: (c.matchedChapterIndex ?? 0) + 1, title: c.matchedChapterTitle, defaultValue: `智能定位至：第 ${(c.matchedChapterIndex ?? 0) + 1} 章 · ${c.matchedChapterTitle}` })}
-                    </small>
-                  )}
-                  {c.wordCountText && !isCurrent && (
-                    <small className="candidate-word-count">
-                      {c.wordCountText}
-                      {c.respondTimeMs !== undefined && (
-                        <>
-                          {'\n'}
-                          {t('source.respondTime', '耗时')}：{(c.respondTimeMs / 1000).toFixed(1)}s
-                        </>
+              return (
+                <Card
+                  key={`${c.result.sourceId}-${c.result.bookUrl}`}
+                  p="sm"
+                  withBorder
+                  radius="md"
+                  style={{
+                    borderColor: isCurrent ? 'var(--accent)' : isError ? 'var(--danger)' : undefined,
+                    background: isCurrent ? 'var(--accent-soft)' : undefined,
+                  }}
+                >
+                  <Group justify="space-between" align="center" wrap="nowrap" gap="sm">
+                    <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
+                      <Group gap="xs" wrap="wrap">
+                        <Text size="sm" fw={700} truncate>{c.result.sourceId}</Text>
+                        {isCurrent && (
+                          <Badge size="xs" variant="filled" color="brand">
+                            {t('source.currentSourceBadge', '当前书源')}
+                          </Badge>
+                        )}
+                        {c.isKnownAlternate && !isCurrent && (
+                          <Badge size="xs" variant="light" color="gold">
+                            {t('source.candidateBadge', '已收录候选')}
+                          </Badge>
+                        )}
+                      </Group>
+                      <Text size="xs" c={isError ? 'red' : 'dimmed'}>{metaText}</Text>
+                      {c.matchedChapterTitle && !isCurrent && (
+                        <Text size="xs" c="brand">
+                          {t('source.smartMatchedPosition', { index: (c.matchedChapterIndex ?? 0) + 1, title: c.matchedChapterTitle, defaultValue: `智能定位至：第 ${(c.matchedChapterIndex ?? 0) + 1} 章 · ${c.matchedChapterTitle}` })}
+                        </Text>
                       )}
-                    </small>
-                  )}
-                </div>
+                      {c.wordCountText && !isCurrent && (
+                        <Text size="xs" c="dimmed" style={{ whiteSpace: 'pre-line' }}>
+                          {c.wordCountText}
+                          {c.respondTimeMs !== undefined && `\n${t('source.respondTime', '耗时')}：${(c.respondTimeMs / 1000).toFixed(1)}s`}
+                        </Text>
+                      )}
+                    </Stack>
 
-                <div className="candidate-action">
-                  {isCurrent ? (
-                    <span className="current-indicator">{t('source.inUse', '使用中')}</span>
-                  ) : (
-                    <button
-                      className={`primary-button switch-btn ${isSwitching ? 'is-loading' : ''}`}
-                      disabled={isSwitching || isLoading || switchingSourceId !== null}
-                      aria-busy={isSwitching}
-                      onClick={() => void handleSelect(c)}
-                    >
-                      {isSwitching && <ButtonSpinner size={12} />}
-                      {isSwitching
-                        ? t('source.switching', '切换中...')
-                        : isLoading
-                          ? t('common.loading', '加载中...')
-                          : t('source.switch', '切换')}
-                    </button>
-                  )}
-                </div>
-              </article>
-            )
-          })}
+                    {isCurrent ? (
+                      <Badge variant="light" color="brand" size="md">
+                        {t('source.inUse', '使用中')}
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="xs"
+                        loading={isSwitching}
+                        disabled={isLoading || switchingSourceId !== null}
+                        onClick={() => void handleSelect(c)}
+                      >
+                        {isSwitching
+                          ? t('source.switching', '切换中...')
+                          : isLoading
+                            ? t('common.loading', '加载中...')
+                            : t('source.switch', '切换')}
+                      </Button>
+                    )}
+                  </Group>
+                </Card>
+              )
+            })}
 
-          {sortedCandidates.length === 0 && !searching && (
-            <div className="source-switch-empty">
-              <Icon name="book" />
-              <p>{t('source.noMatchingBookFound', { bookName, defaultValue: `未在其他书源中发现匹配的《${bookName}》` })}</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+            {sortedCandidates.length === 0 && !searching && (
+              <Stack align="center" gap="xs" py="xl">
+                <Icon name="book" size={28} />
+                <Text size="sm" c="dimmed">
+                  {t('source.noMatchingBookFound', { bookName, defaultValue: `未在其他书源中发现匹配的《${bookName}》` })}
+                </Text>
+              </Stack>
+            )}
+          </Stack>
+        </ScrollArea.Autosize>
+      </Stack>
+    </Modal>
   )
 }
 

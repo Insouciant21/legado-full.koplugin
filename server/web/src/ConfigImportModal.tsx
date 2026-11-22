@@ -1,4 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import {
+  Alert,
+  Badge,
+  Button,
+  Code,
+  Divider,
+  FileButton,
+  Group,
+  Modal,
+  Paper,
+  PasswordInput,
+  ScrollArea,
+  SimpleGrid,
+  Stack,
+  Tabs,
+  Text,
+  TextInput,
+  ThemeIcon,
+} from '@mantine/core'
 import { useTranslation } from 'react-i18next'
 import {
   api,
@@ -6,7 +25,6 @@ import {
   type ExternalWebDavBackup,
   type ExternalWebDavConfig,
 } from './api'
-import { ButtonSpinner } from './ButtonSpinner'
 import { Icon } from './icons'
 
 type Props = {
@@ -58,7 +76,7 @@ function formatDate(value: number): string {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN')
 }
 
-export function ConfigImportModal({ theme, onClose, onImported }: Props) {
+export function ConfigImportModal({ onClose, onImported }: Props) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<Mode>('file')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -68,14 +86,6 @@ export function ConfigImportModal({ theme, onClose, onImported }: Props) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [summary, setSummary] = useState<BackupImportSummary | null>(null)
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
 
   const updateConnection = (patch: Partial<ExternalWebDavConfig>) => {
     setConnection(previous => {
@@ -163,198 +173,219 @@ export function ConfigImportModal({ theme, onClose, onImported }: Props) {
   }
 
   return (
-    <div className={`modal-backdrop config-import-backdrop theme-${theme}`} onClick={onClose}>
-      <section
-        className="config-import-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('header.webdavTitle', 'Android 备份导入')}
-        onClick={event => event.stopPropagation()}
-      >
-        <header className="config-import-header">
-          <div>
-            <span className="section-kicker">{t('webdav.sectionKicker', 'Android 备份导入')}</span>
-            <h2>{t('header.webdavTitle', 'Android 备份导入')}</h2>
-            <p>{t('webdav.importIntro', '从本地 ZIP 或任意外部 WebDAV 恢复书源、规则、书架、进度、分组和书签。')}</p>
-          </div>
-          <button type="button" className="subtle-button close-btn" onClick={onClose} aria-label={t('common.close', '关闭')}>
-            <Icon name="close" />
-          </button>
-        </header>
+    <Modal
+      opened
+      onClose={onClose}
+      size="lg"
+      title={
+        <Stack gap={2}>
+          <Text fw={700} size="lg">{t('header.webdavTitle', 'Android 备份导入')}</Text>
+          <Text size="xs" c="dimmed">
+            {t('webdav.importIntro', '从本地 ZIP 或任意外部 WebDAV 恢复书源、规则、书架、进度、分组和书签。')}
+          </Text>
+        </Stack>
+      }
+    >
+      <Stack gap="md">
+        <Tabs
+          value={mode}
+          onChange={value => {
+            setMode((value as Mode) || 'file')
+            setError('')
+            setSummary(null)
+          }}
+        >
+          <Tabs.List>
+            <Tabs.Tab value="file" leftSection={<Icon name="importFile" size={15} />}>
+              {t('webdav.localZip', '本地 ZIP')}
+            </Tabs.Tab>
+            <Tabs.Tab value="webdav" leftSection={<Icon name="cloudDownload" size={15} />}>
+              {t('webdav.externalWebdav', '外部 WebDAV')}
+            </Tabs.Tab>
+          </Tabs.List>
 
-        <div className="config-import-tabs" role="tablist" aria-label={t('webdav.importSources', '导入来源')}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'file'}
-            className={mode === 'file' ? 'active' : ''}
-            onClick={() => { setMode('file'); setError(''); setSummary(null) }}
-          >
-            <Icon name="importFile" />
-            <span>{t('webdav.localZip', '本地 ZIP')}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'webdav'}
-            className={mode === 'webdav' ? 'active' : ''}
-            onClick={() => { setMode('webdav'); setError(''); setSummary(null) }}
-          >
-            <Icon name="cloudDownload" />
-            <span>{t('webdav.externalWebdav', '外部 WebDAV')}</span>
-          </button>
-        </div>
-
-        <div className="config-import-body">
-          <p className="config-import-support-note">
+          <Alert mt="md" variant="light" color="brand" icon={<Icon name="bookOpen" size={16} />}>
             {t('webdav.supportedData', '当前会导入：书源及分组、替换规则、在线书架、阅读进度、书架分组和书签。手机本机文件会被跳过。')}
-          </p>
+          </Alert>
 
-          {mode === 'file' ? (
-            <section className="config-import-panel" role="tabpanel">
-              <div className="config-import-file-picker">
-                <div className="config-import-file-icon"><Icon name="file" /></div>
-                <div>
-                  <strong>{selectedFile?.name ?? t('webdav.chooseZip', '选择一个 Android 备份 ZIP')}</strong>
-                  <small>{selectedFile
-                    ? `${formatBytes(selectedFile.size)} · ${t('webdav.readyToImport', '可以导入')}`
-                    : t('webdav.zipOnlyWarning', '只支持上传 Android Legado 备份 ZIP。')}</small>
-                </div>
-                <label className={`subtle-button config-import-file-button ${busy ? 'disabled' : ''}`}>
-                  <Icon name="upload" />
-                  <span>{t('webdav.chooseFile', '选择文件')}</span>
-                  <input
-                    type="file"
+          <Tabs.Panel value="file" pt="md">
+            <Stack gap="md">
+              <Paper p="md" style={{ background: 'var(--surface-muted)' }}>
+                <Group justify="space-between" wrap="nowrap" gap="md">
+                  <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+                    <ThemeIcon size="lg" variant="light" color="brand">
+                      <Icon name="file" size={18} />
+                    </ThemeIcon>
+                    <Stack gap={2} style={{ minWidth: 0 }}>
+                      <Text size="sm" fw={600} truncate>
+                        {selectedFile?.name ?? t('webdav.chooseZip', '选择一个 Android 备份 ZIP')}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {selectedFile
+                          ? `${formatBytes(selectedFile.size)} · ${t('webdav.readyToImport', '可以导入')}`
+                          : t('webdav.zipOnlyWarning', '只支持上传 Android Legado 备份 ZIP。')}
+                      </Text>
+                    </Stack>
+                  </Group>
+                  <FileButton
                     accept=".zip,application/zip,application/x-zip-compressed"
                     disabled={Boolean(busy)}
-                    onChange={event => {
-                      setSelectedFile(event.target.files?.[0] ?? null)
+                    onChange={file => {
+                      setSelectedFile(file)
                       setError('')
                       setSummary(null)
-                      event.target.value = ''
                     }}
-                  />
-                </label>
-              </div>
-              <button type="button" className="primary-button config-import-submit" disabled={!selectedFile || Boolean(busy)} onClick={() => void importFile()}>
-                {busy === 'file' ? <ButtonSpinner size={14} /> : <Icon name="importFile" />}
-                <span>{busy === 'file' ? t('webdav.importing', '导入中…') : t('webdav.startImport', '开始导入')}</span>
-              </button>
-            </section>
-          ) : (
-            <section className="config-import-panel" role="tabpanel">
-              <div className="config-import-fields">
-                <label>
-                  <span>{t('webdav.url', 'WebDAV 地址')}</span>
-                  <input
-                    type="url"
-                    value={connection.url}
-                    placeholder="https://dav.jianguoyun.com/dav/"
-                    onChange={event => updateConnection({ url: event.target.value })}
-                  />
-                </label>
-                <div className="config-import-field-row">
-                  <label>
-                    <span>{t('webdav.username', '用户名')}</span>
-                    <input
-                      type="text"
-                      autoComplete="username"
-                      value={connection.username}
-                      onChange={event => updateConnection({ username: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    <span>{t('webdav.password', '密码')}</span>
-                    <input
-                      type="password"
-                      autoComplete="current-password"
-                      value={connection.password}
-                      onChange={event => updateConnection({ password: event.target.value })}
-                    />
-                  </label>
-                </div>
-                <label>
-                  <span>{t('webdav.directory', '子目录')}</span>
-                  <input
-                    type="text"
-                    value={connection.directory}
-                    placeholder="legado"
-                    onChange={event => updateConnection({ directory: event.target.value })}
-                  />
-                </label>
-              </div>
-              <p className="config-import-credential-note">
+                  >
+                    {props => (
+                      <Button {...props} variant="default" leftSection={<Icon name="upload" size={15} />}>
+                        {t('webdav.chooseFile', '选择文件')}
+                      </Button>
+                    )}
+                  </FileButton>
+                </Group>
+              </Paper>
+              <Button
+                fullWidth
+                loading={busy === 'file'}
+                disabled={!selectedFile || Boolean(busy)}
+                leftSection={<Icon name="importFile" size={16} />}
+                onClick={() => void importFile()}
+              >
+                {busy === 'file' ? t('webdav.importing', '导入中…') : t('webdav.startImport', '开始导入')}
+              </Button>
+            </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value="webdav" pt="md">
+            <Stack gap="sm">
+              <TextInput
+                label={t('webdav.url', 'WebDAV 地址')}
+                type="url"
+                value={connection.url}
+                placeholder="https://dav.jianguoyun.com/dav/"
+                onChange={event => updateConnection({ url: event.target.value })}
+              />
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                <TextInput
+                  label={t('webdav.username', '用户名')}
+                  autoComplete="username"
+                  value={connection.username}
+                  onChange={event => updateConnection({ username: event.target.value })}
+                />
+                <PasswordInput
+                  label={t('webdav.password', '密码')}
+                  autoComplete="current-password"
+                  value={connection.password}
+                  onChange={event => updateConnection({ password: event.target.value })}
+                />
+              </SimpleGrid>
+              <TextInput
+                label={t('webdav.directory', '子目录')}
+                value={connection.directory}
+                placeholder="legado"
+                onChange={event => updateConnection({ directory: event.target.value })}
+              />
+              <Text size="xs" c="dimmed">
                 {t('webdav.credentialNote', 'WebDAV 密码只用于本次请求，不会保存到服务器；地址、用户名和子目录会保存在当前浏览器。')}
-              </p>
-              <button type="button" className="primary-button config-import-submit" disabled={Boolean(busy)} onClick={() => void loadRemoteFiles()}>
-                {busy === 'list' ? <ButtonSpinner size={14} /> : <Icon name="refresh" />}
-                <span>{busy === 'list' ? t('webdav.loadingDirectory', '正在读取备份目录…') : t('webdav.readBackups', '读取备份列表')}</span>
-              </button>
+              </Text>
+              <Button
+                fullWidth
+                loading={busy === 'list'}
+                disabled={Boolean(busy)}
+                leftSection={<Icon name="refresh" size={15} />}
+                onClick={() => void loadRemoteFiles()}
+              >
+                {busy === 'list' ? t('webdav.loadingDirectory', '正在读取备份目录…') : t('webdav.readBackups', '读取备份列表')}
+              </Button>
               {rootUrl && (
-                <p className="config-import-root" title={rootUrl}>
-                  {t('webdav.scanningDirectory', '扫描目录')}：<code>{rootUrl}</code>
-                </p>
+                <Group gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed">{t('webdav.scanningDirectory', '扫描目录')}：</Text>
+                  <Code style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{rootUrl}</Code>
+                </Group>
               )}
-              <div className="config-import-backup-list">
-                {files.map(file => (
-                  <article key={file.href}>
-                    <div className="config-import-backup-icon"><Icon name="file" /></div>
-                    <div>
-                      <strong title={file.name}>{file.name}</strong>
-                      <small>{formatBytes(file.size)}{file.modifiedAt ? ` · ${formatDate(file.modifiedAt)}` : ''}</small>
-                    </div>
-                    <button
-                      type="button"
-                      className="subtle-button"
-                      disabled={Boolean(busy)}
-                      onClick={() => void importRemoteFile(file)}
-                    >
-                      {busy === file.href ? <ButtonSpinner size={13} /> : <Icon name="importFile" />}
-                      <span>{busy === file.href ? t('webdav.importing', '导入中…') : t('common.import', '导入')}</span>
-                    </button>
-                  </article>
-                ))}
-                {rootUrl && files.length === 0 && (
-                  <p className="config-import-empty">{t('webdav.noBackups', '该目录下没有 backup 开头的 ZIP 备份。')}</p>
-                )}
-              </div>
-            </section>
-          )}
+              {(files.length > 0 || rootUrl) && (
+                <ScrollArea mah={220}>
+                  <Stack gap="xs">
+                    {files.map(file => (
+                      <Paper key={file.href} p="xs">
+                        <Group justify="space-between" wrap="nowrap" gap="sm">
+                          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+                            <ThemeIcon variant="light" color="brand" size="md">
+                              <Icon name="file" size={15} />
+                            </ThemeIcon>
+                            <Stack gap={1} style={{ minWidth: 0 }}>
+                              <Text size="sm" fw={600} truncate title={file.name}>{file.name}</Text>
+                              <Text size="xs" c="dimmed">
+                                {formatBytes(file.size)}{file.modifiedAt ? ` · ${formatDate(file.modifiedAt)}` : ''}
+                              </Text>
+                            </Stack>
+                          </Group>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            loading={busy === file.href}
+                            disabled={Boolean(busy)}
+                            leftSection={<Icon name="importFile" size={14} />}
+                            onClick={() => void importRemoteFile(file)}
+                          >
+                            {busy === file.href ? t('webdav.importing', '导入中…') : t('common.import', '导入')}
+                          </Button>
+                        </Group>
+                      </Paper>
+                    ))}
+                    {rootUrl && files.length === 0 && (
+                      <Text size="sm" c="dimmed" ta="center" py="md">
+                        {t('webdav.noBackups', '该目录下没有 backup 开头的 ZIP 备份。')}
+                      </Text>
+                    )}
+                  </Stack>
+                </ScrollArea>
+              )}
+            </Stack>
+          </Tabs.Panel>
+        </Tabs>
 
-          {error && <p className="form-error config-import-error" role="alert">{error}</p>}
+        {error && (
+          <Alert color="red" variant="light" icon={<Icon name="alert" size={16} />}>
+            {error}
+          </Alert>
+        )}
 
-          {summary && (
-            <section className="config-import-summary" aria-live="polite">
-              <header>
-                <div className="config-import-success-icon"><Icon name="check" /></div>
-                <div>
-                  <strong>{t('webdav.importComplete', '配置导入完成')}</strong>
-                  <small>{t('webdav.importCompleteHint', '书源、书架和分组已在后台刷新。')}</small>
-                </div>
-              </header>
-              <div className="config-import-counts">
-                <span>{t('webdav.sourcesCount', '书源')} <b>{summary.sources + summary.sourcesUpdated}</b></span>
-                <span>{t('webdav.rulesCount', '替换规则')} <b>{summary.rules + summary.rulesUpdated}</b></span>
-                <span>{t('webdav.booksCount', '书籍')} <b>{summary.books + summary.booksUpdated}</b></span>
-                <span>{t('webdav.progressCount', '阅读进度')} <b>{summary.progress}</b></span>
-                <span>{t('webdav.bookmarksCount', '书签')} <b>{summary.bookmarks}</b></span>
-                <span>{t('webdav.skippedLocalCount', '跳过本机书')} <b>{summary.skippedLocal}</b></span>
-              </div>
+        {summary && (
+          <Paper p="md" style={{ background: 'var(--success-soft)', borderColor: 'var(--success)' }}>
+            <Stack gap="xs">
+              <Group gap="xs">
+                <ThemeIcon color="teal" variant="filled" size="sm" radius="xl">
+                  <Icon name="check" size={12} />
+                </ThemeIcon>
+                <Text size="sm" fw={700}>{t('webdav.importComplete', '配置导入完成')}</Text>
+                <Text size="xs" c="dimmed">{t('webdav.importCompleteHint', '书源、书架和分组已在后台刷新。')}</Text>
+              </Group>
+              <Group gap="xs" wrap="wrap">
+                <Badge variant="white" color="dark">{t('webdav.sourcesCount', '书源')} {summary.sources + summary.sourcesUpdated}</Badge>
+                <Badge variant="white" color="dark">{t('webdav.rulesCount', '替换规则')} {summary.rules + summary.rulesUpdated}</Badge>
+                <Badge variant="white" color="dark">{t('webdav.booksCount', '书籍')} {summary.books + summary.booksUpdated}</Badge>
+                <Badge variant="white" color="dark">{t('webdav.progressCount', '阅读进度')} {summary.progress}</Badge>
+                <Badge variant="white" color="dark">{t('webdav.bookmarksCount', '书签')} {summary.bookmarks}</Badge>
+                <Badge variant="white" color="gray">{t('webdav.skippedLocalCount', '跳过本机书')} {summary.skippedLocal}</Badge>
+              </Group>
               {(summary.coversQueued > 0 || summary.coversFailed > 0) && (
-                <p>
+                <Text size="xs" c="dimmed">
                   {summary.coversQueued > 0 && t('webdav.coversQueued', '{{count}} 本书的封面已转入后台补抓。', { count: summary.coversQueued })}
                   {summary.coversFailed > 0 && t('webdav.coversFailed', ' {{count}} 张封面补抓失败，不影响阅读。', { count: summary.coversFailed })}
-                </p>
+                </Text>
               )}
-            </section>
-          )}
-        </div>
+            </Stack>
+          </Paper>
+        )}
 
-        <footer className="config-import-footer">
-          <span>{t('webdav.safeMergeHint', '导入采用增量合并，不删除 Server 中备份包未包含的数据。')}</span>
-          <button type="button" className="subtle-button" onClick={onClose}>{t('common.close', '关闭')}</button>
-        </footer>
-      </section>
-    </div>
+        <Divider />
+
+        <Group justify="space-between" gap="xs">
+          <Text size="xs" c="dimmed">{t('webdav.safeMergeHint', '导入采用增量合并，不删除 Server 中备份包未包含的数据。')}</Text>
+          <Button variant="default" onClick={onClose}>{t('common.close', '关闭')}</Button>
+        </Group>
+      </Stack>
+    </Modal>
   )
 }
