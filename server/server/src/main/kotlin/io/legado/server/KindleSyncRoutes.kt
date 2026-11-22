@@ -87,8 +87,12 @@ fun Route.kindleSyncRoutes(
             call.requireKindleAdmin(auth, write = true)
             val deviceId = call.parameters["device_id"]
                 ?: throw KindleSyncException(400, "invalid_request", "缺少设备编号")
-            service.revoke(deviceId)
-            pushService.cancelPendingForDevice(deviceId)
+            if (call.request.queryParameters["purge"]?.toBooleanStrictOrNull() == true) {
+                service.deleteRevoked(deviceId)
+            } else {
+                service.revoke(deviceId)
+                pushService.cancelPendingForDevice(deviceId)
+            }
             call.respond(HttpStatusCode.NoContent)
         } }
         get("/push/deliveries") { call.kindleRequest {
@@ -135,7 +139,8 @@ fun Route.kindleSyncRoutes(
         } }
         get("/sync") { call.kindleRequest {
             val device = call.requireKindleDevice(service)
-            call.respondKindle(service.sync(device, call.request.queryParameters["cursor"]))
+            val params = call.request.queryParameters
+            call.respondKindle(service.sync(device, params["cursor"], includeShelfGroups = params["shelf_groups"] == "1"))
         } }
         get("/bundles/{bundle_id}") { call.kindleRequest {
             val device = call.requireKindleDevice(service)

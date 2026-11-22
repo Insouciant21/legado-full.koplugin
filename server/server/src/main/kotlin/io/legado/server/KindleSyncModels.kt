@@ -140,6 +140,7 @@ import kotlinx.serialization.Serializable
     val books: List<KindleBook> = emptyList(),
     @SerialName("deleted_books") val deletedBooks: List<KindleDeletedBook> = emptyList(),
     val bundles: List<KindleBundleDescriptor> = emptyList(),
+    @SerialName("shelf_groups") val shelfGroups: Map<String, ShelfReadingGroups>? = null,
 )
 @Serializable data class KindleAckRequest(
     @SerialName("sync_id") val syncId: String,

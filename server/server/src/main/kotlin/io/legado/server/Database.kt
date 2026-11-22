@@ -1884,6 +1884,25 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         }
     }
     fun listBookshelf(): List<BookshelfItem> = connect { db -> db.prepareStatement("""select s.source_id,s.book_url,s.name,s.author,s.toc_url,s.cover_key,p.chapter_index,p.scroll_position,s.last_read_at,coalesce(c.cached_chapters,0),coalesce(c.total_chapters,0),coalesce(c.state,'idle'),c.last_error,s.completed,s.alternate_sources,s.group_name,s.cover_url,s.book_kind,s.variable,p.position_ms,coalesce(s.catalog_chapters,0),coalesce(p.position_started,0),s.latest_chapter_title,s.latest_chapter_time,s.last_check_time,s.last_check_count,coalesce(s.can_update,1),coalesce(s.update_error,0) from book_shelf s left join reading_progress p on p.source_id=s.source_id and p.book_url=s.book_url left join book_cache_status c on c.source_id=s.source_id and c.book_url=s.book_url order by s.last_read_at desc""").use { query -> query.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.toShelf()) } } } }
+    internal fun kindleShelfReadingGroups(db: Connection): Map<String, ShelfReadingGroups> = db.prepareStatement("""
+        select entry.entry_key, p.chapter_index, p.position_started, p.scroll_position,
+               p.position_ms, s.catalog_chapters
+        from kindle_sync_entry entry
+        join book_shelf s on s.source_id = json_extract(entry.payload, '$.sourceId')
+                         and s.book_url = json_extract(entry.payload, '$.bookUrl')
+        left join reading_progress p on p.source_id = s.source_id and p.book_url = s.book_url
+        where entry.kind = 'published-summary'
+    """.trimIndent()).use { query ->
+        query.executeQuery().use { rs ->
+            buildMap {
+                while (rs.next()) {
+                    val started = rs.getInt(3) != 0 || rs.getDouble(4) > 0.0 || rs.getLong(5) > 0L
+                    put(rs.getString(1), shelfReadingGroups(rs.getInt(2), started, rs.getInt(6)))
+                }
+            }
+        }
+    }
+
     fun getShelfBookByUrl(bookUrl: String): BookshelfItem? = connect { db -> db.prepareStatement("""select s.source_id,s.book_url,s.name,s.author,s.toc_url,s.cover_key,p.chapter_index,p.scroll_position,s.last_read_at,coalesce(c.cached_chapters,0),coalesce(c.total_chapters,0),coalesce(c.state,'idle'),c.last_error,s.completed,s.alternate_sources,s.group_name,s.cover_url,s.book_kind,s.variable,p.position_ms,coalesce(s.catalog_chapters,0),coalesce(p.position_started,0),s.latest_chapter_title,s.latest_chapter_time,s.last_check_time,s.last_check_count,coalesce(s.can_update,1),coalesce(s.update_error,0) from book_shelf s left join reading_progress p on p.source_id=s.source_id and p.book_url=s.book_url left join book_cache_status c on c.source_id=s.source_id and c.book_url=s.book_url where s.book_url=?""").use { it.setString(1, bookUrl); it.executeQuery().use { rs -> if (rs.next()) rs.toShelf() else null } } }
     fun setBookshelfCompleted(sourceId: String, bookUrl: String, completed: Boolean): BookshelfItem? = write { db ->
         db.prepareStatement("update book_shelf set completed=? where source_id=? and book_url=?").use {
@@ -4208,6 +4227,13 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         )
     }
 
+    // Android 的三个智能分组独立判断。单章书可以同时属于未读和已读。
+    private fun shelfReadingGroups(index: Int, positionStarted: Boolean, catalogChapters: Int) = ShelfReadingGroups(
+        unread = index == 0 && !positionStarted,
+        reading = catalogChapters > 0 && index > 0 && index < catalogChapters - 1,
+        read = catalogChapters > 0 && index >= catalogChapters - 1,
+    )
+
     private fun java.sql.ResultSet.toShelf(): BookshelfItem {
         val altJson = getString(15)
         val altSources = if (!altJson.isNullOrBlank()) {
@@ -4225,7 +4251,7 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         val positionMs = (getObject(20) as? Number)?.toLong()
         val catalogChapters = getInt(21).coerceAtLeast(0)
         val positionStarted = getInt(22) != 0 || (scrollPosition ?: 0.0) > 0.0 || (positionMs ?: 0L) > 0L
-        val normalizedIndex = chapterIndex ?: 0
+        val readingGroups = shelfReadingGroups(chapterIndex ?: 0, positionStarted, catalogChapters)
         return BookshelfItem(
             sourceId = sourceId,
             bookUrl = bookUrl,
@@ -4248,16 +4274,9 @@ class Database(private val path: String) : Closeable, AutoCloseable {
             cacheState = state,
             cacheError = error,
             completed = getInt(14) != 0,
-            // Android 的三条 Room 查询是并列的，不构成互斥枚举：
-            // - 未读：durChapterIndex=0 且 durChapterPos=0
-            // - 在读：total>0 且 0<index<total-1
-            // - 已读：total>0 且 index>=total-1
-            isUnread = normalizedIndex == 0 && !positionStarted,
-            isReading = catalogChapters > 0 &&
-                normalizedIndex > 0 &&
-                normalizedIndex < catalogChapters - 1,
-            isReadFinished = catalogChapters > 0 &&
-                normalizedIndex >= catalogChapters - 1,
+            isUnread = readingGroups.unread,
+            isReading = readingGroups.reading,
+            isReadFinished = readingGroups.read,
             alternateSources = altSources,
             groupName = runCatching { getString(16) }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() },
             coverUrl = runCatching { getString(17) }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() },

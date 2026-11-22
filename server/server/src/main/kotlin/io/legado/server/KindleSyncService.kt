@@ -474,6 +474,42 @@ class KindleSyncService(
         )
     }
 
+    /**
+     * Permanently remove a device only after it has been revoked. Keeping this
+     * separate from [revoke] prevents an accidental purge of an active device
+     * while allowing stale test/devices to leave the management list.
+     */
+    fun deleteRevoked(deviceId: String) {
+        val bundleFiles = database.kindleTransaction { db ->
+            val device = db.read<KindleStoredDevice>("device", deviceId)
+                ?: fail(404, "device_not_found", "设备不存在")
+            if (device.revokedAt == null) {
+                fail(409, "device_not_revoked", "请先撤销设备再永久删除")
+            }
+
+            removeDeviceSyncState(db, device)
+            db.keys("device-token")
+                .filter { tokenHash -> db.read<String>("device-token", tokenHash) == deviceId }
+                .forEach { tokenHash -> db.remove("device-token", tokenHash) }
+
+            val files = mutableListOf<Path>()
+            for (bundleId in db.keys("bundle")) {
+                val bundle = db.read<KindleStoredBundle>("bundle", bundleId)
+                if (bundle?.deviceId == deviceId) {
+                    db.remove("bundle", bundleId)
+                    files.add(bundleDirectory.resolve("${bundle.descriptor.bundleId}.zip"))
+                }
+            }
+            db.remove("device", deviceId)
+            files
+        }
+        bundleFiles.forEach { path ->
+            runCatching { Files.deleteIfExists(path) }
+                .onFailure { log.warn("failed to delete revoked Kindle bundle for device {}: {}", deviceId, it.message) }
+        }
+        log.info("permanently deleted revoked Kindle device {}", deviceId)
+    }
+
     private fun sourceFingerprint(source: String?): String? = source?.let {
         val ignored = setOf("lastUpdateTime", "respondTime", "weight", "customOrder", "bookSourceGroup")
         val value = json.parseToJsonElement(it) as JsonObject
@@ -1167,15 +1203,22 @@ class KindleSyncService(
             ?: fail(410, "cursor_expired", "同步游标已过期，请获取完整快照")
     }
 
-    fun sync(deviceId: String, cursor: String?): KindleSyncResponse = database.kindleTransaction { db ->
+    fun sync(deviceId: String, cursor: String?, includeShelfGroups: Boolean = false): KindleSyncResponse =
+        database.kindleTransaction { db ->
+            val response = syncBooks(db, deviceId, cursor)
+            // Catalog and reading-group changes can arrive independently of an EPUB update.
+            if (includeShelfGroups) response.copy(shelfGroups = database.kindleShelfReadingGroups(db)) else response
+        }
+
+    private fun syncBooks(db: Connection, deviceId: String, cursor: String?): KindleSyncResponse {
         val device = db.device(deviceId)
         val pending = device.pendingSyncId?.let { db.read<KindleStoredBatch>("batch", it) }
-        if (pending != null && !pending.acked && pending.response.fromCursor == cursor) return@kindleTransaction pending.response
+        if (pending != null && !pending.acked && pending.response.fromCursor == cursor) return pending.response
         if (cursor != null && device.ackedCursor != cursor) fail(410, "cursor_expired", "同步游标无效，请获取完整快照")
         adoptNativeProgressChanges(db)
         val libraryVersion = currentLibraryVersion(db)
         if (cursor != null && device.ackedLibraryVersion == libraryVersion) {
-            return@kindleTransaction KindleSyncResponse(
+            return KindleSyncResponse(
                 fromCursor = cursor,
                 nextCursor = cursor,
                 reset = false,
@@ -1196,7 +1239,7 @@ class KindleSyncService(
                     pendingSyncId = null,
                 ),
             )
-            return@kindleTransaction KindleSyncResponse(
+            return KindleSyncResponse(
                 fromCursor = cursor,
                 nextCursor = cursor,
                 reset = false,
@@ -1218,7 +1261,7 @@ class KindleSyncService(
                                           publicationId = snapshot.publicationId, books = changed, deletedBooks = deleted, bundles = bundles)
         db.put("batch", syncId, KindleStoredBatch(deviceId, response, snapshot, libraryVersion = libraryVersion))
         db.put("device", deviceId, device.copy(pendingSyncId = syncId))
-        response
+        return response
     }
 
     private fun bundles(db: Connection, deviceId: String, syncId: String, chapters: List<KindleChapter>): List<KindleBundleDescriptor> {

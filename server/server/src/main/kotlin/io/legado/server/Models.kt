@@ -848,6 +848,12 @@ data class BookCacheReadiness(
     val variable: String? = null,
 )
 
+@Serializable data class ShelfReadingGroups(
+    val unread: Boolean,
+    val reading: Boolean,
+    val read: Boolean,
+)
+
 @Serializable data class BookshelfRefreshTarget(
     val sourceId: String,
     val bookUrl: String,
