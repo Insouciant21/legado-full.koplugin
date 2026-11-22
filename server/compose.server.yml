@@ -1,6 +1,6 @@
 services:
   legado-server:
-    image: legado-server-local:20261117-webui-redesign-v1
+    image: legado-server-local:20261118-login-v1
     container_name: legado-server
     build:
       context: .
@@ -16,7 +16,7 @@ services:
       - "28095:28095/tcp"
       - "47832:47832/udp"
     environment:
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in the private 0600 env file}
+      ADMIN_PASSWORD: ${ENTRANCE_PASSWD:?set ENTRANCE_PASSWD in the private 0600 env file}
       LEGADO_HOST: "0.0.0.0"
       LEGADO_PORT: "28095"
       LEGADO_SECURE_COOKIES: "false"
