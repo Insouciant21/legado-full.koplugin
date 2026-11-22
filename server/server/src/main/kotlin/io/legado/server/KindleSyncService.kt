@@ -628,11 +628,16 @@ class KindleSyncService(
             val previous = oldBooks[entry.bookId]
             val changedBinding = previous == null || bindingFingerprint(previous.binding) != bindingFingerprint(entry)
             val version = if (changedBinding) id("binding_") else previous.book.bindingVersion
+            // A different cache key belongs to the target book. Within the same key,
+            // changed rules can leave text from the old binding in the shared cache.
+            val allowSharedCache = previous == null ||
+                previous.binding.sourceId != entry.sourceId ||
+                previous.binding.bookUrl != entry.bookUrl ||
+                draftSourceFingerprint(previous.binding) == draftSourceFingerprint(entry)
             val updated = materialize(
                 entry, previous, version, bindingChanged = changedBinding,
                 frozenToc = if (changedBinding) null else previous.frozenToc,
-                allowSharedCache = previous == null ||
-                    draftSourceFingerprint(previous.binding) == draftSourceFingerprint(entry),
+                allowSharedCache = allowSharedCache,
             )
             if (updated.book.chapters.isEmpty() || updated.book.chapters.any { it.status != "ready" }) {
                 fail(409, "book_not_complete", "书籍缓存未完整，暂不能上架")
@@ -802,11 +807,14 @@ class KindleSyncService(
         db.put("update-task", bookId, task.copy(state = "pending", nextDueAt = 0, lastError = null))
     }
 
-    fun duePublicationUpdateBookIds(): List<String> = database.kindleTransaction { db ->
+    internal fun duePublicationUpdates(): List<Pair<String, String>> = database.kindleTransaction { db ->
         val instant = now().toEpochMilli()
-        db.all<KindleStoredUpdateTask>("update-task").mapNotNull { task ->
-            task.takeIf { it.state != "paused" && it.nextDueAt != null && it.nextDueAt <= instant }?.bookId
-        }.sorted()
+        db.all<KindleStoredUpdateTask>("update-task")
+            .filter { it.state != "paused" && it.nextDueAt != null && it.nextDueAt <= instant }
+            .sortedBy { it.bookId }
+            .mapNotNull { task ->
+                db.read<KindlePublishedSummary>("published-summary", task.bookId)?.let { task.bookId to it.sourceId }
+            }
     }
 
     /**
@@ -891,11 +899,19 @@ class KindleSyncService(
             // Only missing/new chapters are fetched in this incremental pass; existing immutable hashes
             // remain available to devices until an explicit content revision changes the cache.
             for (chapter in updated.book.chapters.filter { it.status == "pending" }) {
-                if (database.kindleTransaction(::currentForRefresh) == null) return original.book
                 val url = updated.chapterUrls[chapter.chapterId] ?: fail(502, "content_unavailable", "新增章节地址无效")
-                val content = runner.content(sourceJson, url, original.binding.title, context)
+                val (active, cached) = database.kindleTransaction { db ->
+                    val current = currentForRefresh(db) ?: return@kindleTransaction false to null
+                    val cached = if (db.sharedCacheTrusted(current.binding)) {
+                        database.cachedContent(original.binding.sourceId, original.binding.bookUrl, url)
+                            ?.takeIf { it.content.isNotBlank() }
+                    } else null
+                    true to cached
+                }
+                if (!active) return original.book
+                val content = cached ?: runner.content(sourceJson, url, original.binding.title, context)
                 if (content.content.isBlank()) fail(502, "content_unavailable", "新增章节正文为空")
-                database.kindleTransaction { db ->
+                if (cached == null) database.kindleTransaction { db ->
                     val current = currentForRefresh(db) ?: return@kindleTransaction false
                     if (!db.sharedCacheTrusted(current.binding)) return@kindleTransaction false
                     db.prepareStatement("""

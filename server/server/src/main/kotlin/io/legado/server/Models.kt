@@ -747,7 +747,7 @@ data class CachedBookRequest(
     val count: Int? = null,
     /** 单本书允许同时抓取的正文章节数；null 表示旧任务，按默认并发继续。 */
     val chapterConcurrency: Int? = null,
-    /** 由书架自动缓存协调器创建；自动任务固定串行执行且章并发为 1。 */
+    /** 书架自动缓存任务，同一书源串行执行且章并发为 1。 */
     val automatic: Boolean = false,
 )
 

@@ -34,7 +34,7 @@ fun Application.legadoApplication(
 ) {
     val database = Database(config.databasePath)
     database.initialize(config.initialAdminPassword)
-    val reconciledCacheProgress = database.reconcileBookCacheProgressAndTotalsFromTocCache()
+    val reconciledCacheProgress = database.reconcileBookCacheProgressAndTotalsFromTocCache(config.automaticBookCacheEnabled)
     if (reconciledCacheProgress > 0) {
         log.info("reconciled cache progress and totals against current TOCs for {} book(s)", reconciledCacheProgress)
     }
@@ -79,21 +79,6 @@ fun Application.legadoApplication(
         // 书源脚本的文件区（Android `externalCache` 的对应物）：缓存文件、压缩包解压都落在这里。
         sourceFileRoot = config.coverCacheDirectory.parent.resolve("source_cache"),
     )
-    // 手动刷新书架目录的 Android `MainViewModel.upToc` 对应物。独立生命周期，
-    // 关闭服务时与缓存/推送任务一起停止。
-    val bookshelfRefresh = BookshelfRefreshService(
-        database = database,
-        runner = runner,
-        log = { message -> log.info(message) },
-    )
-    val kindleUpdates = KindleUpdateScheduler(kindleSync, runner) { message -> log.info(message) }
-    val kindleAutoPublish = KindleAutoPublishScheduler(
-        service = kindleSync,
-        database = database,
-        enabled = config.kindleAutoPublishEnabled,
-        debounceMs = config.kindleAutoPublishDebounceMs,
-        afterPublish = { kindleUpdates.refreshDueNow() },
-    ) { message -> log.info(message) }
     // 图片抓取的**唯一收口**（漫画与小说正文插图共用）：书源 header + 章节页 Referer + Cookie、
     // 全局限流、gzip 魔数解压、单图体积上限、SSRF 防护都在这里（见 MangaImageFetcher 的说明）。
     val imageFetcher = MangaImageFetcher(config, log = { message -> log.info(message) })
@@ -105,6 +90,21 @@ fun Application.legadoApplication(
         illustrationCache = illustrationCache,
         illustrationFetcher = imageFetcher,
         autoCacheEnabled = config.automaticBookCacheEnabled,
+    ) { message -> log.info(message) }
+    val bookshelfRefresh = BookshelfRefreshService(
+        database = database,
+        runner = runner,
+        autoCacheEnabled = config.automaticBookCacheEnabled,
+        onCacheQueued = bookCache::wakeAutomaticQueue,
+        log = { message -> log.info(message) },
+    )
+    val kindleUpdates = KindleUpdateScheduler(kindleSync, runner, bookCache) { message -> log.info(message) }
+    val kindleAutoPublish = KindleAutoPublishScheduler(
+        service = kindleSync,
+        database = database,
+        enabled = config.kindleAutoPublishEnabled,
+        debounceMs = config.kindleAutoPublishDebounceMs,
+        afterPublish = { kindleUpdates.refreshDueNow() },
     ) { message -> log.info(message) }
     // 封面缓存带库：文件名是 `书名 (书哈希).扩展名`，`file_path` 就是索引里那一列
     // （拿不到库时只能按 key 命名/定位，那是上传接口等"还不知道属于哪本书"的场景）。

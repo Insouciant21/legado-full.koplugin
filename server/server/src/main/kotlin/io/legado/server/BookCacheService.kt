@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -17,14 +18,22 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.coroutineContext
 
 internal const val BOOK_CACHE_MIN_CONCURRENCY = 1
 internal const val BOOK_CACHE_MAX_CONCURRENCY = 9
 internal const val BOOK_CACHE_DEFAULT_CONCURRENCY = BOOK_CACHE_MAX_CONCURRENCY
+
+internal fun chapterCacheKeys(chapters: List<Chapter>): Set<String> = chapters.asSequence()
+    .filterNot { it.isVolume }
+    .map { SourceUrlOptions.cacheKey(it.url) }
+    .filter { it.isNotBlank() }
+    .toSet()
 
 class BookCacheService(
     private val database: Database,
@@ -58,8 +67,8 @@ class BookCacheService(
      * 因而重试不会挡住其他章节。
      */
     private val globalGate = Semaphore(BOOK_CACHE_DEFAULT_CONCURRENCY)
-    /** Automatic caching is one book and one chapter at a time, regardless of retry source. */
-    private val automaticBookGate = Semaphore(1)
+    private val automaticSources = ConcurrentHashMap<String, Mutex>()
+    private val automaticWakeups = Channel<Unit>(Channel.CONFLATED)
 
     fun start() {
         if (started.getAndSet(true)) return
@@ -83,41 +92,34 @@ class BookCacheService(
         scope.cancel()
     }
 
+    internal fun wakeAutomaticQueue() {
+        automaticWakeups.trySend(Unit)
+    }
+
+    internal fun automaticSourceLock(sourceId: String): Mutex =
+        automaticSources.computeIfAbsent(sourceId) { Mutex() }
+
     private suspend fun automaticLoop() {
-        log("automatic book cache enabled: one book and one chapter at a time")
+        log("automatic book cache enabled: one chapter per source at a time")
         while (scope.isActive) {
-            val candidate = runCatching { database.nextAutoCacheCandidate() }
-                .onFailure { log("automatic book cache scan failed: ${it.message}") }
-                .getOrNull()
-            if (candidate == null) {
-                delay(AUTO_CACHE_SCAN_DELAY_MS)
-                continue
+            runCatching {
+                synchronized(schedulingLock) {
+                    val occupiedSources = jobs.keys.mapTo(mutableSetOf()) { it.substringBefore('\u0000') }
+                    automaticSources.forEach { (sourceId, mutex) ->
+                        if (mutex.isLocked) occupiedSources.add(sourceId)
+                    }
+                    for (candidate in database.autoCacheCandidates()) {
+                        if (jobs.size >= BOOK_CACHE_DEFAULT_CONCURRENCY) break
+                        if (occupiedSources.add(candidate.sourceId) && enqueue(candidate)) {
+                            log("automatic book cache started: ${candidate.bookUrl}")
+                        }
+                    }
+                }
+            }.onFailure {
+                if (it is CancellationException) throw it
+                log("automatic book cache scan failed: ${it.message}")
             }
-            val key = "${candidate.sourceId}\u0000${candidate.bookUrl}"
-            if (isJobActive(candidate.sourceId, candidate.bookUrl)) {
-                delay(AUTO_CACHE_ACTIVE_POLL_MS)
-                continue
-            }
-            log("automatic book cache queued: ${candidate.bookUrl}")
-            val started = runCatching {
-                enqueue(candidate.copy(
-                    startIndex = null,
-                    endIndex = null,
-                    count = null,
-                    chapterConcurrency = 1,
-                    automatic = true,
-                ))
-            }.onFailure { log("automatic book cache enqueue failed: ${it.message}") }
-                .getOrDefault(false)
-            if (!started && !isJobActive(candidate.sourceId, candidate.bookUrl)) {
-                delay(AUTO_CACHE_SCAN_DELAY_MS)
-                continue
-            }
-            while (isJobActive(candidate.sourceId, candidate.bookUrl)) {
-                delay(AUTO_CACHE_ACTIVE_POLL_MS)
-            }
-            log("automatic book cache finished: $key")
-            delay(AUTO_CACHE_BETWEEN_BOOKS_MS)
+            withTimeoutOrNull(AUTO_CACHE_SCAN_DELAY_MS) { automaticWakeups.receive() }
         }
     }
 
@@ -147,54 +149,56 @@ class BookCacheService(
                 request.startIndex, request.endIndex, request.count,
                 request.chapterConcurrency, request.automatic,
             )
-            val job = scope.launch(start = CoroutineStart.LAZY) {
-                try { cache(request) } finally { jobs.remove(key, coroutineContext[Job]) }
-            }
+            val job = scope.launch(start = CoroutineStart.LAZY) { cache(request) }
             jobs[key] = job
+            job.invokeOnCompletion {
+                jobs.remove(key, job)
+                wakeAutomaticQueue()
+            }
             job.start()
         }
         return true
     }
 
-    fun isJobActive(sourceId: String, bookUrl: String): Boolean =
-        jobs["$sourceId\u0000$bookUrl"]?.isActive == true
-
     fun cancel(sourceId: String, bookUrl: String) {
-        val job = jobs.remove("$sourceId\u0000$bookUrl")
-        job?.cancel()
-        if (!isLocalBook(sourceId, bookUrl)) {
-            database.finishBookCache(sourceId, bookUrl, "已取消缓存")
+        synchronized(schedulingLock) {
+            jobs.remove("$sourceId\u0000$bookUrl")?.cancel()
+            if (!isLocalBook(sourceId, bookUrl)) {
+                database.finishBookCache(sourceId, bookUrl, "已取消缓存")
+            }
         }
     }
 
     /** Pause a durable text-cache task. Cached chapters and its original range remain in SQLite. */
-    fun pause(sourceId: String, bookUrl: String): Boolean {
-        if (isLocalBook(sourceId, bookUrl)) return false
-        val job = jobs.remove("$sourceId\u0000$bookUrl")
-        job?.cancel()
-        return database.setBookCacheState(sourceId, bookUrl, "paused", "已暂停缓存")
+    fun pause(sourceId: String, bookUrl: String): Boolean = synchronized(schedulingLock) {
+        if (isLocalBook(sourceId, bookUrl)) return@synchronized false
+        jobs.remove("$sourceId\u0000$bookUrl")?.cancel()
+        database.setBookCacheState(sourceId, bookUrl, "paused", "已暂停缓存")
     }
 
     /** Retry a paused or failed task from its persisted request range and cached chapters. */
-    fun retry(sourceId: String, bookUrl: String): Boolean {
-        if (isLocalBook(sourceId, bookUrl)) return false
-        if (jobs["$sourceId\u0000$bookUrl"]?.isActive == true) return false
-        database.setBookCacheState(sourceId, bookUrl, "pending", null)
-        val request = database.cacheRequest(sourceId, bookUrl)
-        if (request == null) return false
-        enqueue(request)
-        return true
+    fun retry(sourceId: String, bookUrl: String): Boolean = synchronized(schedulingLock) {
+        if (isLocalBook(sourceId, bookUrl) || jobs["$sourceId\u0000$bookUrl"]?.isActive == true) return@synchronized false
+        if (!database.setBookCacheState(sourceId, bookUrl, "pending", null)) return@synchronized false
+        val request = database.cacheRequest(sourceId, bookUrl) ?: return@synchronized false
+        if (request.automatic && autoCacheEnabled) {
+            wakeAutomaticQueue()
+            true
+        } else {
+            enqueue(request)
+        }
     }
 
     private suspend fun cache(book: CachedBookRequest) {
         if (book.automatic) {
-            automaticBookGate.withPermit { cacheInternal(book) }
+            automaticSourceLock(book.sourceId).withLock { cacheInternal(book) }
         } else {
             cacheInternal(book)
         }
     }
 
     private suspend fun cacheInternal(book: CachedBookRequest) {
+        val jobContext = coroutineContext
         if (isLocalBook(book.sourceId, book.bookUrl)) {
             database.ensureLocalBookStatusReady(book.sourceId, book.bookUrl)
             return
@@ -234,11 +238,7 @@ class BookCacheService(
 
             // Android compares chapter identity after URL options have been consumed.
             // Two rows for `chapter.html` and `chapter.html,{"webView":true}` are one chapter.
-            val currentCacheKeys = chapters.asSequence()
-                .filterNot { it.isVolume }
-                .map { SourceUrlOptions.cacheKey(it.url) }
-                .filter { it.isNotBlank() }
-                .toSet()
+            val currentCacheKeys = chapterCacheKeys(chapters)
             val alreadyCachedKeys = database.cachedChapterUrls(book.sourceId, book.bookUrl)
                 .asSequence()
                 .map(SourceUrlOptions::cacheKey)
@@ -252,7 +252,7 @@ class BookCacheService(
             // 后台缓存不按阅读进度重排；卷标题同样不抓正文（CacheBook.download 直接跳过 volume）。
             val remaining = targetChapters.filter { chapter ->
                 !chapter.isVolume && SourceUrlOptions.cacheKey(chapter.url) !in alreadyCachedKeys
-            }
+            }.distinctBy { SourceUrlOptions.cacheKey(it.url) }
 
             val failures = AtomicInteger(0)
             // 只记**第一条**失败原因：过去这里静默只计数，用户只看到"N 章未缓存"，
@@ -266,16 +266,19 @@ class BookCacheService(
             val bookName = database.listBookshelf().firstOrNull { it.sourceId == book.sourceId && it.bookUrl == book.bookUrl }?.name
             val chapterConcurrency = (book.chapterConcurrency ?: BOOK_CACHE_DEFAULT_CONCURRENCY)
                 .coerceIn(BOOK_CACHE_MIN_CONCURRENCY, BOOK_CACHE_MAX_CONCURRENCY)
-            database.beginBookCache(
-                book.sourceId,
-                book.bookUrl,
-                chapters.size,
-                book.startIndex,
-                book.endIndex,
-                book.count,
-                chapterConcurrency,
-                book.automatic,
-            )
+            synchronized(schedulingLock) {
+                jobContext.ensureActive()
+                database.beginBookCache(
+                    book.sourceId,
+                    book.bookUrl,
+                    chapters.size,
+                    book.startIndex,
+                    book.endIndex,
+                    book.count,
+                    chapterConcurrency,
+                    book.automatic,
+                )
+            }
             coroutineScope {
                 if (remaining.isNotEmpty()) {
                     // Android 的失败章节会重新加入等待集合；这里同样使用 FIFO 队列。
@@ -339,7 +342,15 @@ class BookCacheService(
                 val reason = firstFailure.get()
                 if (reason == null) "$totalFailures 章未缓存" else "$totalFailures 章未缓存（首条原因：$reason）"
             }
-            database.finishBookCache(book.sourceId, book.bookUrl, error)
+            synchronized(schedulingLock) {
+                jobContext.ensureActive()
+                database.finishBookCache(
+                    book.sourceId,
+                    book.bookUrl,
+                    error,
+                    followCatalogFrom = currentCacheKeys.takeIf { autoCacheEnabled },
+                )
+            }
             val illustrationNote = if (illustrationFailures.get() == 0) {
                 "插图=$illustrationsCached"
             } else {
@@ -352,7 +363,10 @@ class BookCacheService(
             )
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
-            database.finishBookCache(book.sourceId, book.bookUrl, error.message ?: "缓存失败")
+            synchronized(schedulingLock) {
+                jobContext.ensureActive()
+                database.finishBookCache(book.sourceId, book.bookUrl, error.message ?: "缓存失败")
+            }
             log("book cache failed: ${book.bookUrl}, error=${error.message}")
         }
     }
@@ -499,7 +513,5 @@ class BookCacheService(
         /** 批次之间的让出间隔，给前台请求留出调度机会。 */
         const val RESUME_BATCH_DELAY_MS = 300L
         const val AUTO_CACHE_SCAN_DELAY_MS = 5_000L
-        const val AUTO_CACHE_ACTIVE_POLL_MS = 1_000L
-        const val AUTO_CACHE_BETWEEN_BOOKS_MS = 500L
     }
 }

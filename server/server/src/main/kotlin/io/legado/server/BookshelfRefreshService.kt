@@ -9,6 +9,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -31,6 +33,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 class BookshelfRefreshService(
     private val database: Database,
     private val runner: RuleRunner,
+    private val autoCacheEnabled: Boolean = true,
+    private val onCacheQueued: () -> Unit = {},
     private val log: (String) -> Unit,
 ) {
     private data class Entry(
@@ -135,46 +139,12 @@ class BookshelfRefreshService(
             val source = database.getSource(item.sourceId)
                 ?: throw IllegalStateException("书源不存在")
             val context = database.bookContext(item.sourceId, item.bookUrl)
-            var details: BookDetails? = null
-
-            // Android 仅在 book.tocUrl 为空时先重解析详情；已有目录地址时 freshness 由
-            // getChapterListAwait(runPerJs=true) 负责，避免每次刷新都额外请求一次详情页。
-            if (item.tocUrl.isBlank()) {
-                details = runInterruptible(Dispatchers.IO) {
-                    runner.details(source.json, item.bookUrl, context)
-                }
-                if (details.tocUrl.isNotBlank()) context.tocUrl = details.tocUrl
-            }
-
-            val chapters = resolveBookChapters(
-                database = database,
-                runner = runner,
-                sourceId = item.sourceId,
-                bookUrl = item.bookUrl,
-                sourceJson = source.json,
-                bookContext = context,
-                tocUrlHint = context.tocUrl?.takeIf { it.isNotBlank() } ?: item.tocUrl,
-                forceRefresh = true,
-            )
-            if (chapters.isEmpty()) throw IllegalStateException("目录为空")
-
-            val effectiveTocUrl = context.tocUrl?.trim()?.takeIf { it.isNotEmpty() }
-                ?: details?.tocUrl?.trim()?.takeIf { it.isNotEmpty() }
-                ?: item.tocUrl
-            val updated = database.finishBookshelfRefresh(
-                item = item,
-                tocUrl = effectiveTocUrl,
-                name = details?.name,
-                author = details?.author,
-                coverUrl = details?.coverUrl,
-                chapters = chapters,
-            ) ?: throw IllegalStateException("书籍已离开书架")
-            database.persistBookVariables(context)
+            val chapters = refreshToc(source, context, item)
             synchronized(lock) {
                 entry.state = "succeeded"
                 entry.error = null
-                entry.totalChapters = updated.catalogChapters
-                entry.newChapters = (updated.catalogChapters - item.catalogChapters).coerceAtLeast(0)
+                entry.totalChapters = chapters.size
+                entry.newChapters = (chapters.size - item.catalogChapters).coerceAtLeast(0)
             }
         } catch (error: CancellationException) {
             throw error
@@ -192,6 +162,51 @@ class BookshelfRefreshService(
                 log("bookshelf refresh error marker failed: ${item.name}: ${persistError.message ?: persistError.javaClass.simpleName}")
             }
         }
+    }
+
+    internal suspend fun refreshToc(
+        source: SourceRecord,
+        context: BookContext,
+        item: BookshelfItem? = database.getBookshelf(context.sourceId, context.bookUrl),
+    ): List<Chapter> {
+        val bookUrl = context.bookUrl
+        // Android 仅在缺少目录地址时先取详情。
+        val details = if (context.tocUrl.isNullOrBlank()) {
+            runInterruptible(Dispatchers.IO) { runner.details(source.json, bookUrl, context) }
+        } else null
+        val tocUrlHint = context.tocUrl?.takeIf { it.isNotBlank() } ?: details?.tocUrl
+        context.tocUrl = tocUrlHint
+        val chapters = resolveBookChapters(
+            database = database,
+            runner = runner,
+            sourceId = source.id,
+            bookUrl = bookUrl,
+            sourceJson = source.json,
+            bookContext = context,
+            tocUrlHint = tocUrlHint,
+            forceRefresh = true,
+        )
+        if (chapters.isEmpty()) throw RuleExecutionException("目录为空")
+        currentCoroutineContext().ensureActive()
+        val tocUrl = context.tocUrl?.trim()?.takeIf { it.isNotEmpty() } ?: bookUrl
+        context.tocUrl = tocUrl
+        database.persistBookVariables(context)
+        if (item == null) {
+            database.saveTocCacheAliases(source.id, setOf(bookUrl, tocUrl, context.bookUrl), chapters)
+        } else {
+            val updated = database.finishBookshelfRefresh(
+                item = item,
+                tocUrl = tocUrl,
+                name = details?.name,
+                author = details?.author,
+                coverUrl = details?.coverUrl,
+                chapters = chapters,
+                queueAutomaticCache = autoCacheEnabled,
+                resolvedBookUrl = context.bookUrl,
+            ) ?: throw IllegalStateException("书籍已离开书架")
+            if (updated.cacheState == "pending") onCacheQueued()
+        }
+        return chapters
     }
 
     private suspend fun notifySources(batch: List<Entry>, event: String) {

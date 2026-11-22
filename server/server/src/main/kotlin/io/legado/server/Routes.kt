@@ -1926,7 +1926,7 @@ fun Route.apiRoutes(
             // 实测：一本漫画被误判成小说时会跑 10 章文本缓存、10 章全失败，白刷上游还污染缓存状态。
             val localBook = BookKind.isLocalRef(request.sourceId, request.bookUrl)
             // 入架请求本身只保存元数据；旧客户端即使发送 `autoCache=true` 也会被忽略。
-            // 后台自动缓存协调器随后会按单书、单章串行补齐网络小说，显式缓存入口仍可指定范围与并发。
+            // 后台按书源逐章补齐网络小说，显式缓存入口仍可指定范围与并发。
             if (localBook) {
                 database.ensureLocalBookStatusReady(request.sourceId, request.bookUrl)
             }
@@ -3472,9 +3472,12 @@ internal suspend fun resolveBookChapters(
         if (chapters.isNotEmpty()) {
             callerContext.ensureActive()
             val effectiveChapters = database.applyIgnoredBookCacheChapters(sourceId, bookUrl, chapters)
-            database.saveTocCache(sourceId, url, effectiveChapters)
-            callerContext.ensureActive()
-            if (url != bookUrl) database.saveTocCache(sourceId, bookUrl, effectiveChapters)
+            // The shelf refresher commits the new TOC and queued cache work together.
+            if (!forceRefresh) {
+                database.saveTocCache(sourceId, url, effectiveChapters)
+                callerContext.ensureActive()
+                if (url != bookUrl) database.saveTocCache(sourceId, bookUrl, effectiveChapters)
+            }
             return effectiveChapters
         }
     }
@@ -3499,15 +3502,17 @@ internal suspend fun resolveBookChapters(
     if (toc.isNotEmpty()) {
         callerContext.ensureActive()
         val effectiveToc = database.applyIgnoredBookCacheChapters(sourceId, bookUrl, toc)
-        database.saveTocCache(sourceId, details.tocUrl, effectiveToc)
-        callerContext.ensureActive()
-        // `preUpdateJs` 的 `reGetBook()` 可能已经就地换掉书链：缓存与变量都按**当前**书籍地址落库。
-        if (bookContext.bookUrl != bookUrl) {
-            database.saveTocCache(sourceId, bookContext.bookUrl, effectiveToc)
-            database.persistBookVariables(bookContext)
+        if (!forceRefresh) {
+            database.saveTocCache(sourceId, details.tocUrl, effectiveToc)
+            callerContext.ensureActive()
+            // `preUpdateJs` 的 `reGetBook()` 可能就地换掉书链，缓存与变量同时按当前地址保存。
+            if (bookContext.bookUrl != bookUrl) {
+                database.saveTocCache(sourceId, bookContext.bookUrl, effectiveToc)
+                database.persistBookVariables(bookContext)
+            }
+            callerContext.ensureActive()
+            database.saveTocCache(sourceId, bookUrl, effectiveToc)
         }
-        callerContext.ensureActive()
-        database.saveTocCache(sourceId, bookUrl, effectiveToc)
         return effectiveToc
     }
     return toc

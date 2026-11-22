@@ -93,8 +93,10 @@ class Database(private val path: String) : Closeable, AutoCloseable {
     }
 
     /** Keep publication, cursors and progress events atomic with bookshelf mutations. */
-    internal fun <T> kindleTransaction(block: (Connection) -> T): T = write { connection ->
-        check(connection.autoCommit) { "Nested Kindle transaction" }
+    internal fun <T> kindleTransaction(block: (Connection) -> T): T = writeTransaction(block)
+
+    private fun <T> writeTransaction(block: (Connection) -> T): T = write { connection ->
+        check(connection.autoCommit) { "Nested database transaction" }
         connection.autoCommit = false
         try {
             block(connection).also { connection.commit() }
@@ -1889,6 +1891,9 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         }
         getBookshelf(db, sourceId, bookUrl)
     }
+    internal fun getBookshelf(sourceId: String, bookUrl: String): BookshelfItem? =
+        connect { db -> getBookshelf(db, sourceId, bookUrl) }
+
     fun setBookshelfCanUpdate(sourceId: String, bookUrl: String, canUpdate: Boolean): BookshelfItem? = write { db ->
         db.prepareStatement("update book_shelf set can_update=? where source_id=? and book_url=?").use {
             it.setInt(1, if (canUpdate) 1 else 0)
@@ -1913,7 +1918,9 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         coverUrl: String?,
         chapters: List<Chapter>,
         checkedAt: Long = System.currentTimeMillis(),
-    ): BookshelfItem? = write { db ->
+        queueAutomaticCache: Boolean = false,
+        resolvedBookUrl: String = item.bookUrl,
+    ): BookshelfItem? = writeTransaction { db ->
         val total = chapters.size
         val hasNewChapters = total > item.catalogChapters
         val latestChapterTime = if (hasNewChapters) checkedAt else item.latestChapterTime
@@ -1922,7 +1929,7 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         } else {
             item.lastCheckCount
         }
-        db.prepareStatement("""
+        val updated = db.prepareStatement("""
             update book_shelf set
               name=coalesce(?,name),
               author=coalesce(?,author),
@@ -1950,7 +1957,24 @@ class Database(private val path: String) : Closeable, AutoCloseable {
             stmt.setString(12, item.bookUrl)
             stmt.executeUpdate()
         }
-        getBookshelf(db, item.sourceId, item.bookUrl)
+        if (updated == 0) return@writeTransaction null
+
+        val chaptersJson = Json.encodeToString(chapters)
+        for (url in setOf(item.bookUrl, tocUrl.trim(), resolvedBookUrl)) {
+            if (url.isNotBlank()) saveTocCache(db, item.sourceId, url, chaptersJson, checkedAt)
+        }
+        val shelf = getBookshelf(db, item.sourceId, item.bookUrl) ?: return@writeTransaction null
+        if (queueAutomaticCache && shelf.bookKind == BookKind.NOVEL.wire &&
+            (shelf.cacheState == "ready" || shelf.cacheState == "idle")
+        ) {
+            val expected = chapterCacheKeys(chapters)
+            val cached = cachedChapterCount(db, shelf.sourceId, shelf.bookUrl, expected)
+            if (cached < expected.size) {
+                queueBookCache(db, shelf.sourceId, shelf.bookUrl, total, cached)
+                return@writeTransaction getBookshelf(db, shelf.sourceId, shelf.bookUrl)
+            }
+        }
+        shelf
     }
 
     fun markBookshelfRefreshFailed(sourceId: String, bookUrl: String): Boolean = write { db ->
@@ -2433,18 +2457,7 @@ class Database(private val path: String) : Closeable, AutoCloseable {
     }
 
     fun saveTocCache(sourceId: String, tocUrl: String, chapters: List<Chapter>) = write { db ->
-        db.prepareStatement("""
-            insert into book_toc_cache(source_id, toc_url, chapters_json, updated_at)
-            values(?, ?, ?, ?)
-            on conflict(source_id, toc_url) do update set
-                chapters_json = excluded.chapters_json, updated_at = excluded.updated_at
-        """.trimIndent()).use { stmt ->
-            stmt.setString(1, sourceId)
-            stmt.setString(2, tocUrl)
-            stmt.setString(3, Json.encodeToString(chapters))
-            stmt.setLong(4, System.currentTimeMillis())
-            stmt.executeUpdate()
-        }
+        saveTocCache(db, sourceId, tocUrl, Json.encodeToString(chapters), System.currentTimeMillis())
         if (chapters.isNotEmpty()) {
             db.prepareStatement("""
                 update book_shelf
@@ -2457,6 +2470,29 @@ class Database(private val path: String) : Closeable, AutoCloseable {
                 stmt.setString(4, tocUrl)
                 stmt.executeUpdate()
             }
+        }
+    }
+
+    internal fun saveTocCacheAliases(sourceId: String, urls: Set<String>, chapters: List<Chapter>) = writeTransaction { db ->
+        val chaptersJson = Json.encodeToString(chapters)
+        val updatedAt = System.currentTimeMillis()
+        for (url in urls) {
+            if (url.isNotBlank()) saveTocCache(db, sourceId, url, chaptersJson, updatedAt)
+        }
+    }
+
+    private fun saveTocCache(db: Connection, sourceId: String, tocUrl: String, chaptersJson: String, updatedAt: Long) {
+        db.prepareStatement("""
+            insert into book_toc_cache(source_id, toc_url, chapters_json, updated_at)
+            values(?, ?, ?, ?)
+            on conflict(source_id, toc_url) do update set
+                chapters_json = excluded.chapters_json, updated_at = excluded.updated_at
+        """.trimIndent()).use { stmt ->
+            stmt.setString(1, sourceId)
+            stmt.setString(2, tocUrl)
+            stmt.setString(3, chaptersJson)
+            stmt.setLong(4, updatedAt)
+            stmt.executeUpdate()
         }
     }
 
@@ -2717,12 +2753,9 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         sourceId: String,
         bookUrl: String,
         chapters: List<Chapter>,
-    ): Int {
-        val expected = chapters.asSequence()
-            .filterNot { it.isVolume }
-            .map { SourceUrlOptions.cacheKey(it.url) }
-            .filter { it.isNotBlank() }
-            .toSet()
+    ): Int = cachedChapterCount(db, sourceId, bookUrl, chapterCacheKeys(chapters))
+
+    private fun cachedChapterCount(db: Connection, sourceId: String, bookUrl: String, expected: Set<String>): Int {
         if (expected.isEmpty()) return 0
         val cached = db.prepareStatement(
             "select chapter_url from book_content_cache where source_id=? and book_url=?"
@@ -2797,20 +2830,20 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         latestCachedChapters(db, sourceId, bookUrl)?.let { cachedChapterCount(db, sourceId, bookUrl, it) }
 
     /**
-     * Reconcile stored progress after upgrades. The cache state and errors remain
-     * untouched; only the count is replaced with the current-TOC intersection.
-     * A zero total is also repaired from that TOC, including rows overwritten by
-     * older enqueue code before the task had loaded its catalog.
+     * Reconcile stored progress against the current TOC. Older builds recorded
+     * successful catalog refreshes without queuing the missing chapters.
      */
-    fun reconcileBookCacheProgressAndTotalsFromTocCache(): Int = write { db ->
+    fun reconcileBookCacheProgressAndTotalsFromTocCache(queueAutomaticCache: Boolean = false): Int = write { db ->
         val books = db.prepareStatement("""
-            select c.source_id, c.book_url
+            select c.source_id, c.book_url,
+                   c.state='ready' and s.last_check_time>0 and s.update_error=0
+                       and coalesce(s.book_kind, 'novel')='novel'
             from book_cache_status c
             join book_shelf s on s.source_id=c.source_id and s.book_url=c.book_url
         """.trimIndent()).use { statement ->
             statement.executeQuery().use { rs ->
                 buildList {
-                    while (rs.next()) add(rs.getString(1) to rs.getString(2))
+                    while (rs.next()) add(Triple(rs.getString(1), rs.getString(2), rs.getBoolean(3)))
                 }
             }
         }
@@ -2823,10 +2856,19 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         """.trimIndent())
         var changed = 0
         update.use {
-            for ((sourceId, bookUrl) in books) {
+            for ((sourceId, bookUrl, refreshWasSuccessful) in books) {
                 val chapters = latestCachedChapters(db, sourceId, bookUrl) ?: continue
-                val exactCount = cachedChapterCount(db, sourceId, bookUrl, chapters)
+                val expected = chapterCacheKeys(chapters)
+                val exactCount = cachedChapterCount(db, sourceId, bookUrl, expected)
                 val exactTotal = chapters.size
+                if (queueAutomaticCache && refreshWasSuccessful && exactCount < expected.size &&
+                    !BookKind.isLocalRef(sourceId, bookUrl) &&
+                    !bookUrl.startsWith("file://") && !bookUrl.startsWith("content://")
+                ) {
+                    queueBookCache(db, sourceId, bookUrl, exactTotal, exactCount)
+                    changed++
+                    continue
+                }
                 it.setInt(1, exactCount)
                 it.setInt(2, exactTotal)
                 it.setInt(3, exactTotal)
@@ -3084,7 +3126,7 @@ class Database(private val path: String) : Closeable, AutoCloseable {
             it.executeUpdate()
         }
         if (total > 0) {
-            db.prepareStatement("update book_shelf set catalog_chapters=? where source_id=? and book_url=?").use {
+            db.prepareStatement("update book_shelf set catalog_chapters=? where source_id=? and book_url=? and catalog_chapters<=0").use {
                 it.setInt(1, total)
                 it.setString(2, sourceId)
                 it.setString(3, bookUrl)
@@ -3104,11 +3146,42 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         }
         updated > 0
     }
-    fun finishBookCache(sourceId: String, bookUrl: String, error: String? = null) = write { db ->
+    private fun queueBookCache(db: Connection, sourceId: String, bookUrl: String, total: Int, cached: Int) {
+        db.prepareStatement("""
+            insert into book_cache_status(
+                source_id, book_url, total_chapters, cached_chapters, state, updated_at, chapter_concurrency, automatic
+            ) values(?, ?, ?, ?, 'pending', ?, 1, 1)
+            on conflict(source_id, book_url) do update set
+                total_chapters=excluded.total_chapters, cached_chapters=excluded.cached_chapters,
+                state='pending', updated_at=excluded.updated_at, last_error=null,
+                request_start_index=null, request_end_index=null, request_count=null,
+                chapter_concurrency=1, automatic=1
+        """.trimIndent()).use {
+            it.setString(1, sourceId); it.setString(2, bookUrl); it.setInt(3, total); it.setInt(4, cached)
+            it.setLong(5, System.currentTimeMillis())
+            it.executeUpdate()
+        }
+    }
+
+    fun finishBookCache(
+        sourceId: String,
+        bookUrl: String,
+        error: String? = null,
+        followCatalogFrom: Set<String>? = null,
+    ) = write { db ->
         val state = if (error == null) "ready" else "failed"
         val tocChapters = latestCachedChapters(db, sourceId, bookUrl)
-        val cachedCount = tocChapters?.let { cachedChapterCount(db, sourceId, bookUrl, it) }
+        val expected = tocChapters?.let(::chapterCacheKeys)
+        val cachedCount = expected?.let { cachedChapterCount(db, sourceId, bookUrl, it) }
             ?: db.prepareStatement("select count(*) from book_content_cache where source_id=? and book_url=?").use { it.setString(1, sourceId); it.setString(2, bookUrl); it.executeQuery().use { rs -> rs.next(); rs.getInt(1) } }
+        // A refresh may have replaced the TOC while this worker was reading the previous one.
+        if (error == null && followCatalogFrom != null && expected != null && cachedCount < expected.size &&
+            expected.any { it !in followCatalogFrom } &&
+            getBookshelf(db, sourceId, bookUrl)?.cacheState == "caching"
+        ) {
+            queueBookCache(db, sourceId, bookUrl, tocChapters.size, cachedCount)
+            return@write
+        }
         val existingTotal = db.prepareStatement("select total_chapters from book_cache_status where source_id=? and book_url=?").use { it.setString(1, sourceId); it.setString(2, bookUrl); it.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 } }
         val total = if (existingTotal > 0) existingTotal else tocChapters?.size ?: cachedCount
         db.prepareStatement("insert into book_cache_status(source_id,book_url,total_chapters,cached_chapters,state,last_error,updated_at) values(?,?,?,?,?,?,?) on conflict(source_id,book_url) do update set total_chapters=excluded.total_chapters,cached_chapters=excluded.cached_chapters,state=excluded.state,last_error=excluded.last_error,updated_at=excluded.updated_at").use {
@@ -3356,21 +3429,23 @@ class Database(private val path: String) : Closeable, AutoCloseable {
     }
 
     /**
-     * Next network novel that should enter the single-consumer automatic cache queue.
+     * Candidates for the automatic cache queue. Persisted work precedes fresh books.
      *
      * Failed and paused tasks require an explicit user action; automatic caching must not
      * hammer a blocked upstream after a failure. The caller still de-duplicates against
      * already-active jobs, so `pending/caching` rows are safe to return.
      */
-    fun nextAutoCacheCandidate(): CachedBookRequest? = connect { db ->
+    fun autoCacheCandidates(): List<CachedBookRequest> = connect { db ->
         db.prepareStatement("""
             select s.source_id, s.book_url, s.toc_url
             from book_shelf s
             left join book_cache_status c
               on c.source_id = s.source_id and c.book_url = s.book_url
             where coalesce(s.book_kind, 'novel') = 'novel'
+              and s.source_id <> 'loc_book'
               and s.book_url not like 'content://%'
               and s.book_url not like 'local://%'
+              and s.book_url not like 'file://%'
               and (
                 c.source_id is null
                 or c.state = 'idle'
@@ -3386,18 +3461,19 @@ class Database(private val path: String) : Closeable, AutoCloseable {
                   or c.request_count is not null
                 ))
               )
-            order by s.last_read_at desc, s.name collate nocase
-            limit 1
+            order by case when c.state in ('pending', 'caching') then 0 else 1 end,
+                     s.last_read_at desc, s.name collate nocase
         """.trimIndent()).use { query ->
             query.executeQuery().use { rs ->
-                if (!rs.next()) null
-                else CachedBookRequest(
-                    sourceId = rs.getString(1),
-                    bookUrl = rs.getString(2),
-                    tocUrl = rs.getString(3),
-                    chapterConcurrency = 1,
-                    automatic = true,
-                )
+                buildList {
+                    while (rs.next()) add(CachedBookRequest(
+                        sourceId = rs.getString(1),
+                        bookUrl = rs.getString(2),
+                        tocUrl = rs.getString(3),
+                        chapterConcurrency = 1,
+                        automatic = true,
+                    ))
+                }
             }
         }
     }
