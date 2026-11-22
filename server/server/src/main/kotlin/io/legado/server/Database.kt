@@ -2927,34 +2927,6 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         deleted
     }
 
-    /**
-     * 书源登录态变化后清理该书源由远端生成的目录与正文缓存。
-     *
-     * 同一章节在登出状态下可能只返回限额/登录提示，登录成功后再读若仍命中旧缓存，
-     * 用户会持续看到错误正文。图片/音频等已下载资源不清，只移除可由新登录态重新抓取的
-     * 文本与目录，并重置对应缓存任务状态。
-     */
-    fun clearSourceReadingCaches(sourceId: String): Int = write { db ->
-        val contentDeleted = db.prepareStatement("delete from book_content_cache where source_id = ?").use { statement ->
-            statement.setString(1, sourceId)
-            statement.executeUpdate()
-        }
-        val tocDeleted = db.prepareStatement("delete from book_toc_cache where source_id = ?").use { statement ->
-            statement.setString(1, sourceId)
-            statement.executeUpdate()
-        }
-        db.prepareStatement("""
-            update book_cache_status
-            set cached_chapters = 0, state = 'idle', last_error = null, updated_at = ?
-            where source_id = ?
-        """.trimIndent()).use { statement ->
-            statement.setLong(1, System.currentTimeMillis())
-            statement.setString(2, sourceId)
-            statement.executeUpdate()
-        }
-        contentDeleted + tocDeleted
-    }
-
     fun updateBookCacheProgress(sourceId: String, bookUrl: String, cachedCount: Int) = write { db ->
         db.prepareStatement("update book_cache_status set cached_chapters = ?, updated_at = ? where source_id = ? and book_url = ?").use { statement ->
             statement.setInt(1, cachedCount)
@@ -2970,6 +2942,7 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         chapterUrl: String,
         content: ChapterContent,
         cachedChapterCount: Int? = null,
+        reconcileProgress: Boolean = false,
     ): Unit = write { db ->
         db.autoCommit = false
         try {
@@ -2997,7 +2970,9 @@ class Database(private val path: String) : Closeable, AutoCloseable {
             // onDownloadSet 移到 successDownloadSet；服务端若把进度另做秒级节流，
             // 慢章节等待期间界面会长期显示旧值，而并发更新还可能用较小计数覆盖较大计数。
             // 这里直接按正文表重算，既保持精确，也不会在服务重启/断点续传后产生累计偏差。
-            if (cachedChapterCount == null) {
+            val actualCount = cachedChapterCount
+                ?: if (reconcileProgress) reconciledCachedChapterCount(db, sourceId, bookUrl) else null
+            if (actualCount == null) {
                 db.prepareStatement("""
                     update book_cache_status
                     set cached_chapters = (
@@ -3021,7 +2996,7 @@ class Database(private val path: String) : Closeable, AutoCloseable {
                     set cached_chapters = ?, updated_at = ?
                     where source_id = ? and book_url = ?
                 """.trimIndent()).use { statement ->
-                    statement.setInt(1, cachedChapterCount)
+                    statement.setInt(1, actualCount)
                     statement.setLong(2, System.currentTimeMillis())
                     statement.setString(3, sourceId)
                     statement.setString(4, bookUrl)
@@ -3948,9 +3923,9 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         }
     }
 
-    fun saveSourceLoginHeader(sourceId: String, header: String?): Boolean = write { db ->
+    fun saveSourceLoginHeader(sourceId: String, header: String?, syncCookie: Boolean = true): Boolean = writeTransaction { db ->
         val now = System.currentTimeMillis()
-        db.prepareStatement("""
+        val saved = db.prepareStatement("""
             insert into source_login_state(source_id, login_header, updated_at) values(?, ?, ?)
             on conflict(source_id) do update set login_header=excluded.login_header, updated_at=excluded.updated_at
         """).use { stmt ->
@@ -3959,17 +3934,29 @@ class Database(private val path: String) : Closeable, AutoCloseable {
             stmt.setLong(3, now)
             stmt.executeUpdate() > 0
         }
+        if (syncCookie && header != null) {
+            val cookie = runCatching { Json.decodeFromString<Map<String, String>>(header) }.getOrNull()
+                ?.entries?.firstOrNull { it.key.equals("Cookie", ignoreCase = true) }?.value
+            if (!cookie.isNullOrBlank()) {
+                val attributes = setOf("path", "domain", "expires", "max-age", "httponly", "secure", "samesite", "partitioned")
+                val values = parseCookieString(cookie).filterKeys { it.lowercase() !in attributes }
+                if (values.isNotEmpty()) setSourceCookie(db, sourceId, sourceId, values)
+            }
+        }
+        saved
     }
 
-    fun removeSourceLoginHeader(sourceId: String): Boolean = write { db ->
+    fun removeSourceLoginHeader(sourceId: String): Boolean = writeTransaction { db ->
         val now = System.currentTimeMillis()
-        db.prepareStatement("""
+        val removed = db.prepareStatement("""
             update source_login_state set login_header = null, updated_at = ? where source_id = ?
         """).use { stmt ->
             stmt.setLong(1, now)
             stmt.setString(2, sourceId)
             stmt.executeUpdate() > 0
         }
+        if (removed) removeSourceCookie(db, sourceId, sourceId)
+        removed
     }
 
     fun removeSourceLoginInfo(sourceId: String): Boolean = write { db ->
@@ -4036,10 +4023,13 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         }
     }
 
-    fun saveSourceCookieJar(sourceId: String, cookies: Map<String, String>): Boolean = write { db ->
+    fun saveSourceCookieJar(sourceId: String, cookies: Map<String, String>): Boolean =
+        write { db -> saveSourceCookieJar(db, sourceId, cookies) }
+
+    private fun saveSourceCookieJar(db: Connection, sourceId: String, cookies: Map<String, String>): Boolean {
         val now = System.currentTimeMillis()
         val jarJson = Json.encodeToString(cookies)
-        db.prepareStatement("""
+        return db.prepareStatement("""
             insert into source_login_state(source_id, cookie_jar, updated_at) values(?, ?, ?)
             on conflict(source_id) do update set cookie_jar=excluded.cookie_jar, updated_at=excluded.updated_at
         """).use { stmt ->
@@ -4050,7 +4040,10 @@ class Database(private val path: String) : Closeable, AutoCloseable {
         }
     }
 
-    fun getSourceCookieJar(sourceId: String): Map<String, String> = connect { db ->
+    fun getSourceCookieJar(sourceId: String): Map<String, String> =
+        connect { db -> getSourceCookieJar(db, sourceId) }
+
+    private fun getSourceCookieJar(db: Connection, sourceId: String): Map<String, String> =
         db.prepareStatement("select cookie_jar from source_login_state where source_id = ?").use { stmt ->
             stmt.setString(1, sourceId)
             stmt.executeQuery().use { rs ->
@@ -4060,8 +4053,6 @@ class Database(private val path: String) : Closeable, AutoCloseable {
                 } else emptyMap()
             }
         }
-    }
-
     fun getSourceCookie(sourceId: String, url: String): String? {
         val jar = getSourceCookieJar(sourceId)
         if (jar.isEmpty()) return null
@@ -4098,31 +4089,41 @@ class Database(private val path: String) : Closeable, AutoCloseable {
     }
 
     fun setSourceCookie(sourceId: String, url: String, cookie: String): Boolean {
-        val jar = getSourceCookieJar(sourceId).toMutableMap()
-        val host = runCatching { java.net.URI(url).host }.getOrNull()?.takeIf { !it.isNullOrBlank() } ?: url
-        val existing = jar[host] ?: jar[url]
-        val incomingMap = parseCookieString(cookie)
-        if (incomingMap.isEmpty()) return false
-        val finalMap = if (!existing.isNullOrBlank()) {
-            val map = parseCookieString(existing).toMutableMap()
-            map.putAll(incomingMap)
-            map
-        } else {
-            incomingMap
-        }
-        jar[host] = finalMap.entries.joinToString("; ") { "${it.key}=${it.value}" }
-        return saveSourceCookieJar(sourceId, jar)
+        val values = parseCookieString(cookie)
+        if (values.isEmpty()) return false
+        return write { db -> setSourceCookie(db, sourceId, url, values) }
     }
 
-    fun removeSourceCookie(sourceId: String, url: String): Boolean {
-        val jar = getSourceCookieJar(sourceId).toMutableMap()
-        val host = runCatching { java.net.URI(url).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: url
-        jar.remove(host)
-        jar.remove(url)
-        val keysToRemove = jar.keys.filter { it.contains(host) || host.contains(it) }
-        keysToRemove.forEach { jar.remove(it) }
-        return saveSourceCookieJar(sourceId, jar)
+    private fun setSourceCookie(db: Connection, sourceId: String, url: String, values: Map<String, String>): Boolean {
+        val jar = getSourceCookieJar(db, sourceId).toMutableMap()
+        val host = sourceCookieHost(url)
+        val existing = jar[host] ?: jar[url]
+        val finalMap = if (!existing.isNullOrBlank()) {
+            val map = parseCookieString(existing).toMutableMap()
+            map.putAll(values)
+            map
+        } else {
+            values
+        }
+        if (host != url) jar.remove(url)
+        jar[host] = finalMap.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        return saveSourceCookieJar(db, sourceId, jar)
     }
+
+    fun removeSourceCookie(sourceId: String, url: String): Boolean =
+        write { db -> removeSourceCookie(db, sourceId, url) }
+
+    private fun removeSourceCookie(db: Connection, sourceId: String, url: String): Boolean {
+        val host = sourceCookieHost(url)
+        val jar = getSourceCookieJar(db, sourceId).filterKeys { key ->
+            val domain = sourceCookieHost(key)
+            domain != host && !domain.endsWith(".$host") && !host.endsWith(".$domain")
+        }
+        return saveSourceCookieJar(db, sourceId, jar)
+    }
+
+    private fun sourceCookieHost(url: String): String =
+        runCatching { java.net.URI(url).host }.getOrNull()?.lowercase() ?: url
 
     fun clearSourceLoginState(sourceId: String): Boolean = write { db ->
         db.prepareStatement("delete from source_login_state where source_id = ?").use { stmt ->

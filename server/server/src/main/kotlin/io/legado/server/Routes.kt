@@ -28,6 +28,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -104,6 +105,65 @@ fun Route.apiRoutes(
     bookshelfRefresh: BookshelfRefreshService,
 ) {
     val webView = WebViewProxy(database)
+
+    suspend fun refreshSourceLoginBook(
+        source: SourceRecord,
+        book: BookContext,
+        chapter: Chapter?,
+        targets: Set<SourceLoginRefreshTarget>,
+        previousVariables: Map<String, String>,
+    ): SourceLoginBookRefresh? {
+        if (book.variables != previousVariables) database.persistBookVariables(book)
+        if (targets.isEmpty() && book.variables == previousVariables) return null
+
+        val errors = mutableListOf<String>()
+        suspend fun <T : Any> refresh(label: String, block: suspend () -> T): T? = try {
+            withTimeoutOrNull(CHAPTERS_TIMEOUT_MS) { block() }
+                ?: throw RuleExecutionException("请求超时")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            errors.add("$label：${error.message ?: "请求失败"}")
+            null
+        }
+
+        val details = if (SourceLoginRefreshTarget.DETAILS in targets) refresh("刷新书籍详情失败") {
+            runInterruptible(Dispatchers.IO) {
+                fetchBookDetails(database, runner, source.id, book.bookUrl, book)
+                    ?: throw RuleExecutionException("书籍详情不存在")
+            }
+        } else null
+        details?.tocUrl?.takeIf { it.isNotBlank() }?.let { book.tocUrl = it }
+
+        val content = if (SourceLoginRefreshTarget.CONTENT in targets && chapter != null &&
+            !chapter.isVolume && book.kind != BookKind.COMIC.wire && book.kind != BookKind.AUDIO.wire
+        ) refresh("刷新当前章节失败") {
+            val fresh = runInterruptible(Dispatchers.IO) {
+                runner.content(source.json, chapter.url, book.name, book)
+            }
+            if (fresh.content.isBlank()) throw RuleExecutionException("正文为空")
+            currentCoroutineContext().ensureActive()
+            database.cacheBookContent(source.id, book.bookUrl, chapter.url, fresh, reconcileProgress = true)
+            runCatching {
+                illustrationCache?.registerFromContent(source.id, book.bookUrl, chapter.url, chapter.index, fresh.content)
+            }
+            database.persistBookVariables(book)
+            fresh
+        } else null
+
+        val chapters = if (SourceLoginRefreshTarget.TOC in targets) refresh("刷新目录失败") {
+            bookshelfRefresh.refreshToc(source, book)
+        } else null
+
+        return SourceLoginBookRefresh(
+            details = details,
+            chapters = chapters,
+            tocUrl = book.tocUrl.takeIf { chapters != null },
+            content = content,
+            variables = book.variables.toMap().takeIf { it != previousVariables },
+            errors = errors,
+        )
+    }
 
     /** 网络书源导入：服务端代抓 + 内存票据两步式。 */
     val networkImport = NetworkSourceImport(database, log = { message -> application.log.info(message) })
@@ -572,14 +632,12 @@ fun Route.apiRoutes(
                 val sourceId = call.parameters["id"]!!
                 val req = call.receive<SourceLoginInfoUpdateRequest>()
                 database.saveSourceLoginInfo(sourceId, req.loginInfo)
-                database.clearSourceReadingCaches(sourceId)
                 call.respond(mapOf("ok" to true))
             }
             delete("/login-info") {
                 if (auth.requireSession(call, true) == null) return@delete
                 val sourceId = call.parameters["id"]!!
                 database.removeSourceLoginInfo(sourceId)
-                database.clearSourceReadingCaches(sourceId)
                 call.respond(mapOf("ok" to true))
             }
             post("/login-header") {
@@ -587,7 +645,6 @@ fun Route.apiRoutes(
                 val sourceId = call.parameters["id"]!!
                 val req = call.receive<SourceLoginHeaderUpdateRequest>()
                 database.saveSourceLoginHeader(sourceId, req.loginHeader)
-                database.clearSourceReadingCaches(sourceId)
                 call.respond(mapOf("ok" to true))
             }
             post("/login-cookie") {
@@ -606,35 +663,50 @@ fun Route.apiRoutes(
                     val state = database.getSourceLoginState(resolvedSourceId)
                     if (state?.loginHeader.isNullOrBlank() && cookieStr.isNotBlank()) {
                         val headerMap = mapOf("Cookie" to cookieStr)
-                        database.saveSourceLoginHeader(resolvedSourceId, Json.encodeToString(headerMap))
+                        database.saveSourceLoginHeader(resolvedSourceId, Json.encodeToString(headerMap), syncCookie = false)
                     }
                     call.application.log.info("cookie synchronized for source: {}, count: {}", resolvedSourceId, savedCount)
                 }
-                database.clearSourceReadingCaches(resolvedSourceId)
                 call.respond(SourceLoginCookieResponse(ok = true, message = "Cookie 同步成功", count = savedCount))
             }
             delete("/login-header") {
                 if (auth.requireSession(call, true) == null) return@delete
                 val sourceId = call.parameters["id"]!!
                 database.removeSourceLoginHeader(sourceId)
-                database.clearSourceReadingCaches(sourceId)
                 call.respond(mapOf("ok" to true))
             }
             post("/login-action") {
                 if (auth.requireSession(call, true) == null) return@post
                 val source = database.getSource(call.parameters["id"]!!) ?: run { call.respond(HttpStatusCode.NotFound, ApiError("not_found", "书源不存在")); return@post }
                 val req = call.receive<SourceLoginActionRequest>()
-                val outcome = runner.executeLoginAction(
-                    source.json,
-                    req.action,
-                    req.loginData,
-                    req.isLongClick,
-                    browserRuntime?.let(::SourceBrowserHook),
-                )
-                if (outcome.success) {
-                    database.clearSourceReadingCaches(source.id)
+                val bookRequest = req.book
+                if (bookRequest != null && (bookRequest.sourceId != source.id ||
+                    bookRequest.bookUrl.isBlank() || BookKind.isLocalRef(source.id, bookRequest.bookUrl))
+                ) {
+                    return@post call.respondApiError(HttpStatusCode.BadRequest, "invalid_book", "书籍与当前书源不匹配")
                 }
-                call.respond(outcome)
+                val book = bookRequest?.let {
+                    database.bookContext(source.id, it.bookUrl, it.toBookContextOverlay())
+                }
+                val chapter = req.chapter?.takeIf { book != null && it.url.isNotBlank() }
+                val previousVariables = book?.variables.orEmpty().toMap()
+                val targets = mutableSetOf<SourceLoginRefreshTarget>()
+                val outcome = runInterruptible(Dispatchers.IO) {
+                    runner.executeLoginAction(
+                        source.json,
+                        req.action,
+                        req.loginData,
+                        req.isLongClick,
+                        browserRuntime?.let(::SourceBrowserHook),
+                        book,
+                        chapter,
+                        targets,
+                    )
+                }
+                val refresh = if (outcome.success && book != null) {
+                    refreshSourceLoginBook(source, book, chapter, targets, previousVariables)
+                } else null
+                call.respond(outcome.copy(bookRefresh = refresh))
             }
             get("/login-check") {
                 if (auth.requireSession(call) == null) return@get

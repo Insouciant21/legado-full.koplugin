@@ -68,6 +68,7 @@ data class JsExecutionContext(
     var openUrl: String? = null,
     var copyText: String? = null,
     var reRenderUi: Boolean = false,
+    val loginRefreshTargets: MutableSet<SourceLoginRefreshTarget>? = null,
     /** 脚本执行失败的原始原因，供登录动作回传给前端展示（否则按钮会「假成功」） */
     var lastError: String? = null,
     /** 当前书籍上下文，供 book 桥接对象读取 */
@@ -947,28 +948,6 @@ class JsSandbox(private val runner: RuleRunner? = null) {
             override fun call(cx: Context, scope: Scriptable, thisObj: Scriptable, args: Array<out Any?>): Any {
                 val h = args.firstOrNull()?.toString() ?: ""
                 db?.saveSourceLoginHeader(sourceId, h)
-                val cookie = runCatching { Json.decodeFromString<Map<String, String>>(h) }.getOrNull()
-                    ?.let { it["Cookie"] ?: it["cookie"] }
-                if (!cookie.isNullOrBlank()) {
-                    val normalizedCookie = cookie.split(';')
-                        .mapNotNull { part ->
-                            val pair = part.trim()
-                            val separator = pair.indexOf('=')
-                            if (separator <= 0) return@mapNotNull null
-                            val name = pair.substring(0, separator).trim()
-                            if (name.isEmpty() || name in setOf(
-                                    "Path", "Domain", "Expires", "Max-Age", "HttpOnly", "Secure", "SameSite", "Partitioned",
-                                )
-                            ) {
-                                return@mapNotNull null
-                            }
-                            "$name=${pair.substring(separator + 1).trim()}"
-                        }
-                        .joinToString("; ")
-                    if (normalizedCookie.isNotBlank()) {
-                        db?.setSourceCookie(sourceId, sourceId, normalizedCookie)
-                    }
-                }
                 return true
             }
         })
@@ -1502,9 +1481,21 @@ class JsSandbox(private val runner: RuleRunner? = null) {
         ScriptableObject.putProperty(api, "reLoginView", reUiFn)
         ScriptableObject.putProperty(api, "reUiView", reUiFn)
         ScriptableObject.putProperty(api, "refreshExplore", reUiFn)
-        ScriptableObject.putProperty(api, "refreshBookInfo", reUiFn)
-        ScriptableObject.putProperty(api, "refreshBookToc", reUiFn)
-        ScriptableObject.putProperty(api, "refreshContent", reUiFn)
+
+        // Android 把这三个事件分别发给当前详情页或阅读页。
+        fun requestBookRefresh(target: SourceLoginRefreshTarget) = object : BaseFunction() {
+            override fun call(cx: Context, scope: Scriptable, thisObj: Scriptable, args: Array<out Any?>): Any? {
+                if (execContext?.bookUrl != null &&
+                    (target != SourceLoginRefreshTarget.CONTENT || execContext.chapterUrl != null)
+                ) {
+                    execContext.loginRefreshTargets?.add(target)
+                }
+                return Context.getUndefinedValue()
+            }
+        }
+        ScriptableObject.putProperty(api, "refreshBookInfo", requestBookRefresh(SourceLoginRefreshTarget.DETAILS))
+        ScriptableObject.putProperty(api, "refreshBookToc", requestBookRefresh(SourceLoginRefreshTarget.TOC))
+        ScriptableObject.putProperty(api, "refreshContent", requestBookRefresh(SourceLoginRefreshTarget.CONTENT))
 
         // java.base64Decode(str)
         ScriptableObject.putProperty(api, "base64Decode", object : BaseFunction() {

@@ -165,7 +165,7 @@ private data class ChapterDraft(
  * 但变量表可以（`getBookVariables` 会返回空表），这样行为与 Legado 一致而不会抛错。
  */
 internal fun Database.bookContext(sourceId: String, bookUrl: String): BookContext {
-    val shelf = getShelfBookByUrl(bookUrl)?.takeIf { it.sourceId == sourceId }
+    val shelf = getBookshelf(sourceId, bookUrl)
     return BookContext(
         sourceId = sourceId,
         bookUrl = bookUrl,
@@ -180,7 +180,7 @@ internal fun Database.bookContext(sourceId: String, bookUrl: String): BookContex
 
 /** [Database.bookContext] 的 overlay 变体：搜索后未入架的书用请求字段补齐上下文，书架已有值优先保留。 */
 internal fun Database.bookContext(sourceId: String, bookUrl: String, overlay: BookContext?): BookContext {
-    val shelf = getShelfBookByUrl(bookUrl)?.takeIf { it.sourceId == sourceId }
+    val shelf = getBookshelf(sourceId, bookUrl)
     val variables = getBookVariables(sourceId, bookUrl).toMutableMap()
     overlay?.variables?.forEach { (key, value) -> if (!variables.containsKey(key)) variables[key] = value }
     return BookContext(
@@ -191,6 +191,7 @@ internal fun Database.bookContext(sourceId: String, bookUrl: String, overlay: Bo
         tocUrl = overlay?.tocUrl?.takeIf { it.isNotBlank() } ?: shelf?.tocUrl,
         kind = overlay?.kind?.takeIf { it.isNotBlank() } ?: shelf?.bookKind,
         variables = variables,
+        useReplaceRule = getUseReplaceRule(sourceId, bookUrl),
     )
 }
 
@@ -2056,17 +2057,24 @@ private val GBK_RESPONSE_CHARSET = Charset.forName("x-mswin-936")
         loginData: Map<String, String>,
         isLongClick: Boolean = false,
         browserHook: BrowserHook? = null,
+        book: BookContext? = null,
+        chapter: Chapter? = null,
+        refreshTargets: MutableSet<SourceLoginRefreshTarget>? = null,
     ): SourceLoginActionResult {
         val source = sourceJson.objectValue()
         val sourceUrl = source.string("bookSourceUrl") ?: ""
         val sourceName = source.string("bookSourceName") ?: sourceUrl
 
         // Android 只在显式登录动作前拼 getLoginJs；普通规则始终只共享 jsLib。
-        val execContext = sourceContext(source, sourceUrl).copy(
+        val execContext = sourceContext(source, sourceUrl, book).copy(
             sourceName = sourceName,
             initialLoginInfo = loginData.toMutableMap(),
             isLongClick = isLongClick,
             browserHook = browserHook,
+            chapterUrl = chapter?.url,
+            chapterIndex = chapter?.index,
+            chapterTitle = chapter?.title,
+            loginRefreshTargets = refreshTargets,
         )
         execContext.loginUiDefaults.putAll(parseLoginUi(sourceJson).filter { it.type != "button" }.associate { it.name to (it.default ?: "") })
 
@@ -2114,8 +2122,6 @@ private val GBK_RESPONSE_CHARSET = Charset.forName("x-mswin-936")
         }
         val state = database?.getSourceLoginState(sourceUrl)
         val failure = execContext.lastError
-        val openUrl = execContext.openUrl
-
         return SourceLoginActionResult(
             success = failure == null,
             error = failure,

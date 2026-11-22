@@ -72,6 +72,8 @@ data class SourceLoginActionRequest(
     val action: String,
     val loginData: Map<String, String> = emptyMap(),
     val isLongClick: Boolean = false,
+    val book: BookRequest? = null,
+    val chapter: Chapter? = null,
 )
 
 @Serializable
@@ -85,7 +87,20 @@ data class SourceLoginActionResult(
     val updatedVariable: String? = null,
     val reRenderUi: Boolean = false,
     val error: String? = null,
+    val bookRefresh: SourceLoginBookRefresh? = null,
 )
+
+@Serializable
+data class SourceLoginBookRefresh(
+    val details: BookDetails? = null,
+    val chapters: List<Chapter>? = null,
+    val tocUrl: String? = null,
+    val content: ChapterContent? = null,
+    val variables: Map<String, String>? = null,
+    val errors: List<String> = emptyList(),
+)
+
+enum class SourceLoginRefreshTarget { DETAILS, TOC, CONTENT }
 
 @Serializable
 data class SourceLoginCheckResult(
