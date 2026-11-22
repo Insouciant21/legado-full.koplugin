@@ -3022,7 +3022,7 @@ fun Route.apiRoutes(
                         for (frame in incoming) {
                             if (frame !is Frame.Text) continue
                             val command = runCatching {
-                                Json.decodeFromString<SourceVerificationStreamCommand>(frame.readText())
+                                Json.decodeFromString<BrowserInteraction>(frame.readText())
                             }.getOrNull()
                             if (command == null) {
                                 send(
@@ -3036,10 +3036,7 @@ fun Route.apiRoutes(
                             }
                             try {
                                 withContext(Dispatchers.IO) {
-                                    runtime.streamInteract(
-                                        sessionId,
-                                        BrowserInteraction(command.action, command.x, command.y, command.text, command.key),
-                                    )
+                                    runtime.streamInteract(sessionId, command)
                                 }
                             } catch (error: Exception) {
                                 send(
@@ -3078,13 +3075,13 @@ fun Route.apiRoutes(
             post("/{sessionId}/interact") {
                 if (auth.requireSession(call, true) == null) return@post
                 val runtime = browserRuntime ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, ApiError("browser_unavailable", "浏览器运行时未启用"))
-                val request = call.receive<SourceVerificationInteractionRequest>()
+                val request = call.receive<BrowserInteraction>()
                 try {
                     if (runtime.getSessionSourceId(call.parameters["sessionId"]!!) != call.parameters["id"]!!) {
                         call.respond(HttpStatusCode.Forbidden, ApiError("forbidden", "会话与书源不匹配"))
                         return@post
                     }
-                    runtime.interact(call.parameters["sessionId"]!!, BrowserInteraction(request.action, request.x, request.y, request.text, request.key))
+                    runtime.interact(call.parameters["sessionId"]!!, request)
                     call.respond(HttpStatusCode.NoContent)
                 } catch (error: Exception) {
                     call.respond(HttpStatusCode.BadRequest, ApiError("interaction_failed", error.message ?: "操作失败"))

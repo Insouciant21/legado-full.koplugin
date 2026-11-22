@@ -9,28 +9,11 @@ import kotlinx.serialization.Serializable
     val headers: Map<String, String> = emptyMap(),
 )
 
-@Serializable data class SourceVerificationInteractionRequest(
-    val action: String,
-    val x: Double? = null,
-    val y: Double? = null,
-    val text: String? = null,
-    val key: String? = null,
-)
-
 @Serializable data class SourceVerificationCompleteRequest(
     val input: String? = null,
 )
 
-/** CDP 实时流上的输入命令；动作字段与 REST 交互接口保持一致。 */
-@Serializable data class SourceVerificationStreamCommand(
-    val action: String,
-    val x: Double? = null,
-    val y: Double? = null,
-    val text: String? = null,
-    val key: String? = null,
-)
-
-/** 实时流文本消息。JPEG 帧作为二进制 WebSocket 消息紧随 ready/frame 元数据发送。 */
+/** 实时流文本消息。JPEG 画面由同一连接的二进制消息承载。 */
 @Serializable data class SourceVerificationStreamMessage(
     val type: String,
     val state: String? = null,

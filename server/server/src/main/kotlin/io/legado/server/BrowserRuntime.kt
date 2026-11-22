@@ -16,6 +16,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import com.microsoft.playwright.options.Cookie as PwCookie
 import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.ScreenshotType
+import com.microsoft.playwright.options.ViewportSize
 import com.microsoft.playwright.options.WaitUntilState
 import java.net.URI
 import java.net.URLDecoder
@@ -41,13 +42,18 @@ data class BrowserFetchResult(
     val headers: Map<String, List<String>>,
 )
 
-/** 网页操作请求；坐标来自真实截图的视口坐标，服务端不会接受客户端提交的成功 body。 */
+/** Live stream and screenshot controls use the same remote viewport coordinates. */
+@Serializable
 data class BrowserInteraction(
     val action: String,
     val x: Double? = null,
     val y: Double? = null,
     val text: String? = null,
     val key: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val deltaX: Double? = null,
+    val deltaY: Double? = null,
 )
 
 sealed interface BrowserStreamEvent {
@@ -133,6 +139,7 @@ class BrowserRuntime(
         const val MANUAL_LOAD_SETTLE_MS = 600L
         const val STREAM_VIEWPORT_WIDTH = 1072
         const val STREAM_VIEWPORT_HEIGHT = 1448
+        const val MAX_STREAM_VIEWPORT_EDGE = 1600
         const val RESULT_TTL_MS = 5 * 60_000L
         const val MAX_COMPLETED_RESULTS = 50
         const val DEFAULT_JS = "document.documentElement.outerHTML"
@@ -168,6 +175,7 @@ class BrowserRuntime(
         @Volatile var jsResult: String? = null
         @Volatile var lastResponse: Response? = null
         @Volatile var currentUrl = displayUrl(url)
+        @Volatile var viewport = ViewportSize(STREAM_VIEWPORT_WIDTH, STREAM_VIEWPORT_HEIGHT)
         @Volatile var lastStreamFrame: BrowserStreamEvent.Frame? = null
         val streamSinks = ConcurrentHashMap.newKeySet<(BrowserStreamEvent) -> Unit>()
         var cdpSession: CDPSession? = null
@@ -322,10 +330,11 @@ class BrowserRuntime(
                 }
             }
         }
+        val viewport = session.viewport
         return BrowserStreamConnection(
             events = events,
-            width = STREAM_VIEWPORT_WIDTH,
-            height = STREAM_VIEWPORT_HEIGHT,
+            width = viewport.width,
+            height = viewport.height,
         ) {
             session.streamSinks.remove(sink)
             events.close()
@@ -374,16 +383,37 @@ class BrowserRuntime(
         interaction: BrowserInteraction,
         useCdpInput: Boolean,
     ) {
-        val cdp = session.cdpSession
+        val viewport = session.viewport
+        // A frame from before a resize can still be on screen. Its coordinates
+        // must not click a different control after Chromium has reflowed the page.
+        if ((interaction.action == "click" || interaction.action == "scroll") &&
+            ((interaction.width != null && interaction.width != viewport.width) ||
+                (interaction.height != null && interaction.height != viewport.height))) return
+
+        val cdp = session.cdpSession.takeIf { useCdpInput }
         when (interaction.action) {
+            "resize" -> {
+                require(session.isManual && session.state == "interactive") {
+                    "当前浏览器会话无法调整视口"
+                }
+                val width = requireNotNull(interaction.width) { "缺少视口宽度" }
+                val height = requireNotNull(interaction.height) { "缺少视口高度" }
+                require(width in 1..MAX_STREAM_VIEWPORT_EDGE && height in 1..MAX_STREAM_VIEWPORT_EDGE) {
+                    "视口尺寸超出范围"
+                }
+                if (width == viewport.width && height == viewport.height) return
+                session.lastStreamFrame = null
+                page.setViewportSize(width, height)
+                session.viewport = ViewportSize(width, height)
+            }
             "click" -> {
                 val x = requireNotNull(interaction.x) { "缺少 x" }
                 val y = requireNotNull(interaction.y) { "缺少 y" }
-                if (useCdpInput && cdp != null) dispatchCdpClick(cdp, x, y) else page.mouse().click(x, y)
+                if (cdp != null) dispatchCdpClick(cdp, x, y) else page.mouse().click(x, y)
             }
             "type" -> {
                 val text = requireNotNull(interaction.text) { "缺少 text" }
-                if (useCdpInput && cdp != null) {
+                if (cdp != null) {
                     cdp.send("Input.insertText", JsonObject().apply { addProperty("text", text) })
                 } else {
                     page.keyboard().type(text)
@@ -391,20 +421,26 @@ class BrowserRuntime(
             }
             "key" -> page.keyboard().press(requireNotNull(interaction.key) { "缺少 key" })
             "scroll" -> {
-                val deltaX = interaction.x ?: 0.0
-                val deltaY = interaction.y ?: 0.0
-                if (useCdpInput && cdp != null) {
+                // Older clients use x/y for the wheel deltas. The new shape
+                // carries the cursor position separately so nested panes scroll.
+                val hasDeltas = interaction.deltaX != null || interaction.deltaY != null
+                val deltaX = (if (hasDeltas) interaction.deltaX else interaction.x) ?: 0.0
+                val deltaY = (if (hasDeltas) interaction.deltaY else interaction.y) ?: 0.0
+                val x = interaction.x.takeIf { hasDeltas } ?: (viewport.width - 1) / 2.0
+                val y = interaction.y.takeIf { hasDeltas } ?: (viewport.height - 1) / 2.0
+                if (cdp != null) {
                     cdp.send(
                         "Input.dispatchMouseEvent",
                         JsonObject().apply {
                             addProperty("type", "mouseWheel")
-                            addProperty("x", STREAM_VIEWPORT_WIDTH / 2.0)
-                            addProperty("y", STREAM_VIEWPORT_HEIGHT / 2.0)
+                            addProperty("x", x)
+                            addProperty("y", y)
                             addProperty("deltaX", deltaX)
                             addProperty("deltaY", deltaY)
                         },
                     )
                 } else {
+                    if (hasDeltas) page.mouse().move(x, y)
                     page.mouse().wheel(deltaX, deltaY)
                 }
             }
@@ -611,6 +647,7 @@ class BrowserRuntime(
         val browser = ensureBrowser()
         val contextOptions = Browser.NewContextOptions()
             .setViewportSize(STREAM_VIEWPORT_WIDTH, STREAM_VIEWPORT_HEIGHT)
+            .setDeviceScaleFactor(1.0)
             .setJavaScriptEnabled(true)
         if (session.headers.isNotEmpty()) {
             contextOptions.setExtraHTTPHeaders(session.headers)
@@ -685,8 +722,8 @@ class BrowserRuntime(
                 val metadata = payload.getAsJsonObject("metadata")
                 val frame = BrowserStreamEvent.Frame(
                     data = Base64.getDecoder().decode(data),
-                    width = metadata.get("width")?.asInt ?: STREAM_VIEWPORT_WIDTH,
-                    height = metadata.get("height")?.asInt ?: STREAM_VIEWPORT_HEIGHT,
+                    width = metadata.get("deviceWidth")?.asInt ?: session.viewport.width,
+                    height = metadata.get("deviceHeight")?.asInt ?: session.viewport.height,
                     timestamp = metadata.get("timestamp")?.asDouble ?: 0.0,
                 )
                 session.lastStreamFrame = frame
@@ -711,8 +748,10 @@ class BrowserRuntime(
             JsonObject().apply {
                 addProperty("format", "jpeg")
                 addProperty("quality", streamJpegQuality)
-                addProperty("maxWidth", STREAM_VIEWPORT_WIDTH)
-                addProperty("maxHeight", STREAM_VIEWPORT_HEIGHT)
+                // Capture at the full viewport size so frame pixels and input
+                // coordinates remain interchangeable after a resize.
+                addProperty("maxWidth", MAX_STREAM_VIEWPORT_EDGE)
+                addProperty("maxHeight", MAX_STREAM_VIEWPORT_EDGE)
                 addProperty("everyNthFrame", 1)
             },
         )
@@ -752,7 +791,8 @@ class BrowserRuntime(
                     session.error = "浏览器验证过期"
                     break
                 }
-                runCatching { session.page?.waitForTimeout(200.0) }
+                val waitMs = if (session.streamSinks.isEmpty()) 200.0 else 32.0
+                runCatching { session.page?.waitForTimeout(waitMs) }
                     .onFailure { error -> if (!session.cancelRequested && !stopped) throw error }
             }
             drainOperations()
